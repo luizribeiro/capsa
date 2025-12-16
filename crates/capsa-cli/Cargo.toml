@@ -1,0 +1,24 @@
+[package]
+name = "capsa-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "CLI for Capsa VM runtime"
+
+[[bin]]
+name = "capsa"
+path = "src/main.rs"
+
+[dependencies]
+capsa = { path = "../capsa" }
+tokio = { workspace = true }
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+serde = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+
+[target.'cfg(unix)'.dependencies]
+nix = { version = "0.29", features = ["term"] }
+libc = "0.2"
