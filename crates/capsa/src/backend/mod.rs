@@ -1,6 +1,12 @@
+#[cfg(all(target_os = "macos", feature = "vfkit"))]
 mod vfkit;
+#[cfg(all(target_os = "macos", feature = "macos-native"))]
+mod virtualization;
 
+#[cfg(all(target_os = "macos", feature = "vfkit"))]
 pub(crate) use vfkit::VfkitBackend;
+#[cfg(all(target_os = "macos", feature = "macos-native"))]
+pub(crate) use virtualization::NativeVirtualizationBackend;
 
 use crate::boot::KernelCmdline;
 use crate::capabilities::BackendCapabilities;
@@ -50,9 +56,20 @@ pub(crate) trait HypervisorBackend: Send + Sync {
 pub(crate) fn select_backend() -> Result<Box<dyn HypervisorBackend>> {
     #[cfg(target_os = "macos")]
     {
-        let vfkit = VfkitBackend::new();
-        if vfkit.is_available() {
-            return Ok(Box::new(vfkit));
+        #[cfg(feature = "macos-native")]
+        {
+            let native = NativeVirtualizationBackend::new();
+            if native.is_available() {
+                return Ok(Box::new(native));
+            }
+        }
+
+        #[cfg(feature = "vfkit")]
+        {
+            let vfkit = VfkitBackend::new();
+            if vfkit.is_available() {
+                return Ok(Box::new(vfkit));
+            }
         }
     }
 
