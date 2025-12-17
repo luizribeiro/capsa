@@ -1,0 +1,5 @@
+[target.aarch64-apple-darwin]
+runner = ["codesign-run", "--entitlements", "/Users/luiz/capsa/crates/capsa/examples/entitlements.plist"]
+
+[target.x86_64-apple-darwin]
+runner = ["codesign-run", "--entitlements", "/Users/luiz/capsa/crates/capsa/examples/entitlements.plist"]

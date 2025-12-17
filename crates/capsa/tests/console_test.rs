@@ -1,15 +1,15 @@
 //! Integration tests for VM console functionality.
 
-use capsa::test_utils::default_test_vm;
+use capsa::test_utils::test_vm;
 use std::time::Duration;
 
-#[tokio::test]
+#[apple_main::harness_test]
 async fn test_console_echo() {
-    let vm = default_test_vm().build().await.expect("Failed to build VM");
+    let vm = test_vm("no-network").build().await.expect("Failed to build VM");
     let console = vm.console().await.expect("Failed to get console");
 
     console
-        .wait_for_timeout("ping", Duration::from_secs(30))
+        .wait_for_timeout("Boot successful", Duration::from_secs(30))
         .await
         .expect("VM did not boot");
 
@@ -27,16 +27,16 @@ async fn test_console_echo() {
 
     assert!(output.contains("hello-from-test"));
 
-    vm.stop().await.expect("Failed to stop VM");
+    vm.kill().await.expect("Failed to kill VM");
 }
 
-#[tokio::test]
+#[apple_main::harness_test]
 async fn test_console_ctrl_c() {
-    let vm = default_test_vm().build().await.expect("Failed to build VM");
+    let vm = test_vm("no-network").build().await.expect("Failed to build VM");
     let console = vm.console().await.expect("Failed to get console");
 
     console
-        .wait_for_timeout("ping", Duration::from_secs(30))
+        .wait_for_timeout("Boot successful", Duration::from_secs(30))
         .await
         .expect("VM did not boot");
 
@@ -58,5 +58,7 @@ async fn test_console_ctrl_c() {
     let output = console.read_available().await.expect("Failed to read");
     assert!(output.contains("^C"), "Ctrl+C was not received by VM");
 
-    vm.stop().await.expect("Failed to stop VM");
+    vm.kill().await.expect("Failed to kill VM");
 }
+
+apple_main::test_main!();

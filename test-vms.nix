@@ -3,6 +3,10 @@
 #
 # This builds multiple test VM configurations and outputs a manifest.json
 # that maps VM names to their kernel/initrd paths.
+#
+# TODO: Add ACPI support to test VMs for graceful shutdown testing.
+# Currently, vm.stop() times out on these VMs because they don't respond
+# to ACPI shutdown requests. Tests use vm.kill() as a workaround.
 
 { pkgs ? import <nixpkgs> { } }:
 

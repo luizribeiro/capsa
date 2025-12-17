@@ -1,40 +1,42 @@
 //! Benchmarks for VM boot time.
+//!
+//! Run with: cargo bench --bench boot --features vfkit
+//!       or: cargo bench --bench boot --features macos-native
 
+use apple_main::criterion::{criterion_group, Criterion};
 use capsa::test_utils::test_vm;
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
 use std::time::Duration;
-use tokio::runtime::Runtime;
 
-fn bench_vm_boot(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
+fn boot_benchmark(c: &mut Criterion) {
+    apple_main::init_runtime();
 
     let mut group = c.benchmark_group("vm_boot");
-    group.sample_size(10);
     group.measurement_time(Duration::from_secs(60));
+    group.sample_size(10);
 
-    for vm_name in ["default", "minimal", "minimal-net", "ultra-minimal"] {
-        group.bench_with_input(BenchmarkId::new("to_shell", vm_name), &vm_name, |b, &name| {
-            b.to_async(&rt).iter(|| async move {
-                let vm = test_vm(name)
-                    .build()
-                    .await
-                    .expect("Failed to build VM");
+    for vm_name in ["minimal", "minimal-net", "ultra-minimal"] {
+        group.bench_function(vm_name, |b| {
+            b.iter(|| {
+                apple_main::block_on(async {
+                    let vm = test_vm(vm_name)
+                        .build()
+                        .await
+                        .expect("Failed to build VM");
 
-                let console = vm.console().await.expect("Failed to get console");
+                    let console = vm.console().await.expect("Failed to get console");
 
-                console
-                    .wait_for_timeout("Boot successful", Duration::from_secs(30))
-                    .await
-                    .expect("VM did not boot");
+                    console
+                        .wait_for_timeout("Boot successful", Duration::from_secs(30))
+                        .await
+                        .expect("VM did not boot");
 
-                vm.stop().await.expect("Failed to stop VM");
-            });
+                    vm.kill().await.expect("Failed to stop VM");
+                })
+            })
         });
     }
-
     group.finish();
 }
 
-criterion_group!(benches, bench_vm_boot);
-
-criterion_main!(benches);
+criterion_group!(benches, boot_benchmark);
+apple_main::criterion_main!(benches);

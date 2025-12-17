@@ -9,29 +9,27 @@
 //! ```rust,no_run
 //! use capsa::{Capsa, LinuxDirectBootConfig, DiskImage, MountMode};
 //!
-//! #[tokio::main]
-//! async fn main() -> capsa::Result<()> {
+//! #[apple_main::main]
+//! async fn main() {
 //!     // Minimal config - just kernel and initrd (disk is optional)
 //!     let config = LinuxDirectBootConfig::new("./bzImage", "./initrd");
 //!
 //!     let vm = Capsa::vm(config)
 //!         .cpus(2)
 //!         .memory_mb(2048)
-//!         .disk(DiskImage::new("./rootfs.raw"))  // optional
+//!         .disk(DiskImage::new("./rootfs.raw"))
 //!         .share("./workspace", "/workspace", MountMode::ReadWrite)
 //!         .console_enabled()
 //!         .build()
-//!         .await?;
+//!         .await
+//!         .unwrap();
 //!
-//!     // Interact with console
-//!     let console = vm.console().await?;
-//!     console.wait_for("login:").await?;
-//!     console.write_line("root").await?;
+//!     let console = vm.console().await.unwrap();
+//!     console.wait_for("login:").await.unwrap();
+//!     console.write_line("root").await.unwrap();
 //!
 //!     // Graceful shutdown
-//!     vm.stop().await?;
-//!
-//!     Ok(())
+//!     vm.stop().await.unwrap();
 //! }
 //! ```
 

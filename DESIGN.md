@@ -160,7 +160,7 @@ pub struct MacOsVmConfig {
 use capsa::{Capsa, LinuxDirectBootConfig, DiskImage, MountMode};
 use std::time::Duration;
 
-#[tokio::main]
+#[apple_main::main]
 async fn main() -> capsa::Result<()> {
     // Configuration struct has required params
     let config = LinuxDirectBootConfig {

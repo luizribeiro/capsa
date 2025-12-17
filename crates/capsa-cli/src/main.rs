@@ -63,10 +63,18 @@ enum Commands {
     Version,
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
+#[apple_main::main]
+async fn main() {
     tracing_subscriber::fmt::init();
 
+    if let Err(e) = run().await {
+        eprintln!("Error: {e:?}");
+        std::process::exit(1);
+    }
+    std::process::exit(0);
+}
+
+async fn run() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
@@ -277,15 +285,15 @@ async fn run_stdio_console(vm: &capsa::VmHandle) -> anyhow::Result<()> {
         }
         _ = &mut detach_rx => {
             eprintln!("\r\nStopping VM...\r");
-            let _ = vm.stop().await;
+            let _ = vm.kill().await;
         }
         _ = stdin_task => {
-            // EOF on stdin, stop the VM
-            let _ = vm.stop().await;
+            // EOF on stdin, kill the VM
+            let _ = vm.kill().await;
         }
         _ = stdout_task => {
-            // Console closed, stop the VM
-            let _ = vm.stop().await;
+            // Console closed, kill the VM
+            let _ = vm.kill().await;
         }
     }
 

@@ -14,21 +14,45 @@ uuid = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { version = "1.0", optional = true }
+apple-main = { git = "https://github.com/luizribeiro/apple-main", rev = "f67bf61", optional = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["process", "signal", "fs", "term"] }
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", optional = true }
+objc2-virtualization = { version = "0.3", optional = true }
+objc2-foundation = { version = "0.3", optional = true, features = ["NSData", "NSString", "NSURL", "NSError", "NSArray", "NSFileHandle"] }
+block2 = { version = "0.6", optional = true }
+libc = { version = "0.2", optional = true }
+dispatch = { version = "0.2", optional = true }
+
 [features]
 default = []
 blocking = []
-test-utils = ["dep:serde_json"]
+test-utils = ["dep:serde_json", "dep:apple-main"]
+vfkit = []
+macos-native = ["dep:objc2", "dep:objc2-virtualization", "dep:objc2-foundation", "dep:block2", "dep:libc", "dep:apple-main", "dep:dispatch"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio-test = "0.4"
 criterion = { version = "0.5", features = ["async_tokio"] }
+apple-main = { git = "https://github.com/luizribeiro/apple-main", rev = "f67bf61", features = ["criterion"] }
 capsa = { path = ".", features = ["test-utils"] }
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+dispatch = "0.2"
+core-foundation = "0.10"
 
 [[bench]]
 name = "boot"
+harness = false
+
+[[test]]
+name = "console_test"
+harness = false
+
+[[test]]
+name = "boot_test"
 harness = false
