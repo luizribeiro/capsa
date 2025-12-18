@@ -16,7 +16,7 @@ async fn test_console_echo() {
         .await
         .expect("VM did not boot");
 
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     console
         .write_line("echo hello-from-test")
@@ -46,21 +46,21 @@ async fn test_console_ctrl_c() {
         .await
         .expect("VM did not boot");
 
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     console
         .write_line("sleep 100")
         .await
         .expect("Failed to write");
 
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
     console
         .send_interrupt()
         .await
         .expect("Failed to send Ctrl+C");
 
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::sleep(Duration::from_millis(50)).await;
     let output = console.read_available().await.expect("Failed to read");
     assert!(output.contains("^C"), "Ctrl+C was not received by VM");
 

@@ -94,7 +94,7 @@ async fn test_pool_vm_respawns_after_release() {
         if start.elapsed() > timeout {
             panic!("Pool did not respawn VM within timeout");
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
 
     assert_eq!(pool.available_count().await, 1);
@@ -125,7 +125,7 @@ async fn test_pool_reserve_waits_for_available_vm() {
     let pool_clone = Arc::clone(&pool);
     let reserve_task = tokio::spawn(async move { pool_clone.reserve().await });
 
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    tokio::time::sleep(Duration::from_millis(10)).await;
 
     drop(vm);
 
@@ -185,7 +185,7 @@ async fn test_try_reserve_returns_shutdown_error() {
     let reserve_task = tokio::spawn(async move { pool_clone.reserve().await });
 
     // Give the task time to start waiting
-    tokio::time::sleep(Duration::from_millis(100)).await;
+    tokio::time::sleep(Duration::from_millis(10)).await;
 
     // Drop our pool handle and the reserved VM
     // This won't trigger VmPool::drop yet (task has a clone), but releasing
