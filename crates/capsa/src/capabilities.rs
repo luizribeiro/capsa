@@ -53,21 +53,3 @@ pub struct BackendCapabilities {
     /// Maximum guest memory in MB. None means no known limit.
     pub max_memory_mb: Option<u32>,
 }
-
-impl BackendCapabilities {
-    pub fn supports_linux(&self) -> bool {
-        self.guest_os.linux
-    }
-
-    pub fn supports_linux_direct_boot(&self) -> bool {
-        self.boot_methods.linux_direct
-    }
-
-    pub fn supports_raw_images(&self) -> bool {
-        self.image_formats.raw
-    }
-
-    pub fn supports_qcow2_images(&self) -> bool {
-        self.image_formats.qcow2
-    }
-}
