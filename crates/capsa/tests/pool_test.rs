@@ -3,8 +3,8 @@
 //! These tests verify the VM pool functionality with actual VMs.
 //! Run with: cargo test --test pool_test --features macos-native,test-utils
 
-use capsa::test_utils::test_vm;
 use capsa::Error;
+use capsa::test_utils::test_vm;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -99,7 +99,10 @@ async fn test_pool_vm_respawns_after_release() {
 
     assert_eq!(pool.available_count().await, 1);
 
-    let vm2 = pool.reserve().await.expect("Failed to reserve respawned VM");
+    let vm2 = pool
+        .reserve()
+        .await
+        .expect("Failed to reserve respawned VM");
     let console2 = vm2.console().await.expect("Failed to get console");
     console2
         .wait_for_timeout("Boot successful", Duration::from_secs(30))
@@ -179,9 +182,7 @@ async fn test_try_reserve_returns_shutdown_error() {
 
     // Spawn a task that will call reserve() and wait
     let pool_clone = Arc::clone(&pool);
-    let reserve_task = tokio::spawn(async move {
-        pool_clone.reserve().await
-    });
+    let reserve_task = tokio::spawn(async move { pool_clone.reserve().await });
 
     // Give the task time to start waiting
     tokio::time::sleep(Duration::from_millis(100)).await;

@@ -17,9 +17,9 @@ use crate::error::{Error, Result};
 use crate::types::{ConsoleMode, NetworkMode};
 use async_trait::async_trait;
 use block2::RcBlock;
-use nix::fcntl::{fcntl, FcntlArg, OFlag};
-use objc2::rc::Retained;
+use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use objc2::AllocAnyThread;
+use objc2::rc::Retained;
 use objc2_foundation::{NSError, NSString, NSURL};
 use objc2_virtualization::{
     VZLinuxBootLoader, VZNATNetworkDeviceAttachment, VZVirtioConsoleDeviceSerialPortConfiguration,
@@ -193,12 +193,7 @@ fn create_pipe() -> Result<(OwnedFd, OwnedFd)> {
     if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
         return Err(Error::StartFailed("Failed to create pipe".to_string()));
     }
-    Ok(unsafe {
-        (
-            OwnedFd::from_raw_fd(fds[0]),
-            OwnedFd::from_raw_fd(fds[1]),
-        )
-    })
+    Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
 }
 
 fn create_vm(
@@ -240,9 +235,9 @@ fn create_vm(
 
             let net_configs: Retained<
                 objc2_foundation::NSArray<objc2_virtualization::VZNetworkDeviceConfiguration>,
-            > = objc2_foundation::NSArray::from_retained_slice(&[
-                objc2::rc::Retained::into_super(net_config),
-            ]);
+            > = objc2_foundation::NSArray::from_retained_slice(&[objc2::rc::Retained::into_super(
+                net_config,
+            )]);
             vm_config.setNetworkDevices(&net_configs);
         }
 
@@ -267,9 +262,9 @@ fn create_vm(
 
             let serial_configs: Retained<
                 objc2_foundation::NSArray<objc2_virtualization::VZSerialPortConfiguration>,
-            > = objc2_foundation::NSArray::from_retained_slice(&[
-                objc2::rc::Retained::into_super(serial_config),
-            ]);
+            > = objc2_foundation::NSArray::from_retained_slice(&[objc2::rc::Retained::into_super(
+                serial_config,
+            )]);
             vm_config.setSerialPorts(&serial_configs);
         }
 
@@ -283,7 +278,10 @@ fn create_vm(
     }
 }
 
-fn start_vm(vm_addr: usize, result_tx: tokio::sync::oneshot::Sender<std::result::Result<(), String>>) {
+fn start_vm(
+    vm_addr: usize,
+    result_tx: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
+) {
     unsafe {
         let ptr = vm_addr as *mut VZVirtualMachine;
         let vm = Retained::from_raw(ptr).expect("Invalid VM pointer");
@@ -319,7 +317,11 @@ struct NativeVmHandle {
 }
 
 impl NativeVmHandle {
-    fn new(vm_addr: usize, console_read_fd: Option<OwnedFd>, console_write_fd: Option<OwnedFd>) -> Self {
+    fn new(
+        vm_addr: usize,
+        console_read_fd: Option<OwnedFd>,
+        console_write_fd: Option<OwnedFd>,
+    ) -> Self {
         Self {
             vm_addr: AtomicUsize::new(vm_addr),
             running: AtomicBool::new(true),
@@ -438,10 +440,10 @@ impl BackendVmHandle for NativeVmHandle {
                 .map_err(|e| Error::StartFailed(format!("fcntl failed: {}", e)))?;
         }
 
-        let async_read_fd =
-            AsyncFd::new(read_fd).map_err(|e| Error::StartFailed(format!("AsyncFd failed: {}", e)))?;
-        let async_write_fd =
-            AsyncFd::new(write_fd).map_err(|e| Error::StartFailed(format!("AsyncFd failed: {}", e)))?;
+        let async_read_fd = AsyncFd::new(read_fd)
+            .map_err(|e| Error::StartFailed(format!("AsyncFd failed: {}", e)))?;
+        let async_write_fd = AsyncFd::new(write_fd)
+            .map_err(|e| Error::StartFailed(format!("AsyncFd failed: {}", e)))?;
 
         Ok(Some(Box::new(AsyncConsolePipe {
             read_fd: async_read_fd,

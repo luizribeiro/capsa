@@ -3,7 +3,7 @@
 //! Run with: cargo bench --bench boot --features vfkit
 //!       or: cargo bench --bench boot --features macos-native
 
-use apple_main::criterion::{criterion_group, Criterion};
+use apple_main::criterion::{Criterion, criterion_group};
 use capsa::test_utils::test_vm;
 use std::time::Duration;
 
@@ -18,10 +18,7 @@ fn boot_benchmark(c: &mut Criterion) {
         group.bench_function(vm_name, |b| {
             b.iter(|| {
                 apple_main::block_on(async {
-                    let vm = test_vm(vm_name)
-                        .build()
-                        .await
-                        .expect("Failed to build VM");
+                    let vm = test_vm(vm_name).build().await.expect("Failed to build VM");
 
                     let console = vm.console().await.expect("Failed to get console");
 

@@ -21,7 +21,10 @@ impl VmConsole {
     pub async fn split(self) -> Result<(ConsoleReader, ConsoleWriter)> {
         let stream = self.stream.into_inner().ok_or(Error::ConsoleNotEnabled)?;
         let (reader, writer) = tokio::io::split(stream);
-        Ok((ConsoleReader { inner: reader }, ConsoleWriter { inner: writer }))
+        Ok((
+            ConsoleReader { inner: reader },
+            ConsoleWriter { inner: writer },
+        ))
     }
 
     pub async fn read(&self, buf: &mut [u8]) -> Result<usize> {

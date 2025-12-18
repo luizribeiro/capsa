@@ -46,7 +46,7 @@ mod poolable;
 
 pub(crate) use poolable::{No, Poolability, Yes};
 
-use crate::backend::{select_backend, HypervisorBackend, InternalVmConfig};
+use crate::backend::{HypervisorBackend, InternalVmConfig, select_backend};
 use crate::error::{Error, Result};
 use crate::handle::VmHandle;
 use crate::types::GuestOs;
@@ -64,8 +64,7 @@ struct VmPoolInner {
 
 impl VmPoolInner {
     fn is_shutting_down(&self) -> bool {
-        self.shutting_down
-            .load(std::sync::atomic::Ordering::SeqCst)
+        self.shutting_down.load(std::sync::atomic::Ordering::SeqCst)
     }
 }
 
@@ -106,7 +105,10 @@ impl VmPool {
         Ok(Self { inner })
     }
 
-    async fn spawn_vm(config: &InternalVmConfig, backend: &dyn HypervisorBackend) -> Result<VmHandle> {
+    async fn spawn_vm(
+        config: &InternalVmConfig,
+        backend: &dyn HypervisorBackend,
+    ) -> Result<VmHandle> {
         let backend_handle = backend.start(config).await?;
         Ok(VmHandle::new(
             backend_handle,
@@ -185,7 +187,6 @@ impl VmPool {
     pub async fn available_count(&self) -> usize {
         self.inner.available.lock().await.len()
     }
-
 }
 
 impl Drop for VmPool {

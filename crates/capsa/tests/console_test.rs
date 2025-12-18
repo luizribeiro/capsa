@@ -5,7 +5,10 @@ use std::time::Duration;
 
 #[apple_main::harness_test]
 async fn test_console_echo() {
-    let vm = test_vm("no-network").build().await.expect("Failed to build VM");
+    let vm = test_vm("no-network")
+        .build()
+        .await
+        .expect("Failed to build VM");
     let console = vm.console().await.expect("Failed to get console");
 
     console
@@ -32,7 +35,10 @@ async fn test_console_echo() {
 
 #[apple_main::harness_test]
 async fn test_console_ctrl_c() {
-    let vm = test_vm("no-network").build().await.expect("Failed to build VM");
+    let vm = test_vm("no-network")
+        .build()
+        .await
+        .expect("Failed to build VM");
     let console = vm.console().await.expect("Failed to get console");
 
     console

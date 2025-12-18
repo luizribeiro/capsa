@@ -2,8 +2,8 @@ use crate::backend::BackendVmHandle;
 use crate::console::VmConsole;
 use crate::error::{Error, Result};
 use crate::types::{GuestOs, ResourceConfig};
-use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 use tokio::time::timeout;
 

@@ -7,15 +7,15 @@ use crate::capabilities::{
 use crate::error::{Error, Result};
 use crate::types::{ConsoleMode, MountMode, NetworkMode, ShareMechanism};
 use async_trait::async_trait;
-use nix::fcntl::{fcntl, FcntlArg, OFlag};
-use nix::pty::{openpty, OpenptyResult};
+use nix::fcntl::{FcntlArg, OFlag, fcntl};
+use nix::pty::{OpenptyResult, openpty};
 use nix::sys::termios::{self, ControlFlags, InputFlags, LocalFlags, OutputFlags, SetArg};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::io::FromRawFd;
 use std::path::PathBuf;
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::process::{Child, Command};
@@ -90,11 +90,17 @@ impl VfkitBackend {
             };
 
             let tag = match &share.mechanism {
-                ShareMechanism::Auto => {
-                    share.guest_path.replace('/', "_").trim_matches('_').to_string()
-                }
+                ShareMechanism::Auto => share
+                    .guest_path
+                    .replace('/', "_")
+                    .trim_matches('_')
+                    .to_string(),
                 ShareMechanism::VirtioFs(cfg) => cfg.tag.clone().unwrap_or_else(|| {
-                    share.guest_path.replace('/', "_").trim_matches('_').to_string()
+                    share
+                        .guest_path
+                        .replace('/', "_")
+                        .trim_matches('_')
+                        .to_string()
                 }),
                 ShareMechanism::Virtio9p(_) => {
                     panic!("virtio-9p is not supported by vfkit backend")
@@ -158,7 +164,10 @@ impl HypervisorBackend for VfkitBackend {
 
         // Create PTY for console if enabled
         let pty = if config.console != ConsoleMode::Disabled {
-            Some(Pty::new().map_err(|e| Error::StartFailed(format!("Failed to create PTY: {}", e)))?)
+            Some(
+                Pty::new()
+                    .map_err(|e| Error::StartFailed(format!("Failed to create PTY: {}", e)))?,
+            )
         } else {
             None
         };
@@ -206,8 +215,7 @@ struct Pty {
 
 impl Pty {
     fn new() -> std::io::Result<Self> {
-        let OpenptyResult { master, slave } =
-            openpty(None, None).map_err(std::io::Error::other)?;
+        let OpenptyResult { master, slave } = openpty(None, None).map_err(std::io::Error::other)?;
 
         // Configure PTY for raw pass-through of control characters while keeping
         // output processing for proper line endings
@@ -253,16 +261,19 @@ impl Pty {
             Ok(unsafe { Stdio::from_raw_fd(new_fd) })
         };
 
-        Ok((dup_fd(&self.slave)?, dup_fd(&self.slave)?, dup_fd(&self.slave)?))
+        Ok((
+            dup_fd(&self.slave)?,
+            dup_fd(&self.slave)?,
+            dup_fd(&self.slave)?,
+        ))
     }
 
     fn into_async_master(self) -> std::io::Result<AsyncPtyMaster> {
         // Set non-blocking mode on master
-        let flags = fcntl(self.master.as_raw_fd(), FcntlArg::F_GETFL)
-            .map_err(std::io::Error::other)?;
+        let flags =
+            fcntl(self.master.as_raw_fd(), FcntlArg::F_GETFL).map_err(std::io::Error::other)?;
         let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
-        fcntl(self.master.as_raw_fd(), FcntlArg::F_SETFL(flags))
-            .map_err(std::io::Error::other)?;
+        fcntl(self.master.as_raw_fd(), FcntlArg::F_SETFL(flags)).map_err(std::io::Error::other)?;
 
         let async_fd = AsyncFd::new(self.master)?;
         Ok(AsyncPtyMaster { inner: async_fd })

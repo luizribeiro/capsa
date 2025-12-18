@@ -1,4 +1,4 @@
-use crate::backend::{select_backend, HypervisorBackend, InternalVmConfig};
+use crate::backend::{HypervisorBackend, InternalVmConfig, select_backend};
 use crate::boot::{KernelCmdline, LinuxDirectBootConfig};
 use crate::capabilities::BackendCapabilities;
 use crate::error::{Error, Result};
@@ -60,7 +60,6 @@ impl LinuxVmBuilder<Yes> {
 }
 
 impl<P> LinuxVmBuilder<P> {
-
     pub fn cpus(mut self, count: u32) -> Self {
         self.resources.cpus = count;
         self
@@ -139,11 +138,7 @@ impl<P> LinuxVmBuilder<P> {
         self.console(ConsoleMode::Stdio)
     }
 
-    pub fn cmdline_arg(
-        mut self,
-        key: impl Into<String>,
-        value: impl Into<String>,
-    ) -> Self {
+    pub fn cmdline_arg(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.cmdline.arg(key, value);
         self
     }
@@ -160,7 +155,9 @@ impl<P> LinuxVmBuilder<P> {
 
     fn validate(&self, capabilities: &BackendCapabilities) -> Result<()> {
         if !capabilities.boot_methods.linux_direct {
-            return Err(Error::UnsupportedFeature("boot method: linux direct".into()));
+            return Err(Error::UnsupportedFeature(
+                "boot method: linux direct".into(),
+            ));
         }
 
         if let Some(max) = capabilities.max_cpus {
@@ -264,7 +261,11 @@ impl<P> LinuxVmBuilder<P> {
 
         let backend_handle = backend.start(&internal_config).await?;
 
-        Ok(VmHandle::new(backend_handle, GuestOs::Linux, self.resources))
+        Ok(VmHandle::new(
+            backend_handle,
+            GuestOs::Linux,
+            self.resources,
+        ))
     }
 }
 
@@ -349,9 +350,18 @@ mod tests {
     fn all_capabilities() -> BackendCapabilities {
         BackendCapabilities {
             boot_methods: BootMethodSupport { linux_direct: true },
-            image_formats: ImageFormatSupport { raw: true, qcow2: true },
-            network_modes: NetworkModeSupport { none: true, nat: true },
-            share_mechanisms: ShareMechanismSupport { virtio_fs: true, virtio_9p: true },
+            image_formats: ImageFormatSupport {
+                raw: true,
+                qcow2: true,
+            },
+            network_modes: NetworkModeSupport {
+                none: true,
+                nat: true,
+            },
+            share_mechanisms: ShareMechanismSupport {
+                virtio_fs: true,
+                virtio_9p: true,
+            },
             ..Default::default()
         }
     }
@@ -379,7 +389,8 @@ mod tests {
 
     #[test]
     fn validate_auto_mechanism_always_passes() {
-        let builder = builder_with_shares(vec![SharedDir::new("/host", "/guest", MountMode::ReadOnly)]);
+        let builder =
+            builder_with_shares(vec![SharedDir::new("/host", "/guest", MountMode::ReadOnly)]);
         assert!(builder.validate(&all_capabilities()).is_ok());
     }
 
