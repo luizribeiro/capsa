@@ -97,9 +97,9 @@ impl VfkitBackend {
                 ShareMechanism::VirtioFs(cfg) => cfg.tag.clone().unwrap_or_else(|| {
                     share.guest_path.replace('/', "_").trim_matches('_').to_string()
                 }),
-                ShareMechanism::Virtio9p(cfg) => cfg.tag.clone().unwrap_or_else(|| {
-                    share.guest_path.replace('/', "_").trim_matches('_').to_string()
-                }),
+                ShareMechanism::Virtio9p(_) => {
+                    panic!("virtio-9p is not supported by vfkit backend")
+                }
             };
 
             args.push("--device".to_string());
