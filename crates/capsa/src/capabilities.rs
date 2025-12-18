@@ -40,6 +40,7 @@ pub struct ShareMechanismSupport {
 }
 
 /// Capabilities advertised by a hypervisor backend.
+// TODO: add vsock support (socket-based host-to-guest communication)
 #[derive(Debug, Clone, Default)]
 pub struct BackendCapabilities {
     pub guest_os: GuestOsSupport,
@@ -47,8 +48,6 @@ pub struct BackendCapabilities {
     pub image_formats: ImageFormatSupport,
     pub network_modes: NetworkModeSupport,
     pub share_mechanisms: ShareMechanismSupport,
-    /// VSock: socket-based host-to-guest communication without networking.
-    pub vsock: bool,
     /// Maximum vCPUs the backend supports. None means no known limit.
     pub max_cpus: Option<u32>,
     /// Maximum guest memory in MB. None means no known limit.

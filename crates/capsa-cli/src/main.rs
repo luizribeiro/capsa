@@ -142,8 +142,7 @@ async fn run() -> anyhow::Result<()> {
       "available": true,
       "capabilities": {{
         "linux": true,
-        "virtio_fs": true,
-        "vsock": true
+        "virtio_fs": true
       }}
     }}
   ]
@@ -156,7 +155,6 @@ async fn run() -> anyhow::Result<()> {
                 println!("    Status: Available");
                 println!("    Linux support: Yes");
                 println!("    virtio-fs: Yes");
-                println!("    vsock: Yes");
             }
         }
 

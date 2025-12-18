@@ -55,7 +55,6 @@ impl NativeVirtualizationBackend {
                 virtio_fs: true,
                 virtio_9p: false,
             },
-            vsock: true,
             max_cpus: None,
             max_memory_mb: None,
         };
