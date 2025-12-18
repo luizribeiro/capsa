@@ -141,6 +141,19 @@ impl LinuxVmBuilder {
             }
         }
 
+        match self.network {
+            NetworkMode::None => {
+                if !capabilities.network_modes.none {
+                    return Err(Error::UnsupportedFeature("network mode: none".into()));
+                }
+            }
+            NetworkMode::Nat => {
+                if !capabilities.network_modes.nat {
+                    return Err(Error::UnsupportedFeature("network mode: nat".into()));
+                }
+            }
+        }
+
         for share in &self.shares {
             match &share.mechanism {
                 ShareMechanism::Auto => {}
@@ -203,9 +216,25 @@ impl LinuxVmBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capabilities::{BackendCapabilities, ShareMechanismSupport};
+    use crate::capabilities::{BackendCapabilities, NetworkModeSupport, ShareMechanismSupport};
     use crate::types::{MountMode, Virtio9pConfig, VirtioFsConfig};
     use std::path::PathBuf;
+
+    fn builder_with_network(network: NetworkMode) -> LinuxVmBuilder {
+        LinuxVmBuilder {
+            config: LinuxDirectBootConfig {
+                kernel: PathBuf::from("/kernel"),
+                initrd: PathBuf::from("/initrd"),
+                disk: None,
+            },
+            resources: ResourceConfig::default(),
+            shares: vec![],
+            network,
+            console: ConsoleMode::default(),
+            cmdline: KernelCmdline::new(),
+            timeout: None,
+        }
+    }
 
     fn builder_with_resources(cpus: u32, memory_mb: u32) -> LinuxVmBuilder {
         LinuxVmBuilder {
@@ -239,18 +268,24 @@ mod tests {
         }
     }
 
+    fn all_capabilities() -> BackendCapabilities {
+        BackendCapabilities {
+            network_modes: NetworkModeSupport { none: true, nat: true },
+            share_mechanisms: ShareMechanismSupport { virtio_fs: true, virtio_9p: true },
+            ..Default::default()
+        }
+    }
+
     #[test]
     fn validate_no_shares() {
         let builder = builder_with_shares(vec![]);
-        let caps = BackendCapabilities::default();
-        assert!(builder.validate(&caps).is_ok());
+        assert!(builder.validate(&all_capabilities()).is_ok());
     }
 
     #[test]
     fn validate_auto_mechanism_always_passes() {
         let builder = builder_with_shares(vec![SharedDir::new("/host", "/guest", MountMode::ReadOnly)]);
-        let caps = BackendCapabilities::default();
-        assert!(builder.validate(&caps).is_ok());
+        assert!(builder.validate(&all_capabilities()).is_ok());
     }
 
     #[test]
@@ -261,14 +296,7 @@ mod tests {
             MountMode::ReadOnly,
             ShareMechanism::VirtioFs(VirtioFsConfig::default()),
         )]);
-        let caps = BackendCapabilities {
-            share_mechanisms: ShareMechanismSupport {
-                virtio_fs: true,
-                virtio_9p: false,
-            },
-            ..Default::default()
-        };
-        assert!(builder.validate(&caps).is_ok());
+        assert!(builder.validate(&all_capabilities()).is_ok());
     }
 
     #[test]
@@ -279,7 +307,8 @@ mod tests {
             MountMode::ReadOnly,
             ShareMechanism::VirtioFs(VirtioFsConfig::default()),
         )]);
-        let caps = BackendCapabilities::default();
+        let mut caps = all_capabilities();
+        caps.share_mechanisms.virtio_fs = false;
         let err = builder.validate(&caps).unwrap_err();
         assert!(matches!(err, Error::UnsupportedFeature(f) if f == "virtio-fs"));
     }
@@ -292,14 +321,7 @@ mod tests {
             MountMode::ReadOnly,
             ShareMechanism::Virtio9p(Virtio9pConfig::default()),
         )]);
-        let caps = BackendCapabilities {
-            share_mechanisms: ShareMechanismSupport {
-                virtio_fs: false,
-                virtio_9p: true,
-            },
-            ..Default::default()
-        };
-        assert!(builder.validate(&caps).is_ok());
+        assert!(builder.validate(&all_capabilities()).is_ok());
     }
 
     #[test]
@@ -310,7 +332,8 @@ mod tests {
             MountMode::ReadOnly,
             ShareMechanism::Virtio9p(Virtio9pConfig::default()),
         )]);
-        let caps = BackendCapabilities::default();
+        let mut caps = all_capabilities();
+        caps.share_mechanisms.virtio_9p = false;
         let err = builder.validate(&caps).unwrap_err();
         assert!(matches!(err, Error::UnsupportedFeature(f) if f == "virtio-9p"));
     }
@@ -318,20 +341,16 @@ mod tests {
     #[test]
     fn validate_cpus_within_limit() {
         let builder = builder_with_resources(4, 1024);
-        let caps = BackendCapabilities {
-            max_cpus: Some(8),
-            ..Default::default()
-        };
+        let mut caps = all_capabilities();
+        caps.max_cpus = Some(8);
         assert!(builder.validate(&caps).is_ok());
     }
 
     #[test]
     fn validate_cpus_exceeds_limit() {
         let builder = builder_with_resources(16, 1024);
-        let caps = BackendCapabilities {
-            max_cpus: Some(8),
-            ..Default::default()
-        };
+        let mut caps = all_capabilities();
+        caps.max_cpus = Some(8);
         let err = builder.validate(&caps).unwrap_err();
         assert!(matches!(err, Error::InvalidConfig(msg) if msg.contains("16 CPUs")));
     }
@@ -339,27 +358,22 @@ mod tests {
     #[test]
     fn validate_cpus_no_limit() {
         let builder = builder_with_resources(128, 1024);
-        let caps = BackendCapabilities::default();
-        assert!(builder.validate(&caps).is_ok());
+        assert!(builder.validate(&all_capabilities()).is_ok());
     }
 
     #[test]
     fn validate_memory_within_limit() {
         let builder = builder_with_resources(1, 4096);
-        let caps = BackendCapabilities {
-            max_memory_mb: Some(8192),
-            ..Default::default()
-        };
+        let mut caps = all_capabilities();
+        caps.max_memory_mb = Some(8192);
         assert!(builder.validate(&caps).is_ok());
     }
 
     #[test]
     fn validate_memory_exceeds_limit() {
         let builder = builder_with_resources(1, 16384);
-        let caps = BackendCapabilities {
-            max_memory_mb: Some(8192),
-            ..Default::default()
-        };
+        let mut caps = all_capabilities();
+        caps.max_memory_mb = Some(8192);
         let err = builder.validate(&caps).unwrap_err();
         assert!(matches!(err, Error::InvalidConfig(msg) if msg.contains("16384 MB")));
     }
@@ -367,7 +381,36 @@ mod tests {
     #[test]
     fn validate_memory_no_limit() {
         let builder = builder_with_resources(1, 65536);
-        let caps = BackendCapabilities::default();
-        assert!(builder.validate(&caps).is_ok());
+        assert!(builder.validate(&all_capabilities()).is_ok());
+    }
+
+    #[test]
+    fn validate_network_none_supported() {
+        let builder = builder_with_network(NetworkMode::None);
+        assert!(builder.validate(&all_capabilities()).is_ok());
+    }
+
+    #[test]
+    fn validate_network_none_unsupported() {
+        let builder = builder_with_network(NetworkMode::None);
+        let mut caps = all_capabilities();
+        caps.network_modes.none = false;
+        let err = builder.validate(&caps).unwrap_err();
+        assert!(matches!(err, Error::UnsupportedFeature(f) if f.contains("none")));
+    }
+
+    #[test]
+    fn validate_network_nat_supported() {
+        let builder = builder_with_network(NetworkMode::Nat);
+        assert!(builder.validate(&all_capabilities()).is_ok());
+    }
+
+    #[test]
+    fn validate_network_nat_unsupported() {
+        let builder = builder_with_network(NetworkMode::Nat);
+        let mut caps = all_capabilities();
+        caps.network_modes.nat = false;
+        let err = builder.validate(&caps).unwrap_err();
+        assert!(matches!(err, Error::UnsupportedFeature(f) if f.contains("nat")));
     }
 }
