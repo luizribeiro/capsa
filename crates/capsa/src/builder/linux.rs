@@ -123,6 +123,24 @@ impl LinuxVmBuilder {
     }
 
     fn validate(&self, capabilities: &BackendCapabilities) -> Result<()> {
+        if let Some(max) = capabilities.max_cpus {
+            if self.resources.cpus > max {
+                return Err(Error::InvalidConfig(format!(
+                    "requested {} CPUs but backend supports at most {}",
+                    self.resources.cpus, max
+                )));
+            }
+        }
+
+        if let Some(max) = capabilities.max_memory_mb {
+            if self.resources.memory_mb > max {
+                return Err(Error::InvalidConfig(format!(
+                    "requested {} MB memory but backend supports at most {} MB",
+                    self.resources.memory_mb, max
+                )));
+            }
+        }
+
         for share in &self.shares {
             match &share.mechanism {
                 ShareMechanism::Auto => {}
@@ -188,6 +206,22 @@ mod tests {
     use crate::capabilities::{BackendCapabilities, ShareMechanismSupport};
     use crate::types::{MountMode, Virtio9pConfig, VirtioFsConfig};
     use std::path::PathBuf;
+
+    fn builder_with_resources(cpus: u32, memory_mb: u32) -> LinuxVmBuilder {
+        LinuxVmBuilder {
+            config: LinuxDirectBootConfig {
+                kernel: PathBuf::from("/kernel"),
+                initrd: PathBuf::from("/initrd"),
+                disk: None,
+            },
+            resources: ResourceConfig { cpus, memory_mb },
+            shares: vec![],
+            network: NetworkMode::default(),
+            console: ConsoleMode::default(),
+            cmdline: KernelCmdline::new(),
+            timeout: None,
+        }
+    }
 
     fn builder_with_shares(shares: Vec<SharedDir>) -> LinuxVmBuilder {
         LinuxVmBuilder {
@@ -279,5 +313,61 @@ mod tests {
         let caps = BackendCapabilities::default();
         let err = builder.validate(&caps).unwrap_err();
         assert!(matches!(err, Error::UnsupportedFeature(f) if f == "virtio-9p"));
+    }
+
+    #[test]
+    fn validate_cpus_within_limit() {
+        let builder = builder_with_resources(4, 1024);
+        let caps = BackendCapabilities {
+            max_cpus: Some(8),
+            ..Default::default()
+        };
+        assert!(builder.validate(&caps).is_ok());
+    }
+
+    #[test]
+    fn validate_cpus_exceeds_limit() {
+        let builder = builder_with_resources(16, 1024);
+        let caps = BackendCapabilities {
+            max_cpus: Some(8),
+            ..Default::default()
+        };
+        let err = builder.validate(&caps).unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig(msg) if msg.contains("16 CPUs")));
+    }
+
+    #[test]
+    fn validate_cpus_no_limit() {
+        let builder = builder_with_resources(128, 1024);
+        let caps = BackendCapabilities::default();
+        assert!(builder.validate(&caps).is_ok());
+    }
+
+    #[test]
+    fn validate_memory_within_limit() {
+        let builder = builder_with_resources(1, 4096);
+        let caps = BackendCapabilities {
+            max_memory_mb: Some(8192),
+            ..Default::default()
+        };
+        assert!(builder.validate(&caps).is_ok());
+    }
+
+    #[test]
+    fn validate_memory_exceeds_limit() {
+        let builder = builder_with_resources(1, 16384);
+        let caps = BackendCapabilities {
+            max_memory_mb: Some(8192),
+            ..Default::default()
+        };
+        let err = builder.validate(&caps).unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig(msg) if msg.contains("16384 MB")));
+    }
+
+    #[test]
+    fn validate_memory_no_limit() {
+        let builder = builder_with_resources(1, 65536);
+        let caps = BackendCapabilities::default();
+        assert!(builder.validate(&caps).is_ok());
     }
 }
