@@ -44,6 +44,8 @@ impl VmStatus {
 
 pub struct VmHandle {
     backend_handle: Arc<Box<dyn BackendVmHandle>>,
+    // TODO: exit code and error message already have mutexes... is it really worth it to
+    // keep this as AtomicU8?
     status: AtomicU8,
     exit_code: std::sync::Mutex<Option<i32>>,
     error_message: std::sync::Mutex<Option<String>>,
@@ -146,6 +148,11 @@ impl VmHandle {
             .ok_or(Error::ConsoleNotEnabled)?;
         Ok(VmConsole::new(stream))
     }
+
+    // TODO: add support for obtaining an agent via vsock which would give better ergonomics
+    // for running commands and other things within the VM (than reading/writing from the
+    // serial console manually). this might require a VmBuilder that has enabled agent support
+    // (and a guest with the agent running in it, of course)
 
     pub fn guest_os(&self) -> GuestOs {
         self.guest_os

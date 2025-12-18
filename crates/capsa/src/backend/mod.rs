@@ -38,6 +38,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> ConsoleIo for T {}
 pub(crate) trait BackendVmHandle: Send + Sync {
     fn is_running(&self) -> bool;
     async fn wait(&self) -> Result<i32>;
+    // TODO: better investigate how shutdown is handling ACPI, timeouts, etc
     async fn shutdown(&self) -> Result<()>;
     async fn kill(&self) -> Result<()>;
     async fn console_stream(&self) -> Result<Option<ConsoleStream>>;

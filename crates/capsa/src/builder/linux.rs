@@ -24,6 +24,11 @@ pub struct LinuxVmBuilder<P = Yes> {
     poolable: Poolability<P>,
 }
 
+// TODO: break this down / organize further, as some of the properties and methods here would be
+// helpful for other OSs as well that would be implemented in the future, also making this code
+// simpler
+// TODO: allow for backend type to be forced by caller, instead of automatically selecting it
+// through select_backend
 impl LinuxVmBuilder<Yes> {
     pub fn new(config: LinuxDirectBootConfig) -> Self {
         Self {
@@ -33,6 +38,7 @@ impl LinuxVmBuilder<Yes> {
             network: NetworkMode::default(),
             console: ConsoleMode::default(),
             cmdline: KernelCmdline::new(),
+            // TODO: either remove this or make it actually used
             timeout: None,
             poolable: Poolability::new(),
         }
@@ -75,6 +81,9 @@ impl<P> LinuxVmBuilder<P> {
         self
     }
 
+    // TODO: maybe this should be root_disk? or maybe it shouldn't even be a thing
+    // and people should just set it up directly on LinuxDirectBootConfig and this
+    // should be turned into support for multiple disks?
     pub fn disk(mut self, disk: DiskImage) -> LinuxVmBuilder<No> {
         self.config.disk = Some(disk);
         LinuxVmBuilder {
@@ -89,6 +98,10 @@ impl<P> LinuxVmBuilder<P> {
         }
     }
 
+    // TODO: improve ergonomics of shared directories on Linux VMs
+    // maybe it's better ergonomics to just have share(SharedDir { ... }) (and fn shares)
+    // with ShareMechanism having a default value? or maybe it's better to just have share
+    // and require the mechanism to be used?
     pub fn share(
         mut self,
         host: impl Into<PathBuf>,
@@ -130,6 +143,7 @@ impl<P> LinuxVmBuilder<P> {
         self
     }
 
+    // TODO: revisit ergonomics of console. maybe we don't need console_enabled and console_stdio?
     pub fn console_enabled(self) -> Self {
         self.console(ConsoleMode::Enabled)
     }
@@ -138,6 +152,9 @@ impl<P> LinuxVmBuilder<P> {
         self.console(ConsoleMode::Stdio)
     }
 
+    // TODO: maybe revisit ergonomics of cmdline? it seems odd to have these methods here since
+    // they aren't really about the VM but really about the boot process. maybe they should be
+    // restricted to LinuxDirectBootConfig?
     pub fn cmdline_arg(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.cmdline.arg(key, value);
         self
@@ -224,6 +241,8 @@ impl<P> LinuxVmBuilder<P> {
         Ok(())
     }
 
+    // TODO: since this is only relevant to LinuxDirectBootConfig, we may possibly
+    // move this whole logic into LinuxDirectBootConfig?
     fn generate_cmdline(&self, backend: &dyn HypervisorBackend) -> String {
         if self.cmdline.is_overridden() {
             return self.cmdline.build();

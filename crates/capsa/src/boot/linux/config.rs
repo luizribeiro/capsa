@@ -7,6 +7,7 @@ pub struct LinuxDirectBootConfig {
     pub kernel: PathBuf,
     pub initrd: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    // TODO: rename as root_disk?
     pub disk: Option<DiskImage>,
 }
 
@@ -19,6 +20,7 @@ impl LinuxDirectBootConfig {
         }
     }
 
+    // TODO: rename as with_root_disk?
     pub fn with_disk(mut self, disk: DiskImage) -> Self {
         self.disk = Some(disk);
         self

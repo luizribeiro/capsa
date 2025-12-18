@@ -33,6 +33,8 @@
 //! }
 //! ```
 
+// TODO: document all public types exported by the capsa library
+
 mod backend;
 mod boot;
 mod builder;
@@ -44,6 +46,10 @@ mod handle;
 mod pool;
 mod types;
 
+// TODO: stop exporting test-utils externally as all it does is expose VMs from test-vms.nix
+// there probably is some useful test utilities for capsa that could be helpful
+// for users of the library, but these are probably not it (unless things like
+// the minimal VMs are bundled with the library)
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
 

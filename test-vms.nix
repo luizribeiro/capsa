@@ -8,6 +8,12 @@
 # Currently, vm.stop() times out on these VMs because they don't respond
 # to ACPI shutdown requests. Tests use vm.kill() as a workaround.
 
+# TODO: find a better place for this
+
+# TODO: make sure pkgs is always pinned from flake
+
+# TODO: there are probably much better ways to implement everything on this file :)
+
 { pkgs ? import <nixpkgs> { } }:
 
 let

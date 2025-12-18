@@ -1,6 +1,7 @@
 use crate::boot::LinuxDirectBootConfig;
 use crate::builder::LinuxVmBuilder;
 
+// TODO: do we really need both VmConfig and InternalVmConfig? seems a bit odd tbh
 pub trait VmConfig {
     type Builder;
 
@@ -21,4 +22,6 @@ impl Capsa {
     pub fn vm<C: VmConfig>(config: C) -> C::Builder {
         config.into_builder()
     }
+
+    // TODO: add vm_pool convenience method, which returns a poolable builder
 }

@@ -24,6 +24,8 @@ pub struct Virtio9pConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ShareMechanism {
+    // TODO: rename this as Default as it's actually going to use whatever the backend
+    // considers to be the default?
     #[default]
     Auto,
     VirtioFs(VirtioFsConfig),
