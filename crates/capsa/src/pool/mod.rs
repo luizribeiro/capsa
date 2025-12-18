@@ -42,6 +42,13 @@
 //! # }
 //! ```
 
+// TODO: even though VM pools don't allow for their VMs to have disks,
+// in practice, they might still allowed to have root disks (if the root
+// disk is set on LinuxDirectBootConfig, for example). however, we may want
+// to allow those with read-only access to the disk. it is also unclear
+// what happens when LinuxDirectBootConfig is setup with a root disk right now
+// and VMs are pooled using that config
+
 mod poolable;
 
 pub(crate) use poolable::{No, Poolability, Yes};

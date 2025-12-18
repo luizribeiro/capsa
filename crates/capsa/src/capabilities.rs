@@ -1,3 +1,7 @@
+// TODO: some of the structs here that contain booleans can probably be turned
+// into sets of enums
+// TODO: move this in backend and evaluate whether we really should expose this publicly
+
 /// Guest operating systems the backend can run.
 #[derive(Debug, Clone, Default)]
 pub struct GuestOsSupport {

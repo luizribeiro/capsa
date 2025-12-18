@@ -3,6 +3,8 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+// TODO: audit and revisit every unsafe block of this file
+
 #[cfg(unix)]
 use nix::sys::termios::{self, ControlFlags, InputFlags, LocalFlags, OutputFlags, SetArg, Termios};
 
@@ -19,6 +21,7 @@ struct Cli {
 enum Commands {
     /// Run a virtual machine
     Run {
+        // TODO: add validation to all config variables here through clap
         /// Path to configuration file
         #[arg(long, short)]
         config: Option<PathBuf>,
@@ -88,6 +91,7 @@ async fn run() -> anyhow::Result<()> {
             share,
             console,
         } => {
+            // TODO: better validation and parsing of all parameters through clap
             let kernel = kernel.ok_or_else(|| anyhow::anyhow!("--kernel is required"))?;
             let initrd = initrd.ok_or_else(|| anyhow::anyhow!("--initrd is required"))?;
 
@@ -149,6 +153,8 @@ async fn run() -> anyhow::Result<()> {
         }
 
         Commands::Backends { json } => {
+            // TODO: render backends and capabilities based on metadata
+            // instead of hard-coded strings
             if json {
                 println!(
                     r#"{{
@@ -182,6 +188,8 @@ async fn run() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+// TODO: split console stuff out of capsa-cli/src/main.rs
 
 #[cfg(unix)]
 struct RawTerminalGuard {

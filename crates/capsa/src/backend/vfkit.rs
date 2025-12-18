@@ -21,6 +21,10 @@ use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::process::{Child, Command};
 use tokio::sync::Mutex;
 
+// TODO: audit and revisit every unsafe block of this file
+// TODO: make sure all capabilities are covered by tests using the minimal VM
+// TODO: split this file further (mod.rs, handle.rs, console.rs?, etc)
+
 #[allow(dead_code)]
 pub struct VfkitBackend {
     vfkit_path: Option<PathBuf>,

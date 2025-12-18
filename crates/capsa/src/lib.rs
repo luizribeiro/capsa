@@ -34,6 +34,8 @@
 //! ```
 
 // TODO: document all public types exported by the capsa library
+// TODO: audit which types really should be exposed publicly. things like capabilities,
+// VmConfig, among others probably don't have to be public outside of this crate
 
 mod backend;
 mod boot;

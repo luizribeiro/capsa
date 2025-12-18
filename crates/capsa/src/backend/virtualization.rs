@@ -34,6 +34,10 @@ use tokio::io::unix::AsyncFd;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::Mutex;
 
+// TODO: audit and revisit every unsafe block of this file
+// TODO: make sure all capabilities are covered by tests using the minimal VM
+// TODO: split this file further (mod.rs, handle.rs, console.rs?, etc)
+
 pub struct NativeVirtualizationBackend {
     capabilities: BackendCapabilities,
 }
@@ -228,6 +232,8 @@ fn create_vm(
         vm_config.setCPUCount(cpus as usize);
         vm_config.setMemorySize(memory_mb * 1024 * 1024);
 
+        // TODO: setup root disk if config.disk is Some
+
         if let NetworkMode::Nat = network {
             let net_attachment = VZNATNetworkDeviceAttachment::new();
             let net_config = VZVirtioNetworkDeviceConfiguration::new();
@@ -370,6 +376,7 @@ impl BackendVmHandle for NativeVmHandle {
                 }
                 _ => {}
             }
+            // TODO: actually implement this instead of just sleeping 100ms
             tokio::time::sleep(std::time::Duration::from_millis(100)).await;
         }
     }
