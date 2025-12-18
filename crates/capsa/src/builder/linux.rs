@@ -1,5 +1,5 @@
 use crate::backend::{select_backend, HypervisorBackend, InternalVmConfig};
-use crate::boot::{CmdlineArg, KernelCmdline, LinuxDirectBootConfig};
+use crate::boot::{KernelCmdline, LinuxDirectBootConfig};
 use crate::error::Result;
 use crate::handle::VmHandle;
 use crate::types::{
@@ -102,13 +102,17 @@ impl LinuxVmBuilder {
         self.console(ConsoleMode::Stdio)
     }
 
-    pub fn cmdline_arg(mut self, arg: impl Into<CmdlineArg>) -> Self {
-        self.cmdline.arg(arg);
+    pub fn cmdline_arg(
+        mut self,
+        key: impl Into<String>,
+        value: impl Into<String>,
+    ) -> Self {
+        self.cmdline.arg(key, value);
         self
     }
 
-    pub fn cmdline_args(mut self, args: impl IntoIterator<Item = impl Into<CmdlineArg>>) -> Self {
-        self.cmdline.args(args);
+    pub fn cmdline_flag(mut self, name: impl Into<String>) -> Self {
+        self.cmdline.flag(name);
         self
     }
 

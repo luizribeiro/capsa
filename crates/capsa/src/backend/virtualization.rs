@@ -176,8 +176,8 @@ impl HypervisorBackend for NativeVirtualizationBackend {
     fn kernel_cmdline_defaults(&self) -> KernelCmdline {
         let mut cmdline = KernelCmdline::new();
         cmdline.console("hvc0");
-        cmdline.arg("reboot=t");
-        cmdline.arg("panic=-1");
+        cmdline.arg("reboot", "t");
+        cmdline.arg("panic", "-1");
         cmdline
     }
 

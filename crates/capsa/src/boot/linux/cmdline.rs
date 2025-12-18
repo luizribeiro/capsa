@@ -38,17 +38,6 @@ impl CmdlineArg {
     }
 }
 
-impl From<&str> for CmdlineArg {
-    fn from(s: &str) -> Self {
-        Self::parse(s)
-    }
-}
-
-impl From<String> for CmdlineArg {
-    fn from(s: String) -> Self {
-        Self::parse(s)
-    }
-}
 
 impl fmt::Display for CmdlineArg {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -70,27 +59,35 @@ impl KernelCmdline {
         Self::default()
     }
 
-    pub fn arg(&mut self, arg: impl Into<CmdlineArg>) -> &mut Self {
-        let arg = arg.into();
-        let key = arg.key();
+    pub fn arg(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
+        let key = key.into();
         self.args.retain(|a| a.key() != key);
+        self.args.push(CmdlineArg::KeyValue {
+            key,
+            value: value.into(),
+        });
+        self
+    }
+
+    pub fn flag(&mut self, name: impl Into<String>) -> &mut Self {
+        let name = name.into();
+        self.args.retain(|a| a.key() != name);
+        self.args.push(CmdlineArg::Flag(name));
+        self
+    }
+
+    pub fn add(&mut self, arg: CmdlineArg) -> &mut Self {
+        self.args.retain(|a| a.key() != arg.key());
         self.args.push(arg);
         self
     }
 
-    pub fn args(&mut self, args: impl IntoIterator<Item = impl Into<CmdlineArg>>) -> &mut Self {
-        for arg in args {
-            self.arg(arg);
-        }
-        self
-    }
-
     pub fn root(&mut self, device: &str) -> &mut Self {
-        self.arg(CmdlineArg::kv("root", device))
+        self.arg("root", device)
     }
 
     pub fn console(&mut self, device: &str) -> &mut Self {
-        self.arg(CmdlineArg::kv("console", device))
+        self.arg("console", device)
     }
 
     pub fn override_with(&mut self, cmdline: impl Into<String>) -> &mut Self {
@@ -131,7 +128,7 @@ impl KernelCmdline {
 
     pub fn merge(&mut self, other: &KernelCmdline) -> &mut Self {
         for arg in &other.args {
-            self.arg(arg.clone());
+            self.add(arg.clone());
         }
         self
     }
@@ -166,15 +163,15 @@ mod tests {
     #[test]
     fn cmdline_deduplication() {
         let mut cmdline = KernelCmdline::new();
-        cmdline.arg("console=ttyS0");
-        cmdline.arg("console=hvc0");
+        cmdline.arg("console", "ttyS0");
+        cmdline.arg("console", "hvc0");
         assert_eq!(cmdline.build(), "console=hvc0");
     }
 
     #[test]
     fn cmdline_override() {
         let mut cmdline = KernelCmdline::new();
-        cmdline.arg("console=ttyS0");
+        cmdline.arg("console", "ttyS0");
         cmdline.override_with("custom cmdline here");
         assert_eq!(cmdline.build(), "custom cmdline here");
     }
@@ -182,12 +179,12 @@ mod tests {
     #[test]
     fn cmdline_merge() {
         let mut base = KernelCmdline::new();
-        base.arg("console=ttyS0");
-        base.arg("ro");
+        base.arg("console", "ttyS0");
+        base.flag("ro");
 
         let mut extra = KernelCmdline::new();
-        extra.arg("console=hvc0");
-        extra.arg("quiet");
+        extra.arg("console", "hvc0");
+        extra.flag("quiet");
 
         base.merge(&extra);
         assert_eq!(cmdline_to_sorted(&base), "console=hvc0 quiet ro");
@@ -203,8 +200,8 @@ mod tests {
     #[test]
     fn cmdline_contains_and_get() {
         let mut cmdline = KernelCmdline::new();
-        cmdline.arg("root=/dev/vda");
-        cmdline.arg("ro");
+        cmdline.arg("root", "/dev/vda");
+        cmdline.flag("ro");
 
         assert!(cmdline.contains("root"));
         assert!(cmdline.contains("ro"));
@@ -216,8 +213,8 @@ mod tests {
     #[test]
     fn cmdline_remove() {
         let mut cmdline = KernelCmdline::new();
-        cmdline.arg("console=ttyS0");
-        cmdline.arg("ro");
+        cmdline.arg("console", "ttyS0");
+        cmdline.flag("ro");
 
         let removed = cmdline.remove("console");
         assert!(removed.is_some());
