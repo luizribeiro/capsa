@@ -14,8 +14,9 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "lowercase")]
 pub enum GuestOs {
     Linux,
-    Windows,
-    MacOs,
+    // TODO: support more guest operating systems
+    //Windows,
+    //MacOs,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
