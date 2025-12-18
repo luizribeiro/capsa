@@ -7,6 +7,12 @@
     pkgs.vfkit
   ];
 
+  git-hooks.hooks = {
+    rustfmt.enable = true;
+    clippy.enable = true;
+    clippy.settings.allFeatures = true;
+  };
+
   enterShell = ''
     if ! command -v codesign-run &> /dev/null; then
       echo "Installing codesign-run..."
