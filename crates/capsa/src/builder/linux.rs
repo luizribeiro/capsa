@@ -4,8 +4,8 @@ use crate::capabilities::BackendCapabilities;
 use crate::error::{Error, Result};
 use crate::handle::VmHandle;
 use crate::types::{
-    ConsoleMode, DiskImage, GuestOs, MountMode, NetworkMode, ResourceConfig, ShareMechanism,
-    SharedDir,
+    ConsoleMode, DiskImage, GuestOs, ImageFormat, MountMode, NetworkMode, ResourceConfig,
+    ShareMechanism, SharedDir,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -154,6 +154,21 @@ impl LinuxVmBuilder {
             }
         }
 
+        if let Some(disk) = &self.config.disk {
+            match disk.format {
+                ImageFormat::Raw => {
+                    if !capabilities.image_formats.raw {
+                        return Err(Error::UnsupportedFeature("image format: raw".into()));
+                    }
+                }
+                ImageFormat::Qcow2 => {
+                    if !capabilities.image_formats.qcow2 {
+                        return Err(Error::UnsupportedFeature("image format: qcow2".into()));
+                    }
+                }
+            }
+        }
+
         for share in &self.shares {
             match &share.mechanism {
                 ShareMechanism::Auto => {}
@@ -216,7 +231,9 @@ impl LinuxVmBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capabilities::{BackendCapabilities, NetworkModeSupport, ShareMechanismSupport};
+    use crate::capabilities::{
+        BackendCapabilities, ImageFormatSupport, NetworkModeSupport, ShareMechanismSupport,
+    };
     use crate::types::{MountMode, Virtio9pConfig, VirtioFsConfig};
     use std::path::PathBuf;
 
@@ -268,8 +285,25 @@ mod tests {
         }
     }
 
+    fn builder_with_disk(format: ImageFormat) -> LinuxVmBuilder {
+        LinuxVmBuilder {
+            config: LinuxDirectBootConfig {
+                kernel: PathBuf::from("/kernel"),
+                initrd: PathBuf::from("/initrd"),
+                disk: Some(DiskImage::with_format("/disk.img", format)),
+            },
+            resources: ResourceConfig::default(),
+            shares: vec![],
+            network: NetworkMode::default(),
+            console: ConsoleMode::default(),
+            cmdline: KernelCmdline::new(),
+            timeout: None,
+        }
+    }
+
     fn all_capabilities() -> BackendCapabilities {
         BackendCapabilities {
+            image_formats: ImageFormatSupport { raw: true, qcow2: true },
             network_modes: NetworkModeSupport { none: true, nat: true },
             share_mechanisms: ShareMechanismSupport { virtio_fs: true, virtio_9p: true },
             ..Default::default()
@@ -412,5 +446,41 @@ mod tests {
         caps.network_modes.nat = false;
         let err = builder.validate(&caps).unwrap_err();
         assert!(matches!(err, Error::UnsupportedFeature(f) if f.contains("nat")));
+    }
+
+    #[test]
+    fn validate_no_disk() {
+        let builder = builder_with_shares(vec![]);
+        assert!(builder.validate(&all_capabilities()).is_ok());
+    }
+
+    #[test]
+    fn validate_raw_disk_supported() {
+        let builder = builder_with_disk(ImageFormat::Raw);
+        assert!(builder.validate(&all_capabilities()).is_ok());
+    }
+
+    #[test]
+    fn validate_raw_disk_unsupported() {
+        let builder = builder_with_disk(ImageFormat::Raw);
+        let mut caps = all_capabilities();
+        caps.image_formats.raw = false;
+        let err = builder.validate(&caps).unwrap_err();
+        assert!(matches!(err, Error::UnsupportedFeature(f) if f.contains("raw")));
+    }
+
+    #[test]
+    fn validate_qcow2_disk_supported() {
+        let builder = builder_with_disk(ImageFormat::Qcow2);
+        assert!(builder.validate(&all_capabilities()).is_ok());
+    }
+
+    #[test]
+    fn validate_qcow2_disk_unsupported() {
+        let builder = builder_with_disk(ImageFormat::Qcow2);
+        let mut caps = all_capabilities();
+        caps.image_formats.qcow2 = false;
+        let err = builder.validate(&caps).unwrap_err();
+        assert!(matches!(err, Error::UnsupportedFeature(f) if f.contains("qcow2")));
     }
 }
