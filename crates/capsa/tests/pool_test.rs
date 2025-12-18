@@ -1,7 +1,9 @@
+#![feature(custom_test_frameworks)]
+#![test_runner(apple_main::test_runner)]
+
 //! Pool integration tests.
 //!
 //! These tests verify the VM pool functionality with actual VMs.
-//! Run with: cargo test --test pool_test --features macos-native,test-utils
 
 use capsa::Error;
 use capsa::test_utils::test_vm;
@@ -202,5 +204,3 @@ async fn test_try_reserve_returns_shutdown_error() {
     // Should succeed with the replacement VM
     let _vm2 = result.expect("reserve() should succeed after VM released");
 }
-
-apple_main::test_main!();

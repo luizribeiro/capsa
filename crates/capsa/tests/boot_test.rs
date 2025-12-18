@@ -1,3 +1,6 @@
+#![feature(custom_test_frameworks)]
+#![test_runner(apple_main::test_runner)]
+
 //! Integration tests for VM boot functionality.
 
 use capsa::test_utils::{default_test_vm, test_vm};
@@ -36,5 +39,3 @@ async fn test_sequential_vms() {
             .unwrap_or_else(|e| panic!("Failed to stop VM {}: {}", i, e));
     }
 }
-
-apple_main::test_main!();

@@ -1,3 +1,6 @@
+#![feature(custom_test_frameworks)]
+#![test_runner(apple_main::test_runner)]
+
 //! Integration tests for VM console functionality.
 
 use capsa::test_utils::test_vm;
@@ -66,5 +69,3 @@ async fn test_console_ctrl_c() {
 
     vm.kill().await.expect("Failed to kill VM");
 }
-
-apple_main::test_main!();

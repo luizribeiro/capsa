@@ -14,7 +14,7 @@ uuid = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { version = "1.0", optional = true }
-apple-main = { git = "https://github.com/luizribeiro/apple-main", rev = "f67bf61", optional = true }
+apple-main = { git = "https://github.com/luizribeiro/apple-main", rev = "6f9e44b", optional = true, features = ["unstable-test-framework"] }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["process", "signal", "fs", "term"] }
@@ -38,25 +38,10 @@ macos-native = ["dep:objc2", "dep:objc2-virtualization", "dep:objc2-foundation",
 tempfile = { workspace = true }
 tokio-test = "0.4"
 criterion = { version = "0.5", features = ["async_tokio"] }
-apple-main = { git = "https://github.com/luizribeiro/apple-main", rev = "f67bf61", features = ["criterion"] }
+apple-main = { git = "https://github.com/luizribeiro/apple-main", rev = "6f9e44b", features = ["unstable-criterion-framework", "unstable-test-framework"] }
 capsa = { path = ".", features = ["test-utils"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]
 dispatch = "0.2"
 core-foundation = "0.10"
 
-[[bench]]
-name = "boot"
-harness = false
-
-[[test]]
-name = "console_test"
-harness = false
-
-[[test]]
-name = "boot_test"
-harness = false
-
-[[test]]
-name = "pool_test"
-harness = false

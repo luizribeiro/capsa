@@ -76,11 +76,12 @@ checksum = "a23eb6b1614318a8071c9b2521f36b424b2c83db5eb3a0fead4a6c0809af6e61"
 [[package]]
 name = "apple-main"
 version = "0.1.0"
-source = "git+https://github.com/luizribeiro/apple-main?rev=f67bf61#f67bf619bfd3232bedd7a16ec860740304a44e38"
+source = "git+https://github.com/luizribeiro/apple-main?rev=6f9e44b#6f9e44b2e97102e757589aade58a1f17a7688317"
 dependencies = [
  "apple-main-macros",
  "core-foundation",
  "criterion",
+ "criterion-macro",
  "dispatch",
  "inventory",
  "libtest-mimic",
@@ -90,7 +91,7 @@ dependencies = [
 [[package]]
 name = "apple-main-macros"
 version = "0.1.0"
-source = "git+https://github.com/luizribeiro/apple-main?rev=f67bf61#f67bf619bfd3232bedd7a16ec860740304a44e38"
+source = "git+https://github.com/luizribeiro/apple-main?rev=6f9e44b#6f9e44b2e97102e757589aade58a1f17a7688317"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -340,6 +341,16 @@ dependencies = [
  "tinytemplate",
  "tokio",
  "walkdir",
+]
+
+[[package]]
+name = "criterion-macro"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "288a8f36b28a19d7dbd572c76006c0a0eba1f3bf912a254dda211c6f665e7ffc"
+dependencies = [
+ "proc-macro2",
+ "quote",
 ]
 
 [[package]]
