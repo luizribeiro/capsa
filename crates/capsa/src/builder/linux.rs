@@ -123,6 +123,10 @@ impl LinuxVmBuilder {
     }
 
     fn validate(&self, capabilities: &BackendCapabilities) -> Result<()> {
+        if !capabilities.boot_methods.linux_direct {
+            return Err(Error::UnsupportedFeature("boot method: linux direct".into()));
+        }
+
         if let Some(max) = capabilities.max_cpus {
             if self.resources.cpus > max {
                 return Err(Error::InvalidConfig(format!(
@@ -232,7 +236,8 @@ impl LinuxVmBuilder {
 mod tests {
     use super::*;
     use crate::capabilities::{
-        BackendCapabilities, ImageFormatSupport, NetworkModeSupport, ShareMechanismSupport,
+        BackendCapabilities, BootMethodSupport, ImageFormatSupport, NetworkModeSupport,
+        ShareMechanismSupport,
     };
     use crate::types::{MountMode, Virtio9pConfig, VirtioFsConfig};
     use std::path::PathBuf;
@@ -303,11 +308,27 @@ mod tests {
 
     fn all_capabilities() -> BackendCapabilities {
         BackendCapabilities {
+            boot_methods: BootMethodSupport { linux_direct: true },
             image_formats: ImageFormatSupport { raw: true, qcow2: true },
             network_modes: NetworkModeSupport { none: true, nat: true },
             share_mechanisms: ShareMechanismSupport { virtio_fs: true, virtio_9p: true },
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn validate_linux_direct_boot_supported() {
+        let builder = builder_with_shares(vec![]);
+        assert!(builder.validate(&all_capabilities()).is_ok());
+    }
+
+    #[test]
+    fn validate_linux_direct_boot_unsupported() {
+        let builder = builder_with_shares(vec![]);
+        let mut caps = all_capabilities();
+        caps.boot_methods.linux_direct = false;
+        let err = builder.validate(&caps).unwrap_err();
+        assert!(matches!(err, Error::UnsupportedFeature(f) if f.contains("linux direct")));
     }
 
     #[test]
