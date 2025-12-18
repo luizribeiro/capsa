@@ -41,6 +41,7 @@ mod config;
 mod console;
 mod error;
 mod handle;
+mod pool;
 mod types;
 
 #[cfg(feature = "test-utils")]
@@ -53,6 +54,7 @@ pub use config::{Capsa, VmConfig};
 pub use console::{ConsoleReader, ConsoleWriter, VmConsole};
 pub use error::{Error, Result};
 pub use handle::{VmHandle, VmStatus};
+pub use pool::{PooledVm, VmPool};
 pub use types::{
     ConsoleMode, DiskImage, GuestOs, ImageFormat, MountMode, NetworkMode, ResourceConfig,
     ShareMechanism, SharedDir, Virtio9pConfig, VirtioFsConfig,

@@ -56,3 +56,7 @@ harness = false
 [[test]]
 name = "boot_test"
 harness = false
+
+[[test]]
+name = "pool_test"
+harness = false

@@ -38,6 +38,12 @@ pub enum Error {
     #[error("pattern not found in console output: {pattern}")]
     PatternNotFound { pattern: String },
 
+    #[error("no VMs available in pool")]
+    PoolEmpty,
+
+    #[error("pool is shutting down")]
+    PoolShutdown,
+
     #[error("hypervisor error: {0}")]
     Hypervisor(String),
 

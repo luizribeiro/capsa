@@ -16,6 +16,7 @@ use async_trait::async_trait;
 use std::path::PathBuf;
 use tokio::io::{AsyncRead, AsyncWrite};
 
+#[derive(Clone)]
 pub(crate) struct InternalVmConfig {
     pub kernel: PathBuf,
     pub initrd: PathBuf,

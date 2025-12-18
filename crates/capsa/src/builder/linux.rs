@@ -3,6 +3,7 @@ use crate::boot::{KernelCmdline, LinuxDirectBootConfig};
 use crate::capabilities::BackendCapabilities;
 use crate::error::{Error, Result};
 use crate::handle::VmHandle;
+use crate::pool::{No, Poolability, VmPool, Yes};
 use crate::types::{
     ConsoleMode, DiskImage, GuestOs, ImageFormat, MountMode, NetworkMode, ResourceConfig,
     ShareMechanism, SharedDir,
@@ -10,7 +11,7 @@ use crate::types::{
 use std::path::PathBuf;
 use std::time::Duration;
 
-pub struct LinuxVmBuilder {
+pub struct LinuxVmBuilder<P = Yes> {
     config: LinuxDirectBootConfig,
     resources: ResourceConfig,
     shares: Vec<SharedDir>,
@@ -19,9 +20,11 @@ pub struct LinuxVmBuilder {
     cmdline: KernelCmdline,
     #[allow(dead_code)]
     timeout: Option<Duration>,
+    #[allow(dead_code)]
+    poolable: Poolability<P>,
 }
 
-impl LinuxVmBuilder {
+impl LinuxVmBuilder<Yes> {
     pub fn new(config: LinuxDirectBootConfig) -> Self {
         Self {
             config,
@@ -31,8 +34,32 @@ impl LinuxVmBuilder {
             console: ConsoleMode::default(),
             cmdline: KernelCmdline::new(),
             timeout: None,
+            poolable: Poolability::new(),
         }
     }
+
+    pub async fn build_pool(self, size: usize) -> Result<VmPool> {
+        let backend = select_backend()?;
+        self.validate(backend.capabilities())?;
+
+        let cmdline = self.generate_cmdline(backend.as_ref());
+
+        let internal_config = InternalVmConfig {
+            kernel: self.config.kernel,
+            initrd: self.config.initrd,
+            disk: self.config.disk,
+            cmdline,
+            resources: self.resources,
+            shares: self.shares,
+            network: self.network,
+            console: self.console,
+        };
+
+        VmPool::new(internal_config, size).await
+    }
+}
+
+impl<P> LinuxVmBuilder<P> {
 
     pub fn cpus(mut self, count: u32) -> Self {
         self.resources.cpus = count;
@@ -49,9 +76,18 @@ impl LinuxVmBuilder {
         self
     }
 
-    pub fn disk(mut self, disk: DiskImage) -> Self {
+    pub fn disk(mut self, disk: DiskImage) -> LinuxVmBuilder<No> {
         self.config.disk = Some(disk);
-        self
+        LinuxVmBuilder {
+            config: self.config,
+            resources: self.resources,
+            shares: self.shares,
+            network: self.network,
+            console: self.console,
+            cmdline: self.cmdline,
+            timeout: self.timeout,
+            poolable: Poolability::new(),
+        }
     }
 
     pub fn share(
@@ -255,6 +291,7 @@ mod tests {
             console: ConsoleMode::default(),
             cmdline: KernelCmdline::new(),
             timeout: None,
+            poolable: Poolability::new(),
         }
     }
 
@@ -271,6 +308,7 @@ mod tests {
             console: ConsoleMode::default(),
             cmdline: KernelCmdline::new(),
             timeout: None,
+            poolable: Poolability::new(),
         }
     }
 
@@ -287,6 +325,7 @@ mod tests {
             console: ConsoleMode::default(),
             cmdline: KernelCmdline::new(),
             timeout: None,
+            poolable: Poolability::new(),
         }
     }
 
@@ -303,6 +342,7 @@ mod tests {
             console: ConsoleMode::default(),
             cmdline: KernelCmdline::new(),
             timeout: None,
+            poolable: Poolability::new(),
         }
     }
 

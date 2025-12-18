@@ -93,34 +93,51 @@ async fn run() -> anyhow::Result<()> {
 
             let boot_config = LinuxDirectBootConfig::new(&kernel, &initrd);
 
-            let mut builder = Capsa::vm(boot_config).cpus(cpus).memory_mb(memory);
-
-            if let Some(disk_path) = disk {
-                builder = builder.disk(DiskImage::new(disk_path));
-            }
-
-            for s in share {
-                let parts: Vec<&str> = s.split(':').collect();
-                if parts.len() >= 2 {
-                    let host = parts[0];
-                    let guest = parts[1];
-                    let mode = if parts.len() > 2 && parts[2] == "rw" {
-                        MountMode::ReadWrite
-                    } else {
-                        MountMode::ReadOnly
-                    };
-                    builder = builder.share(host, guest, mode);
-                }
-            }
-
             let use_stdio = console == "stdio";
-            builder = match console.as_str() {
-                "disabled" => builder.console(capsa::ConsoleMode::Disabled),
-                "enabled" => builder.console_enabled(),
-                _ => builder.console_stdio(),
+            let console_mode = match console.as_str() {
+                "disabled" => capsa::ConsoleMode::Disabled,
+                "enabled" => capsa::ConsoleMode::Enabled,
+                _ => capsa::ConsoleMode::Stdio,
             };
 
-            let vm = builder.build().await?;
+            let shares: Vec<_> = share
+                .iter()
+                .filter_map(|s| {
+                    let parts: Vec<&str> = s.split(':').collect();
+                    if parts.len() >= 2 {
+                        let host = parts[0];
+                        let guest = parts[1];
+                        let mode = if parts.len() > 2 && parts[2] == "rw" {
+                            MountMode::ReadWrite
+                        } else {
+                            MountMode::ReadOnly
+                        };
+                        Some((host.to_string(), guest.to_string(), mode))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            macro_rules! with_shares {
+                ($builder:expr) => {{
+                    let mut b = $builder;
+                    for (host, guest, mode) in &shares {
+                        b = b.share(host, guest, *mode);
+                    }
+                    b.build().await?
+                }};
+            }
+
+            let base = Capsa::vm(boot_config)
+                .cpus(cpus)
+                .memory_mb(memory)
+                .console(console_mode);
+
+            let vm = match disk {
+                Some(disk_path) => with_shares!(base.disk(DiskImage::new(disk_path))),
+                None => with_shares!(base),
+            };
 
             if use_stdio {
                 run_stdio_console(&vm).await?;
