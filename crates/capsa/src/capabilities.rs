@@ -30,6 +30,15 @@ pub struct NetworkModeSupport {
     pub nat: bool,
 }
 
+/// Host-to-guest filesystem sharing mechanisms.
+#[derive(Debug, Clone, Default)]
+pub struct ShareMechanismSupport {
+    /// VirtioFS: high-performance sharing using FUSE.
+    pub virtio_fs: bool,
+    /// 9P/Plan 9: legacy sharing protocol.
+    pub virtio_9p: bool,
+}
+
 /// Capabilities advertised by a hypervisor backend.
 #[derive(Debug, Clone, Default)]
 pub struct BackendCapabilities {
@@ -37,10 +46,7 @@ pub struct BackendCapabilities {
     pub boot_methods: BootMethodSupport,
     pub image_formats: ImageFormatSupport,
     pub network_modes: NetworkModeSupport,
-    /// VirtioFS: high-performance host-to-guest filesystem sharing using FUSE.
-    pub virtio_fs: bool,
-    /// 9P/Plan 9: legacy host-to-guest filesystem sharing protocol.
-    pub virtio_9p: bool,
+    pub share_mechanisms: ShareMechanismSupport,
     /// VSock: socket-based host-to-guest communication without networking.
     pub vsock: bool,
     /// Maximum vCPUs the backend supports. None means no known limit.

@@ -11,6 +11,7 @@ use super::{BackendVmHandle, ConsoleStream, HypervisorBackend, InternalVmConfig}
 use crate::boot::KernelCmdline;
 use crate::capabilities::{
     BackendCapabilities, BootMethodSupport, GuestOsSupport, ImageFormatSupport, NetworkModeSupport,
+    ShareMechanismSupport,
 };
 use crate::error::{Error, Result};
 use crate::types::{ConsoleMode, NetworkMode};
@@ -50,8 +51,10 @@ impl NativeVirtualizationBackend {
                 none: true,
                 nat: true,
             },
-            virtio_fs: true,
-            virtio_9p: false,
+            share_mechanisms: ShareMechanismSupport {
+                virtio_fs: true,
+                virtio_9p: false,
+            },
             vsock: true,
             max_cpus: None,
             max_memory_mb: None,
