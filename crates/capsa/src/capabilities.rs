@@ -40,7 +40,17 @@ pub struct ShareMechanismSupport {
 }
 
 /// Capabilities advertised by a hypervisor backend.
-// TODO: add vsock support (socket-based host-to-guest communication)
+//
+// TODO: virtio-vsock - socket-based host-to-guest communication
+// TODO: virtio-rng - entropy source for guest randomness
+// TODO: virtio-balloon - dynamic memory adjustment
+// TODO: rosetta - run x86_64 binaries in ARM Linux VMs (Apple-only)
+// TODO: virtio-gpu - graphics output for GUI VMs
+// TODO: virtio-input - keyboard/mouse for GUI VMs
+// TODO: bridged networking - shared/bridged network modes beyond NAT
+// TODO: vm save/restore - suspend/resume VM state
+// TODO: multiple disks - more than one block device
+//
 #[derive(Debug, Clone, Default)]
 pub struct BackendCapabilities {
     pub guest_os: GuestOsSupport,
