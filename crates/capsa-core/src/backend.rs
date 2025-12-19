@@ -3,10 +3,11 @@ use crate::capabilities::BackendCapabilities;
 use crate::error::Result;
 use crate::types::{ConsoleMode, DiskImage, NetworkMode, ResourceConfig, SharedDir};
 use async_trait::async_trait;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::io::{AsyncRead, AsyncWrite};
 
-#[derive(Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InternalVmConfig {
     pub kernel: PathBuf,
     pub initrd: PathBuf,

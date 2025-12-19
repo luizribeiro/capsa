@@ -1,9 +1,8 @@
-use capsa_apple_vzd_ipc::{PipeTransport, RpcResult, VmConfig, VmHandleId, VmService};
-use capsa_backend_native::NativeVirtualizationBackend;
-use capsa_core::{
-    AsyncOwnedFd, BackendVmHandle, ConsoleMode, ConsoleStream, DiskImage, HypervisorBackend,
-    InternalVmConfig, MountMode, NetworkMode, ResourceConfig, SharedDir,
+use capsa_apple_vzd_ipc::{
+    ConsoleMode, InternalVmConfig, PipeTransport, RpcResult, VmHandleId, VmService,
 };
+use capsa_backend_native::NativeVirtualizationBackend;
+use capsa_core::{AsyncOwnedFd, BackendVmHandle, ConsoleStream, HypervisorBackend};
 use futures::prelude::*;
 use std::collections::HashMap;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
@@ -47,18 +46,14 @@ impl VmService for VzdServer {
     async fn start(
         self,
         _: Context,
-        config: VmConfig,
+        config: InternalVmConfig,
         _console_socket_path: Option<String>,
     ) -> RpcResult<VmHandleId> {
-        let internal_config = convert_config(&config);
-
         let backend = NativeVirtualizationBackend::new();
-        let handle: Box<dyn BackendVmHandle> = backend
-            .start(&internal_config)
-            .await
-            .map_err(|e| e.to_string())?;
+        let handle: Box<dyn BackendVmHandle> =
+            backend.start(&config).await.map_err(|e| e.to_string())?;
 
-        if config.console_enabled
+        if config.console != ConsoleMode::Disabled
             && let Ok(Some(console)) = handle.console_stream().await
             && let Some(fd3) = try_get_fd3()
         {
@@ -100,43 +95,6 @@ impl VmService for VzdServer {
     async fn release(self, _: Context, handle: VmHandleId) -> RpcResult<()> {
         self.handles.write().await.remove(&handle);
         Ok(())
-    }
-}
-
-fn convert_config(config: &VmConfig) -> InternalVmConfig {
-    InternalVmConfig {
-        kernel: config.kernel.clone(),
-        initrd: config.initrd.clone(),
-        disk: config.disk.as_ref().map(|d| DiskImage::new(&d.path)),
-        cmdline: config.cmdline.clone(),
-        resources: ResourceConfig {
-            cpus: config.cpus,
-            memory_mb: config.memory_mb,
-        },
-        shares: config
-            .shares
-            .iter()
-            .map(|s| {
-                SharedDir::new(
-                    &s.host_path,
-                    &s.guest_path,
-                    if s.read_only {
-                        MountMode::ReadOnly
-                    } else {
-                        MountMode::ReadWrite
-                    },
-                )
-            })
-            .collect(),
-        network: match config.network {
-            capsa_apple_vzd_ipc::NetworkMode::None => NetworkMode::None,
-            capsa_apple_vzd_ipc::NetworkMode::Nat => NetworkMode::Nat,
-        },
-        console: if config.console_enabled {
-            ConsoleMode::Enabled
-        } else {
-            ConsoleMode::Disabled
-        },
     }
 }
 
@@ -284,119 +242,6 @@ mod tests {
             all_ids.sort();
             all_ids.dedup();
             assert_eq!(all_ids.len(), 200);
-        }
-    }
-
-    mod convert_config {
-        use super::*;
-        use capsa_apple_vzd_ipc::{DiskConfig, SharedDirConfig};
-
-        fn sample_config() -> VmConfig {
-            VmConfig {
-                kernel: "/path/to/kernel".into(),
-                initrd: "/path/to/initrd".into(),
-                disk: Some(DiskConfig {
-                    path: "/path/to/disk.raw".into(),
-                    read_only: false,
-                }),
-                cmdline: "console=hvc0 root=/dev/vda".to_string(),
-                cpus: 4,
-                memory_mb: 2048,
-                shares: vec![SharedDirConfig {
-                    host_path: "/host/path".into(),
-                    guest_path: "/guest/path".to_string(),
-                    read_only: true,
-                }],
-                network: capsa_apple_vzd_ipc::NetworkMode::Nat,
-                console_enabled: true,
-            }
-        }
-
-        #[test]
-        fn converts_basic_fields() {
-            let config = sample_config();
-            let internal = convert_config(&config);
-
-            assert_eq!(internal.kernel, config.kernel);
-            assert_eq!(internal.initrd, config.initrd);
-            assert_eq!(internal.cmdline, config.cmdline);
-            assert_eq!(internal.resources.cpus, config.cpus);
-            assert_eq!(internal.resources.memory_mb, config.memory_mb);
-        }
-
-        #[test]
-        fn converts_disk_config() {
-            let config = sample_config();
-            let internal = convert_config(&config);
-
-            assert!(internal.disk.is_some());
-            assert_eq!(
-                internal.disk.as_ref().unwrap().path,
-                config.disk.as_ref().unwrap().path
-            );
-        }
-
-        #[test]
-        fn converts_none_disk() {
-            let mut config = sample_config();
-            config.disk = None;
-            let internal = convert_config(&config);
-
-            assert!(internal.disk.is_none());
-        }
-
-        #[test]
-        fn converts_shares_with_read_only() {
-            let config = sample_config();
-            let internal = convert_config(&config);
-
-            assert_eq!(internal.shares.len(), 1);
-            assert_eq!(internal.shares[0].host_path, config.shares[0].host_path);
-            assert_eq!(internal.shares[0].guest_path, config.shares[0].guest_path);
-            assert_eq!(internal.shares[0].mode, MountMode::ReadOnly);
-        }
-
-        #[test]
-        fn converts_shares_with_read_write() {
-            let mut config = sample_config();
-            config.shares[0].read_only = false;
-            let internal = convert_config(&config);
-
-            assert_eq!(internal.shares[0].mode, MountMode::ReadWrite);
-        }
-
-        #[test]
-        fn converts_network_none() {
-            let mut config = sample_config();
-            config.network = capsa_apple_vzd_ipc::NetworkMode::None;
-            let internal = convert_config(&config);
-
-            assert_eq!(internal.network, NetworkMode::None);
-        }
-
-        #[test]
-        fn converts_network_nat() {
-            let config = sample_config();
-            let internal = convert_config(&config);
-
-            assert_eq!(internal.network, NetworkMode::Nat);
-        }
-
-        #[test]
-        fn converts_console_enabled() {
-            let config = sample_config();
-            let internal = convert_config(&config);
-
-            assert_eq!(internal.console, ConsoleMode::Enabled);
-        }
-
-        #[test]
-        fn converts_console_disabled() {
-            let mut config = sample_config();
-            config.console_enabled = false;
-            let internal = convert_config(&config);
-
-            assert_eq!(internal.console, ConsoleMode::Disabled);
         }
     }
 }

@@ -224,6 +224,7 @@ dependencies = [
 name = "capsa-apple-vzd-ipc"
 version = "0.1.0"
 dependencies = [
+ "capsa-core",
  "serde",
  "serde_json",
  "tarpc",

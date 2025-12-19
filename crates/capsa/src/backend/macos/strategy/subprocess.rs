@@ -1,10 +1,8 @@
 use super::ExecutionStrategy;
 use crate::backend::macos::pty::Pty;
 use async_trait::async_trait;
-use capsa_apple_vzd_ipc::{PipeTransport, VmConfig, VmHandleId, VmServiceClient};
-use capsa_core::{
-    BackendVmHandle, ConsoleMode, ConsoleStream, Error, InternalVmConfig, NetworkMode, Result,
-};
+use capsa_apple_vzd_ipc::{PipeTransport, VmHandleId, VmServiceClient};
+use capsa_core::{BackendVmHandle, ConsoleMode, ConsoleStream, Error, InternalVmConfig, Result};
 use std::os::fd::AsRawFd;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -116,37 +114,8 @@ impl ExecutionStrategy for SubprocessStrategy {
         let client =
             VmServiceClient::new(tarpc::client::Config::default(), serde_transport).spawn();
 
-        let rpc_config = VmConfig {
-            kernel: config.kernel.clone(),
-            initrd: config.initrd.clone(),
-            disk: config
-                .disk
-                .as_ref()
-                .map(|d| capsa_apple_vzd_ipc::DiskConfig {
-                    path: d.path.clone(),
-                    read_only: false,
-                }),
-            cmdline: config.cmdline.clone(),
-            cpus: config.resources.cpus,
-            memory_mb: config.resources.memory_mb,
-            shares: config
-                .shares
-                .iter()
-                .map(|s| capsa_apple_vzd_ipc::SharedDirConfig {
-                    host_path: s.host_path.clone(),
-                    guest_path: s.guest_path.clone(),
-                    read_only: matches!(s.mode, capsa_core::MountMode::ReadOnly),
-                })
-                .collect(),
-            network: match config.network {
-                NetworkMode::None => capsa_apple_vzd_ipc::NetworkMode::None,
-                NetworkMode::Nat => capsa_apple_vzd_ipc::NetworkMode::Nat,
-            },
-            console_enabled,
-        };
-
         let handle_id = client
-            .start(tarpc::context::current(), rpc_config, None)
+            .start(tarpc::context::current(), config.clone(), None)
             .await
             .map_err(|e| Error::StartFailed(format!("RPC call to start VM failed: {}", e)))?
             .map_err(|e| Error::StartFailed(format!("VM subprocess failed to start: {}", e)))?;
