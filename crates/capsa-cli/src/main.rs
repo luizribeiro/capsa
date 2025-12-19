@@ -199,10 +199,10 @@ struct RawTerminalGuard {
 #[cfg(unix)]
 impl RawTerminalGuard {
     fn new() -> Option<Self> {
-        use std::os::fd::BorrowedFd;
+        use std::os::fd::AsFd;
 
-        // SAFETY: stdin fd 0 is valid for the lifetime of the program
-        let stdin_fd = unsafe { BorrowedFd::borrow_raw(0) };
+        let stdin = std::io::stdin();
+        let stdin_fd = stdin.as_fd();
         let original = termios::tcgetattr(stdin_fd).ok()?;
         let mut raw = original.clone();
 
@@ -240,8 +240,9 @@ impl RawTerminalGuard {
 #[cfg(unix)]
 impl Drop for RawTerminalGuard {
     fn drop(&mut self) {
-        use std::os::fd::BorrowedFd;
-        let stdin_fd = unsafe { BorrowedFd::borrow_raw(0) };
+        use std::os::fd::AsFd;
+        let stdin = std::io::stdin();
+        let stdin_fd = stdin.as_fd();
         let _ = termios::tcsetattr(stdin_fd, SetArg::TCSANOW, &self.original);
     }
 }
