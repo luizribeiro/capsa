@@ -53,10 +53,9 @@ mod poolable;
 
 pub(crate) use poolable::{No, Poolability, Yes};
 
-use crate::backend::{HypervisorBackend, InternalVmConfig, select_backend};
-use crate::error::{Error, Result};
+use crate::backend::select_backend;
 use crate::handle::VmHandle;
-use crate::types::GuestOs;
+use capsa_core::{Error, GuestOs, HypervisorBackend, InternalVmConfig, Result};
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};

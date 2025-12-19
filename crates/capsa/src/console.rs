@@ -1,5 +1,4 @@
-use crate::backend::ConsoleStream;
-use crate::error::{Error, Result};
+use capsa_core::{ConsoleStream, Error, Result};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;

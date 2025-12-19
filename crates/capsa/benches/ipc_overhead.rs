@@ -1,0 +1,73 @@
+#![feature(custom_test_frameworks)]
+#![test_runner(apple_main::criterion_runner)]
+
+use apple_main::criterion::Criterion;
+use apple_main::criterion_macro::criterion;
+use capsa::backend::{HypervisorBackend, InternalVmConfig};
+use capsa::test_utils::test_vm;
+use capsa::{ConsoleMode, NetworkMode, ResourceConfig};
+use std::path::PathBuf;
+use std::time::{Duration, Instant};
+
+fn custom_criterion() -> Criterion {
+    Criterion::default()
+        .measurement_time(Duration::from_secs(120))
+        .sample_size(10)
+}
+
+fn make_test_config(kernel: PathBuf, initrd: PathBuf) -> InternalVmConfig {
+    InternalVmConfig {
+        kernel,
+        initrd,
+        disk: None,
+        cmdline: "console=hvc0 reboot=t panic=-1".to_string(),
+        resources: ResourceConfig {
+            cpus: 1,
+            memory_mb: 512,
+        },
+        shares: vec![],
+        network: NetworkMode::None,
+        console: ConsoleMode::Enabled,
+    }
+}
+
+#[criterion(custom_criterion())]
+fn native_backend_benchmark(c: &mut Criterion) {
+    let mut group = c.benchmark_group("native_backend");
+
+    group.bench_function("vm_lifecycle_minimal", |b| {
+        b.iter(|| {
+            apple_main::block_on(async {
+                let vm = test_vm("minimal")
+                    .build()
+                    .await
+                    .expect("Failed to build VM");
+                let console = vm.console().await.expect("Failed to get console");
+                console
+                    .wait_for_timeout("Boot successful", Duration::from_secs(30))
+                    .await
+                    .expect("VM did not boot");
+                vm.kill().await.expect("Failed to stop VM");
+            })
+        })
+    });
+
+    group.bench_function("vm_lifecycle_ultra_minimal", |b| {
+        b.iter(|| {
+            apple_main::block_on(async {
+                let vm = test_vm("ultra-minimal")
+                    .build()
+                    .await
+                    .expect("Failed to build VM");
+                let console = vm.console().await.expect("Failed to get console");
+                console
+                    .wait_for_timeout("Boot successful", Duration::from_secs(30))
+                    .await
+                    .expect("VM did not boot");
+                vm.kill().await.expect("Failed to stop VM");
+            })
+        })
+    });
+
+    group.finish();
+}

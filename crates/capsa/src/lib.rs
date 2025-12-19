@@ -37,16 +37,12 @@
 // TODO: audit which types really should be exposed publicly. things like capabilities,
 // VmConfig, among others probably don't have to be public outside of this crate
 
-mod backend;
-mod boot;
+pub mod backend;
 mod builder;
-mod capabilities;
 mod config;
 mod console;
-mod error;
 mod handle;
 mod pool;
-mod types;
 
 // TODO: stop exporting test-utils externally as all it does is expose VMs from test-vms.nix
 // there probably is some useful test utilities for capsa that could be helpful
@@ -55,15 +51,15 @@ mod types;
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
 
-pub use boot::{CmdlineArg, KernelCmdline, LinuxDirectBootConfig};
 pub use builder::LinuxVmBuilder;
-pub use capabilities::BackendCapabilities;
 pub use config::{Capsa, VmConfig};
 pub use console::{ConsoleReader, ConsoleWriter, VmConsole};
-pub use error::{Error, Result};
 pub use handle::{VmHandle, VmStatus};
 pub use pool::{PooledVm, VmPool};
-pub use types::{
-    ConsoleMode, DiskImage, GuestOs, ImageFormat, MountMode, NetworkMode, ResourceConfig,
-    ShareMechanism, SharedDir, Virtio9pConfig, VirtioFsConfig,
+
+pub use capsa_core::{
+    BackendCapabilities, BootMethodSupport, CmdlineArg, ConsoleMode, DiskImage, Error, GuestOs,
+    GuestOsSupport, ImageFormat, ImageFormatSupport, KernelCmdline, LinuxDirectBootConfig,
+    MountMode, NetworkMode, NetworkModeSupport, ResourceConfig, Result, ShareMechanism,
+    ShareMechanismSupport, SharedDir, Virtio9pConfig, VirtioFsConfig,
 };

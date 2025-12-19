@@ -1,12 +1,9 @@
-use super::{BackendVmHandle, ConsoleStream, HypervisorBackend, InternalVmConfig};
-use crate::boot::KernelCmdline;
-use crate::capabilities::{
-    BackendCapabilities, BootMethodSupport, GuestOsSupport, ImageFormatSupport, NetworkModeSupport,
-    ShareMechanismSupport,
-};
-use crate::error::{Error, Result};
-use crate::types::{ConsoleMode, MountMode, NetworkMode, ShareMechanism};
 use async_trait::async_trait;
+use capsa_core::{
+    BackendCapabilities, BackendVmHandle, BootMethodSupport, ConsoleMode, ConsoleStream, Error,
+    GuestOsSupport, HypervisorBackend, ImageFormatSupport, InternalVmConfig, KernelCmdline,
+    MountMode, NetworkMode, NetworkModeSupport, Result, ShareMechanism, ShareMechanismSupport,
+};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::pty::{OpenptyResult, openpty};
 use nix::sys::termios::{self, ControlFlags, InputFlags, LocalFlags, OutputFlags, SetArg};
@@ -381,7 +378,7 @@ impl VfkitVmHandle {
 
 #[async_trait]
 impl BackendVmHandle for VfkitVmHandle {
-    fn is_running(&self) -> bool {
+    async fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
     }
 

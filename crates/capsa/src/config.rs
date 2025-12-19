@@ -1,5 +1,5 @@
-use crate::boot::LinuxDirectBootConfig;
 use crate::builder::LinuxVmBuilder;
+use capsa_core::LinuxDirectBootConfig;
 
 // TODO: do we really need both VmConfig and InternalVmConfig? seems a bit odd tbh
 pub trait VmConfig {

@@ -1,7 +1,5 @@
-use crate::backend::BackendVmHandle;
 use crate::console::VmConsole;
-use crate::error::{Error, Result};
-use crate::types::{GuestOs, ResourceConfig};
+use capsa_core::{BackendVmHandle, Error, GuestOs, ResourceConfig, Result};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;

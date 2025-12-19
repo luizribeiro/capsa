@@ -1,12 +1,10 @@
-use crate::backend::{HypervisorBackend, InternalVmConfig, select_backend};
-use crate::boot::{KernelCmdline, LinuxDirectBootConfig};
-use crate::capabilities::BackendCapabilities;
-use crate::error::{Error, Result};
+use crate::backend::select_backend;
 use crate::handle::VmHandle;
 use crate::pool::{No, Poolability, VmPool, Yes};
-use crate::types::{
-    ConsoleMode, DiskImage, GuestOs, ImageFormat, MountMode, NetworkMode, ResourceConfig,
-    ShareMechanism, SharedDir,
+use capsa_core::{
+    BackendCapabilities, ConsoleMode, DiskImage, Error, GuestOs, HypervisorBackend, ImageFormat,
+    InternalVmConfig, KernelCmdline, LinuxDirectBootConfig, MountMode, NetworkMode, ResourceConfig,
+    Result, ShareMechanism, SharedDir,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -291,11 +289,10 @@ impl<P> LinuxVmBuilder<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::capabilities::{
-        BackendCapabilities, BootMethodSupport, ImageFormatSupport, NetworkModeSupport,
-        ShareMechanismSupport,
+    use capsa_core::{
+        BackendCapabilities, BootMethodSupport, ImageFormatSupport, MountMode, NetworkModeSupport,
+        ShareMechanismSupport, Virtio9pConfig, VirtioFsConfig,
     };
-    use crate::types::{MountMode, Virtio9pConfig, VirtioFsConfig};
     use std::path::PathBuf;
 
     fn builder_with_network(network: NetworkMode) -> LinuxVmBuilder {

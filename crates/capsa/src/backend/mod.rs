@@ -1,63 +1,31 @@
+#[cfg(all(target_os = "macos", feature = "macos-subprocess"))]
+mod subprocess;
 #[cfg(all(target_os = "macos", feature = "vfkit"))]
 mod vfkit;
-#[cfg(all(target_os = "macos", feature = "macos-native"))]
-mod virtualization;
 
+#[cfg(all(target_os = "macos", feature = "macos-native"))]
+pub use capsa_backend_native::NativeVirtualizationBackend;
+#[cfg(all(target_os = "macos", feature = "macos-subprocess"))]
+pub use subprocess::SubprocessVirtualizationBackend;
 #[cfg(all(target_os = "macos", feature = "vfkit"))]
-pub(crate) use vfkit::VfkitBackend;
-#[cfg(all(target_os = "macos", feature = "macos-native"))]
-pub(crate) use virtualization::NativeVirtualizationBackend;
+pub use vfkit::VfkitBackend;
 
-use crate::boot::KernelCmdline;
-use crate::capabilities::BackendCapabilities;
-use crate::error::Result;
-use crate::types::{ConsoleMode, DiskImage, NetworkMode, ResourceConfig, SharedDir};
-use async_trait::async_trait;
-use std::path::PathBuf;
-use tokio::io::{AsyncRead, AsyncWrite};
-
-#[derive(Clone)]
-pub(crate) struct InternalVmConfig {
-    pub kernel: PathBuf,
-    pub initrd: PathBuf,
-    pub disk: Option<DiskImage>,
-    pub cmdline: String,
-    pub resources: ResourceConfig,
-    pub shares: Vec<SharedDir>,
-    pub network: NetworkMode,
-    pub console: ConsoleMode,
-}
-
-pub(crate) type ConsoleStream = Box<dyn ConsoleIo + Send>;
-
-pub(crate) trait ConsoleIo: AsyncRead + AsyncWrite + Unpin {}
-impl<T: AsyncRead + AsyncWrite + Unpin> ConsoleIo for T {}
-
-#[async_trait]
-#[allow(dead_code)]
-pub(crate) trait BackendVmHandle: Send + Sync {
-    fn is_running(&self) -> bool;
-    async fn wait(&self) -> Result<i32>;
-    // TODO: better investigate how shutdown is handling ACPI, timeouts, etc
-    async fn shutdown(&self) -> Result<()>;
-    async fn kill(&self) -> Result<()>;
-    async fn console_stream(&self) -> Result<Option<ConsoleStream>>;
-}
-
-#[async_trait]
-#[allow(dead_code)]
-pub(crate) trait HypervisorBackend: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn capabilities(&self) -> &BackendCapabilities;
-    fn is_available(&self) -> bool;
-    async fn start(&self, config: &InternalVmConfig) -> Result<Box<dyn BackendVmHandle>>;
-    fn kernel_cmdline_defaults(&self) -> KernelCmdline;
-    fn default_root_device(&self) -> &str;
-}
+pub use capsa_core::{
+    BackendCapabilities, BackendVmHandle, ConsoleIo, ConsoleStream, HypervisorBackend,
+    InternalVmConfig, KernelCmdline, Result,
+};
 
 pub(crate) fn select_backend() -> Result<Box<dyn HypervisorBackend>> {
     #[cfg(target_os = "macos")]
     {
+        #[cfg(feature = "macos-subprocess")]
+        {
+            let subprocess = SubprocessVirtualizationBackend::new();
+            if subprocess.is_available() {
+                return Ok(Box::new(subprocess));
+            }
+        }
+
         #[cfg(feature = "macos-native")]
         {
             let native = NativeVirtualizationBackend::new();
@@ -75,5 +43,5 @@ pub(crate) fn select_backend() -> Result<Box<dyn HypervisorBackend>> {
         }
     }
 
-    Err(crate::error::Error::NoBackendAvailable)
+    Err(capsa_core::Error::NoBackendAvailable)
 }

@@ -7,16 +7,17 @@
 //! the main thread. This module uses apple_main::on_main to ensure all VM
 //! operations happen on the main queue.
 
-use super::{BackendVmHandle, ConsoleStream, HypervisorBackend, InternalVmConfig};
-use crate::boot::KernelCmdline;
-use crate::capabilities::{
-    BackendCapabilities, BootMethodSupport, GuestOsSupport, ImageFormatSupport, NetworkModeSupport,
-    ShareMechanismSupport,
-};
-use crate::error::{Error, Result};
-use crate::types::{ConsoleMode, NetworkMode};
+// TODO: audit and revisit every unsafe block of this file
+// TODO: make sure all capabilities are covered by tests using the minimal VM
+// TODO: split this file further (mod.rs, handle.rs, console.rs?, etc)
+
 use async_trait::async_trait;
 use block2::RcBlock;
+use capsa_core::{
+    AsyncPipe, BackendCapabilities, BackendVmHandle, BootMethodSupport, ConsoleMode, ConsoleStream,
+    Error, GuestOsSupport, HypervisorBackend, ImageFormatSupport, InternalVmConfig, KernelCmdline,
+    NetworkMode, NetworkModeSupport, Result, ShareMechanismSupport,
+};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use objc2::AllocAnyThread;
 use objc2::rc::Retained;
@@ -28,15 +29,8 @@ use objc2_virtualization::{
 };
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::io::RawFd;
-use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use tokio::io::unix::AsyncFd;
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::sync::Mutex;
-
-// TODO: audit and revisit every unsafe block of this file
-// TODO: make sure all capabilities are covered by tests using the minimal VM
-// TODO: split this file further (mod.rs, handle.rs, console.rs?, etc)
 
 pub struct NativeVirtualizationBackend {
     capabilities: BackendCapabilities,
@@ -84,9 +78,6 @@ impl HypervisorBackend for NativeVirtualizationBackend {
     }
 
     fn is_available(&self) -> bool {
-        // The native backend requires the main thread to have an active runloop.
-        // When using #[apple_main::main], the runloop is always active.
-        // We verify by attempting a dispatch to main queue with timeout.
         use std::sync::atomic::{AtomicBool, Ordering};
         use std::time::Duration;
 
@@ -102,7 +93,6 @@ impl HypervisorBackend for NativeVirtualizationBackend {
             let _ = tx.send(());
         });
 
-        // If the runloop is active, the dispatch should complete quickly
         let available = rx.recv_timeout(Duration::from_millis(100)).is_ok();
         AVAILABLE.store(available, Ordering::SeqCst);
         CHECKED.store(true, Ordering::SeqCst);
@@ -110,9 +100,6 @@ impl HypervisorBackend for NativeVirtualizationBackend {
     }
 
     async fn start(&self, config: &InternalVmConfig) -> Result<Box<dyn BackendVmHandle>> {
-        // Console needs two pipes:
-        // - Input pipe: host writes -> VM reads (for keyboard input)
-        // - Output pipe: VM writes -> host reads (for console output)
         let (console_input_read, console_input_write, console_output_read, console_output_write) =
             if config.console != ConsoleMode::Disabled {
                 let (input_read, input_write) = create_pipe()?;
@@ -127,39 +114,27 @@ impl HypervisorBackend for NativeVirtualizationBackend {
                 (None, None, None, None)
             };
 
-        let kernel_path = config.kernel.clone();
-        let initrd_path = config.initrd.clone();
-        let cmdline = config.cmdline.clone();
-        let cpus = config.resources.cpus;
-        let memory_mb = config.resources.memory_mb as u64;
-        let network = config.network.clone();
-        let console_input_read_fd = console_input_read.as_ref().map(|fd| fd.as_raw_fd());
-        let console_output_write_fd = console_output_write.as_ref().map(|fd| fd.as_raw_fd());
+        let vm_config = CreateVmConfig {
+            kernel_path: config.kernel.clone(),
+            initrd_path: config.initrd.clone(),
+            cmdline: config.cmdline.clone(),
+            cpus: config.resources.cpus,
+            memory_mb: config.resources.memory_mb as u64,
+            network: config.network.clone(),
+            console_input_read_fd: console_input_read.as_ref().map(|fd| fd.as_raw_fd()),
+            console_output_write_fd: console_output_write.as_ref().map(|fd| fd.as_raw_fd()),
+        };
 
-        // Create VM on main queue
-        let vm_addr = apple_main::on_main(move || {
-            create_vm(
-                &kernel_path,
-                &initrd_path,
-                &cmdline,
-                cpus,
-                memory_mb,
-                network,
-                console_input_read_fd,
-                console_output_write_fd,
-            )
-        })
-        .await
-        .map_err(|e| Error::StartFailed(format!("VM creation failed: {}", e)))?;
+        let vm_addr = apple_main::on_main(move || create_vm(vm_config))
+            .await
+            .map_err(|e| Error::StartFailed(format!("VM creation failed: {}", e)))?;
 
-        // Start VM on main queue with completion handler
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
         apple_main::on_main(move || {
             start_vm(vm_addr, start_tx);
         })
         .await;
 
-        // Wait for VM start completion
         match tokio::time::timeout(std::time::Duration::from_secs(30), start_rx).await {
             Ok(Ok(Ok(()))) => {}
             Ok(Ok(Err(e))) => return Err(Error::StartFailed(format!("VM start failed: {}", e))),
@@ -167,8 +142,6 @@ impl HypervisorBackend for NativeVirtualizationBackend {
             Err(_) => return Err(Error::StartFailed("VM start timed out".to_string())),
         }
 
-        // Drop the FDs that the VM owns (VM reads from input_read, writes to output_write)
-        // Keep the FDs that the host uses (host writes to input_write, reads from output_read)
         drop(console_input_read);
         drop(console_output_write);
 
@@ -194,25 +167,40 @@ impl HypervisorBackend for NativeVirtualizationBackend {
 
 fn create_pipe() -> Result<(OwnedFd, OwnedFd)> {
     let mut fds = [0i32; 2];
+    // SAFETY: fds is a valid pointer to a 2-element array, which is what pipe() expects.
+    // We check the return value before using the file descriptors.
     if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
         return Err(Error::StartFailed("Failed to create pipe".to_string()));
     }
+    // SAFETY: pipe() succeeded, so fds[0] and fds[1] are valid, open file descriptors.
+    // We transfer ownership to OwnedFd which will close them when dropped.
     Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
 }
 
-fn create_vm(
-    kernel_path: &std::path::Path,
-    initrd_path: &std::path::Path,
-    cmdline: &str,
+struct CreateVmConfig {
+    kernel_path: std::path::PathBuf,
+    initrd_path: std::path::PathBuf,
+    cmdline: String,
     cpus: u32,
     memory_mb: u64,
     network: NetworkMode,
     console_input_read_fd: Option<RawFd>,
     console_output_write_fd: Option<RawFd>,
-) -> Result<usize> {
+}
+
+fn create_vm(config: CreateVmConfig) -> Result<usize> {
+    // SAFETY: This block uses Objective-C FFI via objc2 bindings to Apple's
+    // Virtualization.framework. The safety requirements are:
+    // 1. All objc2 types (NSURL, NSString, VZ*) are used according to their API contracts
+    // 2. The VZVirtualMachine is converted to a raw pointer via Retained::into_raw to
+    //    transfer ownership out of this function. The caller (via NativeVmHandle) is
+    //    responsible for eventually reclaiming it with Retained::from_raw.
+    // 3. File descriptors passed for console I/O must be valid open descriptors.
+    //    NSFileHandle takes ownership and will manage their lifetime.
     unsafe {
         let kernel_url = NSURL::fileURLWithPath(&NSString::from_str(
-            kernel_path
+            config
+                .kernel_path
                 .to_str()
                 .ok_or_else(|| Error::StartFailed("Invalid kernel path".to_string()))?,
         ));
@@ -220,21 +208,22 @@ fn create_vm(
             VZLinuxBootLoader::initWithKernelURL(VZLinuxBootLoader::alloc(), &kernel_url);
 
         let initrd_url = NSURL::fileURLWithPath(&NSString::from_str(
-            initrd_path
+            config
+                .initrd_path
                 .to_str()
                 .ok_or_else(|| Error::StartFailed("Invalid initrd path".to_string()))?,
         ));
         boot_loader.setInitialRamdiskURL(Some(&initrd_url));
-        boot_loader.setCommandLine(&NSString::from_str(cmdline));
+        boot_loader.setCommandLine(&NSString::from_str(&config.cmdline));
 
         let vm_config = VZVirtualMachineConfiguration::new();
         vm_config.setBootLoader(Some(&boot_loader));
-        vm_config.setCPUCount(cpus as usize);
-        vm_config.setMemorySize(memory_mb * 1024 * 1024);
+        vm_config.setCPUCount(config.cpus as usize);
+        vm_config.setMemorySize(config.memory_mb * 1024 * 1024);
 
         // TODO: setup root disk if config.disk is Some
 
-        if let NetworkMode::Nat = network {
+        if let NetworkMode::Nat = config.network {
             let net_attachment = VZNATNetworkDeviceAttachment::new();
             let net_config = VZVirtioNetworkDeviceConfiguration::new();
             net_config.setAttachment(Some(&net_attachment));
@@ -247,7 +236,9 @@ fn create_vm(
             vm_config.setNetworkDevices(&net_configs);
         }
 
-        if let (Some(read_fd), Some(write_fd)) = (console_input_read_fd, console_output_write_fd) {
+        if let (Some(read_fd), Some(write_fd)) =
+            (config.console_input_read_fd, config.console_output_write_fd)
+        {
             let read_handle = objc2_foundation::NSFileHandle::initWithFileDescriptor(
                 objc2_foundation::NSFileHandle::alloc(),
                 read_fd,
@@ -288,29 +279,37 @@ fn start_vm(
     vm_addr: usize,
     result_tx: tokio::sync::oneshot::Sender<std::result::Result<(), String>>,
 ) {
+    // SAFETY: This function reclaims ownership of a VZVirtualMachine from a raw pointer.
+    // Requirements:
+    // 1. vm_addr must have been created by create_vm via Retained::into_raw
+    // 2. This function temporarily takes ownership to call startWithCompletionHandler,
+    //    then releases it back via into_raw so the VM continues to exist
+    // 3. The completion handler is leaked via mem::forget because the Objective-C runtime
+    //    retains it and we cannot know when it will be released
+    // 4. The error pointer in the completion handler is only dereferenced if non-null,
+    //    as guaranteed by the Virtualization.framework API contract
     unsafe {
         let ptr = vm_addr as *mut VZVirtualMachine;
         let vm = Retained::from_raw(ptr).expect("Invalid VM pointer");
 
-        // Wrap in Mutex<Option<>> to satisfy Fn trait (completion handler is called once)
         let result_tx = std::sync::Mutex::new(Some(result_tx));
         let completion_handler = RcBlock::new(move |error: *mut NSError| {
             if let Some(tx) = result_tx.lock().unwrap().take() {
                 if error.is_null() {
                     let _ = tx.send(Ok(()));
                 } else {
+                    // SAFETY: error is non-null, and the Virtualization.framework guarantees
+                    // it points to a valid NSError when the start operation fails
                     let err = &*error;
                     let _ = tx.send(Err(err.localizedDescription().to_string()));
                 }
             }
         });
 
-        // Keep the completion handler alive - it will be called asynchronously
         std::mem::forget(completion_handler.clone());
 
         vm.startWithCompletionHandler(&completion_handler);
 
-        // Re-leak the VM so it stays alive
         let _ = Retained::into_raw(vm);
     }
 }
@@ -345,7 +344,10 @@ impl Drop for NativeVmHandle {
     fn drop(&mut self) {
         let addr = self.vm_addr.load(Ordering::SeqCst);
         if addr != 0 {
-            // Clean up the VM on the main queue
+            // SAFETY: We reclaim ownership of the VZVirtualMachine to drop it.
+            // The pointer was created by create_vm and has been kept alive by this handle.
+            // VZVirtualMachine must be accessed from the main thread, hence on_main_sync.
+            // After this, the Retained wrapper will release the Objective-C object.
             apple_main::on_main_sync(move || unsafe {
                 let ptr = addr as *mut VZVirtualMachine;
                 let _ = Retained::from_raw(ptr);
@@ -356,13 +358,17 @@ impl Drop for NativeVmHandle {
 
 #[async_trait]
 impl BackendVmHandle for NativeVmHandle {
-    fn is_running(&self) -> bool {
+    async fn is_running(&self) -> bool {
         self.running.load(Ordering::SeqCst)
     }
 
     async fn wait(&self) -> Result<i32> {
         loop {
             let addr = self.get_vm_addr();
+            // SAFETY: The VM pointer was created by create_vm and is kept alive by this handle.
+            // We only read the state (no mutation), and VZVirtualMachine is accessed on the
+            // main thread as required by the framework. The pointer remains valid because
+            // the handle owns it until drop().
             let state = apple_main::on_main(move || unsafe {
                 let ptr = addr as *const VZVirtualMachine;
                 (*ptr).state()
@@ -383,6 +389,9 @@ impl BackendVmHandle for NativeVmHandle {
 
     async fn shutdown(&self) -> Result<()> {
         let addr = self.get_vm_addr();
+        // SAFETY: The VM pointer was created by create_vm and is kept alive by this handle.
+        // VZVirtualMachine is accessed on the main thread as required by the framework.
+        // We check canRequestStop() before calling requestStopWithError() as per the API.
         apple_main::on_main(move || unsafe {
             let ptr = addr as *const VZVirtualMachine;
             if (*ptr).canRequestStop() {
@@ -397,10 +406,13 @@ impl BackendVmHandle for NativeVmHandle {
         let addr = self.get_vm_addr();
         let (result_tx, result_rx) = tokio::sync::oneshot::channel();
 
+        // SAFETY: The VM pointer was created by create_vm and is kept alive by this handle.
+        // VZVirtualMachine is accessed on the main thread as required by the framework.
+        // The completion handler is leaked via mem::forget because the Objective-C runtime
+        // retains it and will call it when the stop operation completes.
         apple_main::on_main(move || unsafe {
             let ptr = addr as *const VZVirtualMachine;
 
-            // Wrap in Mutex<Option<>> to satisfy Fn trait (completion handler is called once)
             let result_tx = std::sync::Mutex::new(Some(result_tx));
             let completion_handler = RcBlock::new(move |error: *mut NSError| {
                 if let Some(tx) = result_tx.lock().unwrap().take() {
@@ -408,14 +420,12 @@ impl BackendVmHandle for NativeVmHandle {
                 }
             });
 
-            // Keep the completion handler alive
             std::mem::forget(completion_handler.clone());
 
             (*ptr).stopWithCompletionHandler(&completion_handler);
         })
         .await;
 
-        // Wait for completion
         let _ = tokio::time::timeout(std::time::Duration::from_secs(5), result_rx).await;
         self.running.store(false, Ordering::SeqCst);
         Ok(())
@@ -438,7 +448,6 @@ impl BackendVmHandle for NativeVmHandle {
             return Err(Error::ConsoleNotEnabled);
         };
 
-        // Set both FDs to non-blocking
         for fd in [&read_fd, &write_fd] {
             let flags = fcntl(fd.as_raw_fd(), FcntlArg::F_GETFL)
                 .map_err(|e| Error::StartFailed(format!("fcntl failed: {}", e)))?;
@@ -447,93 +456,117 @@ impl BackendVmHandle for NativeVmHandle {
                 .map_err(|e| Error::StartFailed(format!("fcntl failed: {}", e)))?;
         }
 
-        let async_read_fd = AsyncFd::new(read_fd)
-            .map_err(|e| Error::StartFailed(format!("AsyncFd failed: {}", e)))?;
-        let async_write_fd = AsyncFd::new(write_fd)
-            .map_err(|e| Error::StartFailed(format!("AsyncFd failed: {}", e)))?;
+        let async_pipe = AsyncPipe::new(read_fd, write_fd)
+            .map_err(|e| Error::StartFailed(format!("AsyncPipe failed: {}", e)))?;
 
-        Ok(Some(Box::new(AsyncConsolePipe {
-            read_fd: async_read_fd,
-            write_fd: async_write_fd,
-        })))
+        Ok(Some(Box::new(async_pipe)))
     }
 }
 
-struct AsyncConsolePipe {
-    read_fd: AsyncFd<OwnedFd>,
-    write_fd: AsyncFd<OwnedFd>,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-impl AsyncRead for AsyncConsolePipe {
-    fn poll_read(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        loop {
-            let mut guard = match self.read_fd.poll_read_ready(cx) {
-                std::task::Poll::Ready(Ok(guard)) => guard,
-                std::task::Poll::Ready(Err(e)) => return std::task::Poll::Ready(Err(e)),
-                std::task::Poll::Pending => return std::task::Poll::Pending,
-            };
+    mod backend_construction {
+        use super::*;
 
-            let fd = self.read_fd.get_ref().as_raw_fd();
-            let unfilled = buf.initialize_unfilled();
+        #[test]
+        fn new_creates_backend_with_correct_capabilities() {
+            let backend = NativeVirtualizationBackend::new();
+            let caps = backend.capabilities();
 
-            match nix::unistd::read(fd, unfilled) {
-                Ok(n) => {
-                    buf.advance(n);
-                    return std::task::Poll::Ready(Ok(()));
-                }
-                Err(nix::errno::Errno::EAGAIN) => {
-                    guard.clear_ready();
-                    continue;
-                }
-                Err(e) => {
-                    return std::task::Poll::Ready(Err(std::io::Error::other(e)));
-                }
-            }
+            assert!(caps.guest_os.linux);
+            assert!(caps.boot_methods.linux_direct);
+            assert!(caps.image_formats.raw);
+            assert!(!caps.image_formats.qcow2);
+            assert!(caps.network_modes.none);
+            assert!(caps.network_modes.nat);
+            assert!(caps.share_mechanisms.virtio_fs);
+            assert!(!caps.share_mechanisms.virtio_9p);
+            assert!(caps.max_cpus.is_none());
+            assert!(caps.max_memory_mb.is_none());
         }
-    }
-}
 
-impl AsyncWrite for AsyncConsolePipe {
-    fn poll_write(
-        self: Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<std::io::Result<usize>> {
-        loop {
-            let mut guard = match self.write_fd.poll_write_ready(cx) {
-                std::task::Poll::Ready(Ok(guard)) => guard,
-                std::task::Poll::Ready(Err(e)) => return std::task::Poll::Ready(Err(e)),
-                std::task::Poll::Pending => return std::task::Poll::Pending,
-            };
+        #[test]
+        fn default_creates_same_as_new() {
+            let backend1 = NativeVirtualizationBackend::new();
+            let backend2 = NativeVirtualizationBackend::default();
 
-            match nix::unistd::write(self.write_fd.get_ref(), buf) {
-                Ok(n) => return std::task::Poll::Ready(Ok(n)),
-                Err(nix::errno::Errno::EAGAIN) => {
-                    guard.clear_ready();
-                    continue;
-                }
-                Err(e) => {
-                    return std::task::Poll::Ready(Err(std::io::Error::other(e)));
-                }
-            }
+            let caps1 = backend1.capabilities();
+            let caps2 = backend2.capabilities();
+
+            assert_eq!(caps1.guest_os.linux, caps2.guest_os.linux);
+            assert_eq!(
+                caps1.boot_methods.linux_direct,
+                caps2.boot_methods.linux_direct
+            );
+            assert_eq!(caps1.image_formats.raw, caps2.image_formats.raw);
+        }
+
+        #[test]
+        fn name_returns_correct_name() {
+            let backend = NativeVirtualizationBackend::new();
+            assert_eq!(backend.name(), "native-virtualization");
         }
     }
 
-    fn poll_flush(
-        self: Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        std::task::Poll::Ready(Ok(()))
+    mod kernel_cmdline {
+        use super::*;
+
+        #[test]
+        fn defaults_sets_console_to_hvc0() {
+            let backend = NativeVirtualizationBackend::new();
+            let cmdline = backend.kernel_cmdline_defaults();
+            assert_eq!(cmdline.get("console"), Some("hvc0"));
+        }
+
+        #[test]
+        fn defaults_sets_reboot_to_t() {
+            let backend = NativeVirtualizationBackend::new();
+            let cmdline = backend.kernel_cmdline_defaults();
+            assert_eq!(cmdline.get("reboot"), Some("t"));
+        }
+
+        #[test]
+        fn defaults_sets_panic_to_minus_one() {
+            let backend = NativeVirtualizationBackend::new();
+            let cmdline = backend.kernel_cmdline_defaults();
+            assert_eq!(cmdline.get("panic"), Some("-1"));
+        }
+
+        #[test]
+        fn default_root_device_is_vda() {
+            let backend = NativeVirtualizationBackend::new();
+            assert_eq!(backend.default_root_device(), "/dev/vda");
+        }
     }
 
-    fn poll_shutdown(
-        self: Pin<&mut Self>,
-        _cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        std::task::Poll::Ready(Ok(()))
+    mod pipe_creation {
+        use super::*;
+
+        #[test]
+        fn create_pipe_returns_two_fds() {
+            let result = create_pipe();
+            assert!(result.is_ok());
+
+            let (read_fd, write_fd) = result.unwrap();
+            assert!(read_fd.as_raw_fd() >= 0);
+            assert!(write_fd.as_raw_fd() >= 0);
+            assert_ne!(read_fd.as_raw_fd(), write_fd.as_raw_fd());
+        }
+
+        #[test]
+        fn pipe_is_readable_and_writable() {
+            let (read_fd, write_fd) = create_pipe().unwrap();
+
+            let test_data = b"hello";
+            let written = nix::unistd::write(&write_fd, test_data).unwrap();
+            assert_eq!(written, test_data.len());
+
+            let mut buf = [0u8; 5];
+            let read = nix::unistd::read(read_fd.as_raw_fd(), &mut buf).unwrap();
+            assert_eq!(read, test_data.len());
+            assert_eq!(&buf, test_data);
+        }
     }
 }
