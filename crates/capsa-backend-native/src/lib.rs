@@ -27,7 +27,7 @@ use objc2_virtualization::{
     VZVirtioNetworkDeviceConfiguration, VZVirtualMachine, VZVirtualMachineConfiguration,
     VZVirtualMachineState,
 };
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::Mutex;
@@ -145,15 +145,7 @@ impl HypervisorBackend for NativeVirtualizationBackend {
 }
 
 fn create_pipe() -> Result<(OwnedFd, OwnedFd)> {
-    let mut fds = [0i32; 2];
-    // SAFETY: fds is a valid pointer to a 2-element array, which is what pipe() expects.
-    // We check the return value before using the file descriptors.
-    if unsafe { libc::pipe(fds.as_mut_ptr()) } != 0 {
-        return Err(Error::StartFailed("Failed to create pipe".to_string()));
-    }
-    // SAFETY: pipe() succeeded, so fds[0] and fds[1] are valid, open file descriptors.
-    // We transfer ownership to OwnedFd which will close them when dropped.
-    Ok(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
+    nix::unistd::pipe().map_err(|e| Error::StartFailed(format!("Failed to create pipe: {}", e)))
 }
 
 struct CreateVmConfig {
