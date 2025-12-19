@@ -25,12 +25,7 @@ tokio-serde = { version = "0.9", features = ["bincode"], optional = true }
 nix = { version = "0.29", features = ["process", "signal", "fs", "term"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = { version = "0.6", optional = true }
-objc2-virtualization = { version = "0.3", optional = true }
-objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSURL", "NSError", "NSArray", "NSFileHandle"], optional = true }
-block2 = { version = "0.6", optional = true }
-libc = { version = "0.2", optional = true }
-dispatch = { version = "0.2", optional = true }
+capsa-backend-native = { path = "../capsa-backend-native", optional = true }
 
 [target.'cfg(target_os = "macos")'.build-dependencies]
 capsa-apple-vzd = { path = "../capsa-apple-vzd", artifact = "bin", optional = true }
@@ -40,7 +35,7 @@ default = []
 blocking = []
 test-utils = ["dep:serde_json", "dep:apple-main"]
 vfkit = []
-macos-native = ["dep:apple-main", "dep:objc2", "dep:objc2-virtualization", "dep:objc2-foundation", "dep:block2", "dep:libc", "dep:dispatch"]
+macos-native = ["dep:capsa-backend-native"]
 macos-subprocess = ["dep:capsa-apple-vzd-ipc", "dep:tarpc", "dep:tokio-util", "dep:tokio-serde", "dep:capsa-apple-vzd"]
 
 [dev-dependencies]
