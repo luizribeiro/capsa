@@ -3,8 +3,8 @@ use crate::handle::VmHandle;
 use crate::pool::{No, Poolability, VmPool, Yes};
 use capsa_core::{
     BackendCapabilities, ConsoleMode, DiskImage, Error, GuestOs, HypervisorBackend, ImageFormat,
-    InternalVmConfig, KernelCmdline, LinuxDirectBootConfig, MountMode, NetworkMode, ResourceConfig,
-    Result, ShareMechanism, SharedDir,
+    KernelCmdline, LinuxDirectBootConfig, MountMode, NetworkMode, ResourceConfig, Result,
+    ShareMechanism, SharedDir, VmConfig,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -48,7 +48,7 @@ impl LinuxVmBuilder<Yes> {
 
         let cmdline = self.generate_cmdline(backend.as_ref());
 
-        let internal_config = InternalVmConfig {
+        let internal_config = VmConfig {
             kernel: self.config.kernel,
             initrd: self.config.initrd,
             disk: self.config.disk,
@@ -265,7 +265,7 @@ impl<P> LinuxVmBuilder<P> {
 
         let cmdline = self.generate_cmdline(backend.as_ref());
 
-        let internal_config = InternalVmConfig {
+        let internal_config = VmConfig {
             kernel: self.config.kernel,
             initrd: self.config.initrd,
             disk: self.config.disk,

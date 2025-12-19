@@ -6,7 +6,7 @@ mod subprocess;
 mod vfkit;
 
 use async_trait::async_trait;
-use capsa_core::{BackendVmHandle, InternalVmConfig, Result};
+use capsa_core::{BackendVmHandle, Result, VmConfig};
 
 #[cfg(feature = "macos-native")]
 pub use native::NativeStrategy;
@@ -19,5 +19,5 @@ pub use vfkit::VfkitStrategy;
 pub trait ExecutionStrategy: Send + Sync {
     fn name(&self) -> &'static str;
     fn is_available(&self) -> bool;
-    async fn start(&self, config: &InternalVmConfig) -> Result<Box<dyn BackendVmHandle>>;
+    async fn start(&self, config: &VmConfig) -> Result<Box<dyn BackendVmHandle>>;
 }

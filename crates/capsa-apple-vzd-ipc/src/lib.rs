@@ -3,7 +3,7 @@ mod transport;
 pub use transport::PipeTransport;
 
 pub use capsa_core::{
-    ConsoleMode, DiskImage, InternalVmConfig, MountMode, NetworkMode, ResourceConfig, SharedDir,
+    ConsoleMode, DiskImage, MountMode, NetworkMode, ResourceConfig, SharedDir, VmConfig,
 };
 
 use serde::{Deserialize, Serialize};
@@ -23,10 +23,7 @@ pub type RpcResult<T> = Result<T, String>;
 #[tarpc::service]
 pub trait VmService {
     async fn is_available() -> bool;
-    async fn start(
-        config: InternalVmConfig,
-        console_socket_path: Option<String>,
-    ) -> RpcResult<VmHandleId>;
+    async fn start(config: VmConfig, console_socket_path: Option<String>) -> RpcResult<VmHandleId>;
     async fn is_running(handle: VmHandleId) -> RpcResult<bool>;
     async fn wait(handle: VmHandleId) -> RpcResult<i32>;
     async fn shutdown(handle: VmHandleId) -> RpcResult<()>;

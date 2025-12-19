@@ -2,8 +2,8 @@ use super::ExecutionStrategy;
 use crate::backend::macos::pty::Pty;
 use async_trait::async_trait;
 use capsa_core::{
-    BackendVmHandle, ConsoleMode, ConsoleStream, Error, InternalVmConfig, MountMode, NetworkMode,
-    Result, ShareMechanism,
+    BackendVmHandle, ConsoleMode, ConsoleStream, Error, MountMode, NetworkMode, Result,
+    ShareMechanism, VmConfig,
 };
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -22,7 +22,7 @@ impl VfkitStrategy {
         Self { vfkit_path }
     }
 
-    fn build_args(&self, config: &InternalVmConfig) -> Vec<String> {
+    fn build_args(&self, config: &VmConfig) -> Vec<String> {
         let mut args = vec![
             "--cpus".to_string(),
             config.resources.cpus.to_string(),
@@ -110,7 +110,7 @@ impl ExecutionStrategy for VfkitStrategy {
         self.vfkit_path.is_some()
     }
 
-    async fn start(&self, config: &InternalVmConfig) -> Result<Box<dyn BackendVmHandle>> {
+    async fn start(&self, config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         let vfkit_path = self
             .vfkit_path
             .as_ref()

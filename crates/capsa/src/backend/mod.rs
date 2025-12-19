@@ -13,7 +13,7 @@ pub use macos::MacOsBackend;
 
 pub use capsa_core::{
     BackendCapabilities, BackendVmHandle, ConsoleIo, ConsoleStream, HypervisorBackend,
-    InternalVmConfig, KernelCmdline, Result,
+    KernelCmdline, Result, VmConfig,
 };
 
 pub(crate) fn select_backend() -> Result<Box<dyn HypervisorBackend>> {

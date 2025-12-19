@@ -15,8 +15,8 @@ use async_trait::async_trait;
 use block2::RcBlock;
 use capsa_core::{
     AsyncPipe, BackendCapabilities, BackendVmHandle, ConsoleMode, ConsoleStream,
-    DEFAULT_ROOT_DEVICE, Error, HypervisorBackend, InternalVmConfig, KernelCmdline, NetworkMode,
-    Result, macos_cmdline_defaults, macos_virtualization_capabilities,
+    DEFAULT_ROOT_DEVICE, Error, HypervisorBackend, KernelCmdline, NetworkMode, Result, VmConfig,
+    macos_cmdline_defaults, macos_virtualization_capabilities,
 };
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use objc2::AllocAnyThread;
@@ -82,7 +82,7 @@ impl HypervisorBackend for NativeVirtualizationBackend {
         available
     }
 
-    async fn start(&self, config: &InternalVmConfig) -> Result<Box<dyn BackendVmHandle>> {
+    async fn start(&self, config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         let (console_input_read, console_input_write, console_output_read, console_output_write) =
             if config.console != ConsoleMode::Disabled {
                 let (input_read, input_write) = create_pipe()?;

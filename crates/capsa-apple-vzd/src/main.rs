@@ -1,6 +1,4 @@
-use capsa_apple_vzd_ipc::{
-    ConsoleMode, InternalVmConfig, PipeTransport, RpcResult, VmHandleId, VmService,
-};
+use capsa_apple_vzd_ipc::{ConsoleMode, PipeTransport, RpcResult, VmConfig, VmHandleId, VmService};
 use capsa_backend_native::NativeVirtualizationBackend;
 use capsa_core::{AsyncOwnedFd, BackendVmHandle, ConsoleStream, HypervisorBackend};
 use futures::prelude::*;
@@ -46,7 +44,7 @@ impl VmService for VzdServer {
     async fn start(
         self,
         _: Context,
-        config: InternalVmConfig,
+        config: VmConfig,
         _console_socket_path: Option<String>,
     ) -> RpcResult<VmHandleId> {
         let backend = NativeVirtualizationBackend::new();

@@ -8,8 +8,7 @@ mod strategy;
 
 use async_trait::async_trait;
 use capsa_core::{
-    BackendCapabilities, BackendVmHandle, HypervisorBackend, InternalVmConfig, KernelCmdline,
-    Result,
+    BackendCapabilities, BackendVmHandle, HypervisorBackend, KernelCmdline, Result, VmConfig,
 };
 
 pub use capabilities::macos_virtualization_capabilities;
@@ -65,7 +64,7 @@ impl HypervisorBackend for MacOsBackend {
         self.strategy.is_available()
     }
 
-    async fn start(&self, config: &InternalVmConfig) -> Result<Box<dyn BackendVmHandle>> {
+    async fn start(&self, config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         self.strategy.start(config).await
     }
 

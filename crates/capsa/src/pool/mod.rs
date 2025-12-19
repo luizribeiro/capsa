@@ -55,13 +55,13 @@ pub(crate) use poolable::{No, Poolability, Yes};
 
 use crate::backend::select_backend;
 use crate::handle::VmHandle;
-use capsa_core::{Error, GuestOs, HypervisorBackend, InternalVmConfig, Result};
+use capsa_core::{Error, GuestOs, HypervisorBackend, Result, VmConfig};
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};
 
 struct VmPoolInner {
-    config: InternalVmConfig,
+    config: VmConfig,
     backend: Box<dyn HypervisorBackend>,
     available: Mutex<Vec<VmHandle>>,
     notify: Notify,
@@ -87,7 +87,7 @@ pub struct VmPool {
 }
 
 impl VmPool {
-    pub(crate) async fn new(config: InternalVmConfig, size: usize) -> Result<Self> {
+    pub(crate) async fn new(config: VmConfig, size: usize) -> Result<Self> {
         if size == 0 {
             return Err(Error::InvalidConfig("pool size must be at least 1".into()));
         }
@@ -111,10 +111,7 @@ impl VmPool {
         Ok(Self { inner })
     }
 
-    async fn spawn_vm(
-        config: &InternalVmConfig,
-        backend: &dyn HypervisorBackend,
-    ) -> Result<VmHandle> {
+    async fn spawn_vm(config: &VmConfig, backend: &dyn HypervisorBackend) -> Result<VmHandle> {
         let backend_handle = backend.start(config).await?;
         Ok(VmHandle::new(
             backend_handle,

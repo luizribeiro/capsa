@@ -1,7 +1,7 @@
 use super::ExecutionStrategy;
 use async_trait::async_trait;
 use capsa_backend_native::NativeVirtualizationBackend;
-use capsa_core::{BackendVmHandle, HypervisorBackend, InternalVmConfig, Result};
+use capsa_core::{BackendVmHandle, HypervisorBackend, Result, VmConfig};
 
 pub struct NativeStrategy {
     backend: NativeVirtualizationBackend,
@@ -31,7 +31,7 @@ impl ExecutionStrategy for NativeStrategy {
         self.backend.is_available()
     }
 
-    async fn start(&self, config: &InternalVmConfig) -> Result<Box<dyn BackendVmHandle>> {
+    async fn start(&self, config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         self.backend.start(config).await
     }
 }

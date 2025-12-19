@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use tokio::io::{AsyncRead, AsyncWrite};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InternalVmConfig {
+pub struct VmConfig {
     pub kernel: PathBuf,
     pub initrd: PathBuf,
     pub disk: Option<DiskImage>,
@@ -39,7 +39,7 @@ pub trait HypervisorBackend: Send + Sync {
     fn name(&self) -> &'static str;
     fn capabilities(&self) -> &BackendCapabilities;
     fn is_available(&self) -> bool;
-    async fn start(&self, config: &InternalVmConfig) -> Result<Box<dyn BackendVmHandle>>;
+    async fn start(&self, config: &VmConfig) -> Result<Box<dyn BackendVmHandle>>;
     fn kernel_cmdline_defaults(&self) -> KernelCmdline;
     fn default_root_device(&self) -> &str;
 }

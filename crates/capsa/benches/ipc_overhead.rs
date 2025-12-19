@@ -3,7 +3,7 @@
 
 use apple_main::criterion::Criterion;
 use apple_main::criterion_macro::criterion;
-use capsa::backend::{HypervisorBackend, InternalVmConfig};
+use capsa::backend::{HypervisorBackend, VmConfig};
 use capsa::test_utils::test_vm;
 use capsa::{ConsoleMode, NetworkMode, ResourceConfig};
 use std::path::PathBuf;
@@ -15,8 +15,8 @@ fn custom_criterion() -> Criterion {
         .sample_size(10)
 }
 
-fn make_test_config(kernel: PathBuf, initrd: PathBuf) -> InternalVmConfig {
-    InternalVmConfig {
+fn make_test_config(kernel: PathBuf, initrd: PathBuf) -> VmConfig {
+    VmConfig {
         kernel,
         initrd,
         disk: None,

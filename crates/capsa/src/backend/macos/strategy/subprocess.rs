@@ -2,7 +2,7 @@ use super::ExecutionStrategy;
 use crate::backend::macos::pty::Pty;
 use async_trait::async_trait;
 use capsa_apple_vzd_ipc::{PipeTransport, VmHandleId, VmServiceClient};
-use capsa_core::{BackendVmHandle, ConsoleMode, ConsoleStream, Error, InternalVmConfig, Result};
+use capsa_core::{BackendVmHandle, ConsoleMode, ConsoleStream, Error, Result, VmConfig};
 use std::os::fd::AsRawFd;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -61,7 +61,7 @@ impl ExecutionStrategy for SubprocessStrategy {
         Self::find_vzd_binary().is_some()
     }
 
-    async fn start(&self, config: &InternalVmConfig) -> Result<Box<dyn BackendVmHandle>> {
+    async fn start(&self, config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         let vzd_path = Self::find_vzd_binary().ok_or(Error::NoBackendAvailable)?;
 
         let console_enabled = config.console != ConsoleMode::Disabled;
