@@ -1,14 +1,15 @@
-#[cfg(all(target_os = "macos", feature = "macos-subprocess"))]
-mod subprocess;
-#[cfg(all(target_os = "macos", feature = "vfkit"))]
-mod vfkit;
+#[cfg(target_os = "macos")]
+mod macos;
 
-#[cfg(all(target_os = "macos", feature = "macos-native"))]
-pub use capsa_backend_native::NativeVirtualizationBackend;
-#[cfg(all(target_os = "macos", feature = "macos-subprocess"))]
-pub use subprocess::SubprocessVirtualizationBackend;
-#[cfg(all(target_os = "macos", feature = "vfkit"))]
-pub use vfkit::VfkitBackend;
+#[cfg(all(
+    target_os = "macos",
+    any(
+        feature = "vfkit",
+        feature = "macos-subprocess",
+        feature = "macos-native"
+    )
+))]
+pub use macos::MacOsBackend;
 
 pub use capsa_core::{
     BackendCapabilities, BackendVmHandle, ConsoleIo, ConsoleStream, HypervisorBackend,
@@ -20,25 +21,25 @@ pub(crate) fn select_backend() -> Result<Box<dyn HypervisorBackend>> {
     {
         #[cfg(feature = "macos-subprocess")]
         {
-            let subprocess = SubprocessVirtualizationBackend::new();
-            if subprocess.is_available() {
-                return Ok(Box::new(subprocess));
+            let backend = MacOsBackend::subprocess();
+            if backend.is_available() {
+                return Ok(Box::new(backend));
             }
         }
 
         #[cfg(feature = "macos-native")]
         {
-            let native = NativeVirtualizationBackend::new();
-            if native.is_available() {
-                return Ok(Box::new(native));
+            let backend = MacOsBackend::native();
+            if backend.is_available() {
+                return Ok(Box::new(backend));
             }
         }
 
         #[cfg(feature = "vfkit")]
         {
-            let vfkit = VfkitBackend::new();
-            if vfkit.is_available() {
-                return Ok(Box::new(vfkit));
+            let backend = MacOsBackend::vfkit();
+            if backend.is_available() {
+                return Ok(Box::new(backend));
             }
         }
     }

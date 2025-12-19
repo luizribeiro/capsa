@@ -1,14 +1,11 @@
+use super::ExecutionStrategy;
+use crate::backend::macos::pty::Pty;
 use async_trait::async_trait;
 use capsa_apple_vzd_ipc::{PipeTransport, VmConfig, VmHandleId, VmServiceClient};
 use capsa_core::{
-    AsyncOwnedFd, BackendCapabilities, BackendVmHandle, BootMethodSupport, ConsoleMode,
-    ConsoleStream, Error, GuestOsSupport, HypervisorBackend, ImageFormatSupport, InternalVmConfig,
-    KernelCmdline, NetworkMode, NetworkModeSupport, Result, ShareMechanismSupport,
+    BackendVmHandle, ConsoleMode, ConsoleStream, Error, InternalVmConfig, NetworkMode, Result,
 };
-use nix::fcntl::{FcntlArg, OFlag, fcntl};
-use nix::pty::{OpenptyResult, openpty};
-use nix::sys::termios::{self, ControlFlags, InputFlags, LocalFlags, OutputFlags, SetArg};
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::AsRawFd;
 use std::process::Stdio;
 use std::sync::Arc;
 use tarpc::tokio_serde::formats::Bincode;
@@ -16,32 +13,11 @@ use tokio::process::Command;
 use tokio::sync::Mutex;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
 
-pub struct SubprocessVirtualizationBackend {
-    capabilities: BackendCapabilities,
-}
+pub struct SubprocessStrategy;
 
-impl SubprocessVirtualizationBackend {
+impl SubprocessStrategy {
     pub fn new() -> Self {
-        let capabilities = BackendCapabilities {
-            guest_os: GuestOsSupport { linux: true },
-            boot_methods: BootMethodSupport { linux_direct: true },
-            image_formats: ImageFormatSupport {
-                raw: true,
-                qcow2: false,
-            },
-            network_modes: NetworkModeSupport {
-                none: true,
-                nat: true,
-            },
-            share_mechanisms: ShareMechanismSupport {
-                virtio_fs: true,
-                virtio_9p: false,
-            },
-            max_cpus: None,
-            max_memory_mb: None,
-        };
-
-        Self { capabilities }
+        Self
     }
 
     fn find_vzd_binary() -> Option<std::path::PathBuf> {
@@ -71,20 +47,16 @@ impl SubprocessVirtualizationBackend {
     }
 }
 
-impl Default for SubprocessVirtualizationBackend {
+impl Default for SubprocessStrategy {
     fn default() -> Self {
         Self::new()
     }
 }
 
 #[async_trait]
-impl HypervisorBackend for SubprocessVirtualizationBackend {
+impl ExecutionStrategy for SubprocessStrategy {
     fn name(&self) -> &'static str {
         "subprocess-virtualization"
-    }
-
-    fn capabilities(&self) -> &BackendCapabilities {
-        &self.capabilities
     }
 
     fn is_available(&self) -> bool {
@@ -186,18 +158,6 @@ impl HypervisorBackend for SubprocessVirtualizationBackend {
             pty: pty.map(|p| Mutex::new(Some(p))),
         }))
     }
-
-    fn kernel_cmdline_defaults(&self) -> KernelCmdline {
-        let mut cmdline = KernelCmdline::new();
-        cmdline.console("hvc0");
-        cmdline.arg("reboot", "t");
-        cmdline.arg("panic", "-1");
-        cmdline
-    }
-
-    fn default_root_device(&self) -> &str {
-        "/dev/vda"
-    }
 }
 
 struct SubprocessVmHandle {
@@ -281,57 +241,5 @@ impl Drop for SubprocessVmHandle {
             })
             .join()
         });
-    }
-}
-
-struct Pty {
-    master: OwnedFd,
-    slave: OwnedFd,
-}
-
-impl Pty {
-    fn new() -> std::io::Result<Self> {
-        let OpenptyResult { master, slave } = openpty(None, None).map_err(std::io::Error::other)?;
-
-        use std::os::fd::BorrowedFd;
-        // SAFETY: slave is a valid OwnedFd from openpty(), so its raw fd is valid.
-        // The borrow is used only within this scope while slave remains alive.
-        let slave_fd = unsafe { BorrowedFd::borrow_raw(slave.as_raw_fd()) };
-        if let Ok(mut termios) = termios::tcgetattr(slave_fd) {
-            termios.input_flags.remove(InputFlags::IGNBRK);
-            termios.input_flags.remove(InputFlags::BRKINT);
-            termios.input_flags.remove(InputFlags::PARMRK);
-            termios.input_flags.remove(InputFlags::ISTRIP);
-            termios.input_flags.remove(InputFlags::INLCR);
-            termios.input_flags.remove(InputFlags::IGNCR);
-            termios.input_flags.remove(InputFlags::ICRNL);
-            termios.input_flags.remove(InputFlags::IXON);
-
-            termios.output_flags.insert(OutputFlags::OPOST);
-            termios.output_flags.insert(OutputFlags::ONLCR);
-
-            termios.local_flags.remove(LocalFlags::ECHO);
-            termios.local_flags.remove(LocalFlags::ECHONL);
-            termios.local_flags.remove(LocalFlags::ICANON);
-            termios.local_flags.remove(LocalFlags::ISIG);
-            termios.local_flags.remove(LocalFlags::IEXTEN);
-
-            termios.control_flags.remove(ControlFlags::CSIZE);
-            termios.control_flags.remove(ControlFlags::PARENB);
-            termios.control_flags.insert(ControlFlags::CS8);
-
-            let _ = termios::tcsetattr(slave_fd, SetArg::TCSANOW, &termios);
-        }
-
-        Ok(Self { master, slave })
-    }
-
-    fn into_async_master(self) -> std::io::Result<AsyncOwnedFd> {
-        let flags =
-            fcntl(self.master.as_raw_fd(), FcntlArg::F_GETFL).map_err(std::io::Error::other)?;
-        let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
-        fcntl(self.master.as_raw_fd(), FcntlArg::F_SETFL(flags)).map_err(std::io::Error::other)?;
-
-        AsyncOwnedFd::new(self.master)
     }
 }
