@@ -2,6 +2,19 @@
 
 This directory contains the Rust crates that make up the Capsa VM runtime library.
 
+## Directory Structure
+
+```
+crates/
+  capsa/           # Main library (capsa)
+  core/            # Core types and traits (capsa-core)
+  cli/             # Command-line interface (capsa-cli)
+  apple/           # macOS-specific crates
+    vz/            # Virtualization.framework backend (capsa-apple-vz)
+    vzd/           # VM daemon subprocess (capsa-apple-vzd)
+    vzd-ipc/       # IPC protocol for daemon (capsa-apple-vzd-ipc)
+```
+
 ## Crate Overview
 
 ```
@@ -19,8 +32,7 @@ This directory contains the Rust crates that make up the Capsa VM runtime librar
 │  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐  │  │
 │  │  │VfkitStrategy│ │Subprocess-  │ │  NativeStrategy     │  │  │
 │  │  │             │ │Strategy     │ │  (delegates to      │  │  │
-│  │  │             │ │             │ │  capsa-backend-     │  │  │
-│  │  │             │ │             │ │  native)            │  │  │
+│  │  │             │ │             │ │  capsa-apple-vz)    │  │  │
 │  │  └─────────────┘ └──────┬──────┘ └─────────────────────┘  │  │
 │  └─────────────────────────┼─────────────────────────────────┘  │
 └────────────────────────────┼────────────────────────────────────┘
@@ -33,7 +45,7 @@ This directory contains the Rust crates that make up the Capsa VM runtime librar
                              │
                              ▼
               ┌──────────────────────────────┐
-              │    capsa-backend-native      │
+              │       capsa-apple-vz         │
               │ (Virtualization.framework)   │
               └──────────────────────────────┘
                              │
@@ -60,7 +72,7 @@ The main library crate that provides the public API for running VMs.
 **Backend Strategies:**
 - `VfkitStrategy` - Spawns the `vfkit` CLI tool (feature: `vfkit`)
 - `SubprocessStrategy` - Spawns `capsa-apple-vzd` daemon via IPC (feature: `macos-subprocess`)
-- `NativeStrategy` - Delegates to `capsa-backend-native` (feature: `macos-native`)
+- `NativeStrategy` - Delegates to `capsa-apple-vz` (feature: `macos-native`)
 
 See [macOS Backend Strategies](#macos-backend-strategies) below for details on when to use each.
 
@@ -83,7 +95,7 @@ This crate has minimal dependencies and is used by all other crates.
 
 ---
 
-### `capsa-backend-native`
+### `capsa-apple-vz`
 
 Native macOS backend using Apple's Virtualization.framework directly.
 
@@ -113,10 +125,8 @@ IPC protocol definitions for communication between `capsa` and `capsa-apple-vzd`
 
 **Contents:**
 - `VmService` - tarpc service trait defining RPC methods
-- `VmConfig`, `DiskConfig`, `SharedDirConfig` - IPC message types
+- `VmHandleId`, `VmState` - IPC message types
 - `PipeTransport` - Custom transport for stdin/stdout communication
-
-**Note:** This crate currently duplicates some types from `capsa-core`. See ARCHITECTURE_FEEDBACK.md issue 1.4 for planned consolidation.
 
 ---
 
@@ -167,7 +177,7 @@ This allows the parent application to use `#[tokio::main]` freely while VM opera
 #[tokio::main]  // Main thread occupied by Tokio - that's fine!
 async fn main() {
     // SubprocessStrategy handles VMs in a separate process
-    let vm = Capsa::vm(config).build().await?;
+    let vm = Capsa::linux(config).build().await?;
 }
 ```
 
@@ -179,7 +189,7 @@ Uses Virtualization.framework directly in-process, but requires the application 
 #[apple_main::main]  // Manages main thread for Apple frameworks
 async fn main() {
     // NativeStrategy can call Virtualization.framework directly
-    let vm = Capsa::vm(config).build().await?;
+    let vm = Capsa::linux(config).build().await?;
 }
 ```
 
@@ -204,20 +214,20 @@ Spawns the external `vfkit` CLI tool, which handles Virtualization.framework int
 ## Dependency Graph
 
 ```
-capsa-cli
-    └── capsa
-            ├── capsa-core
-            ├── capsa-backend-native (optional, macos-native feature)
-            └── capsa-apple-vzd-ipc (optional, macos-subprocess feature)
+capsa-cli (cli/)
+    └── capsa (capsa/)
+            ├── capsa-core (core/)
+            ├── capsa-apple-vz (apple/vz/, optional, macos-native feature)
+            └── capsa-apple-vzd-ipc (apple/vzd-ipc/, optional, macos-subprocess feature)
 
-capsa-apple-vzd
-    ├── capsa-core
-    ├── capsa-backend-native
-    └── capsa-apple-vzd-ipc
+capsa-apple-vzd (apple/vzd/)
+    ├── capsa-core (core/)
+    ├── capsa-apple-vz (apple/vz/)
+    └── capsa-apple-vzd-ipc (apple/vzd-ipc/)
 
-capsa-backend-native
-    └── capsa-core
+capsa-apple-vz (apple/vz/)
+    └── capsa-core (core/)
 
-capsa-apple-vzd-ipc
-    └── (standalone, serde + tarpc types only)
+capsa-apple-vzd-ipc (apple/vzd-ipc/)
+    └── capsa-core (core/)
 ```
