@@ -1,6 +1,6 @@
 use super::ExecutionStrategy;
 use async_trait::async_trait;
-use capsa_backend_native::NativeVirtualizationBackend;
+use capsa_apple_vz::NativeVirtualizationBackend;
 use capsa_core::{BackendVmHandle, HypervisorBackend, Result, VmConfig};
 
 pub struct NativeStrategy {

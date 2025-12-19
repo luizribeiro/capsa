@@ -1,6 +1,13 @@
 [workspace]
 resolver = "2"
-members = ["crates/capsa", "crates/capsa-cli", "crates/capsa-apple-vzd", "crates/capsa-apple-vzd-ipc", "crates/capsa-core", "crates/capsa-backend-native"]
+members = [
+    "crates/capsa",
+    "crates/core",
+    "crates/cli",
+    "crates/apple/vz",
+    "crates/apple/vzd",
+    "crates/apple/vzd-ipc",
+]
 
 [workspace.package]
 version = "0.1.0"

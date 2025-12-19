@@ -1,12 +1,12 @@
 [package]
-name = "capsa-backend-native"
+name = "capsa-apple-vz"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 description = "Native Virtualization.framework backend for capsa"
 
 [dependencies]
-capsa-core = { path = "../capsa-core" }
+capsa-core = { path = "../../core" }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 nix = { version = "0.29", features = ["process", "signal", "fs"] }

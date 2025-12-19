@@ -6,7 +6,7 @@ license.workspace = true
 description = "IPC types and service definition for capsa-apple-vzd"
 
 [dependencies]
-capsa-core = { path = "../capsa-core" }
+capsa-core = { path = "../../core" }
 serde = { workspace = true }
 tarpc = { version = "0.35", features = ["serde1", "tokio1", "serde-transport", "serde-transport-bincode"] }
 tokio = { workspace = true }

@@ -10,9 +10,9 @@ name = "capsa-apple-vzd"
 path = "src/main.rs"
 
 [dependencies]
-capsa-core = { path = "../capsa-core" }
-capsa-backend-native = { path = "../capsa-backend-native" }
-capsa-apple-vzd-ipc = { path = "../capsa-apple-vzd-ipc" }
+capsa-core = { path = "../../core" }
+capsa-apple-vz = { path = "../vz" }
+capsa-apple-vzd-ipc = { path = "../vzd-ipc" }
 tokio = { workspace = true }
 tarpc = { version = "0.35", features = ["serde1", "tokio1", "serde-transport", "serde-transport-bincode"] }
 tokio-util = { version = "0.7", features = ["codec"] }
