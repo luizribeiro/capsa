@@ -18,18 +18,74 @@ use capsa_core::{
     macos_cmdline_defaults, macos_virtualization_capabilities,
 };
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
-use objc2::AllocAnyThread;
 use objc2::rc::Retained;
-use objc2_foundation::{NSError, NSString, NSURL};
+use objc2::runtime::ProtocolObject;
+use objc2::{AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class};
+use objc2_foundation::{NSError, NSObject, NSObjectProtocol, NSString, NSURL};
 use objc2_virtualization::{
     VZLinuxBootLoader, VZNATNetworkDeviceAttachment, VZVirtioConsoleDeviceSerialPortConfiguration,
     VZVirtioNetworkDeviceConfiguration, VZVirtualMachine, VZVirtualMachineConfiguration,
-    VZVirtualMachineState,
+    VZVirtualMachineDelegate,
 };
+use std::cell::Cell;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::io::RawFd;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::Mutex;
+
+type StopSender = std::sync::mpsc::SyncSender<VmStopReason>;
+
+#[derive(Debug, Clone)]
+enum VmStopReason {
+    GuestStopped,
+    Error(String),
+}
+
+struct VmStateDelegateIvars {
+    stop_sender: Cell<Option<StopSender>>,
+}
+
+define_class!(
+    // SAFETY:
+    // - NSObject has no subclassing requirements
+    // - We don't implement Drop
+    #[unsafe(super(NSObject))]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = VmStateDelegateIvars]
+    struct VmStateDelegate;
+
+    unsafe impl NSObjectProtocol for VmStateDelegate {}
+
+    unsafe impl VZVirtualMachineDelegate for VmStateDelegate {
+        #[unsafe(method(guestDidStopVirtualMachine:))]
+        fn guest_did_stop(&self, _vm: &VZVirtualMachine) {
+            let sender: Option<StopSender> = self.ivars().stop_sender.take();
+            if let Some(sender) = sender {
+                let _ = sender.try_send(VmStopReason::GuestStopped);
+            }
+        }
+
+        #[unsafe(method(virtualMachine:didStopWithError:))]
+        fn vm_did_stop_with_error(&self, _vm: &VZVirtualMachine, error: &NSError) {
+            let sender: Option<StopSender> = self.ivars().stop_sender.take();
+            if let Some(sender) = sender {
+                let error_msg = error.localizedDescription().to_string();
+                let _ = sender.try_send(VmStopReason::Error(error_msg));
+            }
+        }
+    }
+);
+
+impl VmStateDelegate {
+    fn new(mtm: MainThreadMarker, stop_sender: StopSender) -> Retained<Self> {
+        let this = Self::alloc(mtm);
+        let this = this.set_ivars(VmStateDelegateIvars {
+            stop_sender: Cell::new(Some(stop_sender)),
+        });
+        // SAFETY: Calling init on a freshly allocated NSObject subclass
+        unsafe { objc2::msg_send![super(this), init] }
+    }
+}
 
 pub struct NativeVirtualizationBackend {
     capabilities: BackendCapabilities,
@@ -96,6 +152,8 @@ impl HypervisorBackend for NativeVirtualizationBackend {
                 (None, None, None, None)
             };
 
+        let (stop_tx, stop_rx) = std::sync::mpsc::sync_channel(1);
+
         let vm_config = CreateVmConfig {
             kernel_path: config.kernel.clone(),
             initrd_path: config.initrd.clone(),
@@ -105,9 +163,10 @@ impl HypervisorBackend for NativeVirtualizationBackend {
             network: config.network.clone(),
             console_input_read_fd: console_input_read.as_ref().map(|fd| fd.as_raw_fd()),
             console_output_write_fd: console_output_write.as_ref().map(|fd| fd.as_raw_fd()),
+            stop_sender: stop_tx,
         };
 
-        let vm_addr = apple_main::on_main(move || create_vm(vm_config))
+        let (vm_addr, delegate_addr) = apple_main::on_main(move || create_vm(vm_config))
             .await
             .map_err(|e| Error::StartFailed(format!("VM creation failed: {}", e)))?;
 
@@ -129,8 +188,10 @@ impl HypervisorBackend for NativeVirtualizationBackend {
 
         Ok(Box::new(NativeVmHandle::new(
             vm_addr,
+            delegate_addr,
             console_output_read,
             console_input_write,
+            stop_rx,
         )))
     }
 
@@ -156,9 +217,10 @@ struct CreateVmConfig {
     network: NetworkMode,
     console_input_read_fd: Option<RawFd>,
     console_output_write_fd: Option<RawFd>,
+    stop_sender: StopSender,
 }
 
-fn create_vm(config: CreateVmConfig) -> Result<usize> {
+fn create_vm(config: CreateVmConfig) -> Result<(usize, usize)> {
     let kernel_path_str = config
         .kernel_path
         .to_str()
@@ -239,8 +301,14 @@ fn create_vm(config: CreateVmConfig) -> Result<usize> {
             .map_err(|e| Error::StartFailed(format!("VM config validation failed: {}", e)))?;
 
         let vm = VZVirtualMachine::initWithConfiguration(VZVirtualMachine::alloc(), &vm_config);
-        let ptr = Retained::into_raw(vm);
-        Ok(ptr as usize)
+
+        let mtm = MainThreadMarker::new().expect("create_vm must run on main thread");
+        let delegate = VmStateDelegate::new(mtm, config.stop_sender);
+        vm.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+
+        let vm_ptr = Retained::into_raw(vm);
+        let delegate_ptr = Retained::into_raw(delegate);
+        Ok((vm_ptr as usize, delegate_ptr as usize))
     }
 }
 
@@ -283,24 +351,32 @@ fn start_vm(
     }
 }
 
+type StopReceiver = std::sync::mpsc::Receiver<VmStopReason>;
+
 struct NativeVmHandle {
     vm_addr: AtomicUsize,
+    delegate_addr: AtomicUsize,
     running: AtomicBool,
     console_read_fd: Option<Mutex<Option<OwnedFd>>>,
     console_write_fd: Option<Mutex<Option<OwnedFd>>>,
+    stop_receiver: Mutex<Option<StopReceiver>>,
 }
 
 impl NativeVmHandle {
     fn new(
         vm_addr: usize,
+        delegate_addr: usize,
         console_read_fd: Option<OwnedFd>,
         console_write_fd: Option<OwnedFd>,
+        stop_receiver: StopReceiver,
     ) -> Self {
         Self {
             vm_addr: AtomicUsize::new(vm_addr),
+            delegate_addr: AtomicUsize::new(delegate_addr),
             running: AtomicBool::new(true),
             console_read_fd: console_read_fd.map(|fd| Mutex::new(Some(fd))),
             console_write_fd: console_write_fd.map(|fd| Mutex::new(Some(fd))),
+            stop_receiver: Mutex::new(Some(stop_receiver)),
         }
     }
 
@@ -311,15 +387,25 @@ impl NativeVmHandle {
 
 impl Drop for NativeVmHandle {
     fn drop(&mut self) {
-        let addr = self.vm_addr.load(Ordering::SeqCst);
-        if addr != 0 {
-            // SAFETY: We reclaim ownership of the VZVirtualMachine to drop it.
-            // The pointer was created by create_vm and has been kept alive by this handle.
-            // VZVirtualMachine must be accessed from the main thread, hence on_main_sync.
-            // After this, the Retained wrapper will release the Objective-C object.
+        let vm_addr = self.vm_addr.load(Ordering::SeqCst);
+        let delegate_addr = self.delegate_addr.load(Ordering::SeqCst);
+
+        if vm_addr != 0 || delegate_addr != 0 {
+            // SAFETY: We reclaim ownership of the VZVirtualMachine and VmStateDelegate to drop them.
+            // The pointers were created by create_vm and have been kept alive by this handle.
+            // Both must be accessed from the main thread, hence on_main_sync.
+            // We clear the delegate before dropping the VM to prevent use-after-free if the
+            // VM tries to call the delegate during teardown.
             apple_main::on_main_sync(move || unsafe {
-                let ptr = addr as *mut VZVirtualMachine;
-                let _ = Retained::from_raw(ptr);
+                if vm_addr != 0 {
+                    let vm_ptr = vm_addr as *mut VZVirtualMachine;
+                    let vm = Retained::from_raw(vm_ptr).expect("Invalid VM pointer");
+                    vm.setDelegate(None);
+                }
+                if delegate_addr != 0 {
+                    let delegate_ptr = delegate_addr as *mut VmStateDelegate;
+                    let _ = Retained::from_raw(delegate_ptr);
+                }
             });
         }
     }
@@ -332,27 +418,34 @@ impl BackendVmHandle for NativeVmHandle {
     }
 
     async fn wait(&self) -> Result<i32> {
-        loop {
-            let addr = self.get_vm_addr();
-            // SAFETY: The VM pointer was created by create_vm and is kept alive by this handle.
-            // We only read the state (no mutation), and VZVirtualMachine is accessed on the
-            // main thread as required by the framework. The pointer remains valid because
-            // the handle owns it until drop().
-            let state = apple_main::on_main(move || unsafe {
-                let ptr = addr as *const VZVirtualMachine;
-                (*ptr).state()
-            })
-            .await;
+        let receiver = {
+            let mut guard = self.stop_receiver.lock().await;
+            guard.take()
+        };
 
-            match state {
-                VZVirtualMachineState::Stopped | VZVirtualMachineState::Error => {
-                    self.running.store(false, Ordering::SeqCst);
-                    return Ok(0);
-                }
-                _ => {}
+        let Some(receiver) = receiver else {
+            return if self.running.load(Ordering::SeqCst) {
+                Err(Error::Hypervisor(
+                    "wait() called multiple times".to_string(),
+                ))
+            } else {
+                Ok(0)
+            };
+        };
+
+        let stop_reason = tokio::task::spawn_blocking(move || receiver.recv()).await;
+
+        self.running.store(false, Ordering::SeqCst);
+
+        match stop_reason {
+            Ok(Ok(VmStopReason::GuestStopped)) => Ok(0),
+            Ok(Ok(VmStopReason::Error(msg))) => {
+                Err(Error::Hypervisor(format!("VM stopped with error: {}", msg)))
             }
-            // TODO: actually implement this instead of just sleeping 100ms
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            Ok(Err(_)) => Err(Error::Hypervisor(
+                "VM state channel disconnected unexpectedly".to_string(),
+            )),
+            Err(_) => Err(Error::Hypervisor("wait task panicked".to_string())),
         }
     }
 
@@ -536,6 +629,80 @@ mod tests {
             let read = nix::unistd::read(read_fd.as_raw_fd(), &mut buf).unwrap();
             assert_eq!(read, test_data.len());
             assert_eq!(&buf, test_data);
+        }
+    }
+
+    mod vm_stop_channel {
+        use super::*;
+
+        #[test]
+        fn channel_receives_guest_stopped() {
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            tx.try_send(VmStopReason::GuestStopped).unwrap();
+
+            let result = rx.recv().unwrap();
+            assert!(matches!(result, VmStopReason::GuestStopped));
+        }
+
+        #[test]
+        fn channel_receives_error_with_message() {
+            let (tx, rx) = std::sync::mpsc::sync_channel(1);
+            tx.try_send(VmStopReason::Error("test error".to_string()))
+                .unwrap();
+
+            let result = rx.recv().unwrap();
+            match result {
+                VmStopReason::Error(msg) => assert_eq!(msg, "test error"),
+                _ => panic!("Expected Error variant"),
+            }
+        }
+
+        #[test]
+        fn channel_disconnection_detected() {
+            let (tx, rx) = std::sync::mpsc::sync_channel::<VmStopReason>(1);
+            drop(tx);
+
+            let result = rx.recv();
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn try_send_on_full_channel_fails() {
+            let (tx, _rx) = std::sync::mpsc::sync_channel(1);
+            tx.try_send(VmStopReason::GuestStopped).unwrap();
+
+            let result = tx.try_send(VmStopReason::GuestStopped);
+            assert!(result.is_err());
+        }
+    }
+
+    mod vm_stop_reason {
+        use super::*;
+
+        #[test]
+        fn guest_stopped_is_cloneable() {
+            let reason = VmStopReason::GuestStopped;
+            let cloned = reason.clone();
+            assert!(matches!(cloned, VmStopReason::GuestStopped));
+        }
+
+        #[test]
+        fn error_preserves_message() {
+            let reason = VmStopReason::Error("something went wrong".to_string());
+            let cloned = reason.clone();
+            match cloned {
+                VmStopReason::Error(msg) => assert_eq!(msg, "something went wrong"),
+                _ => panic!("Expected Error variant"),
+            }
+        }
+
+        #[test]
+        fn debug_format_works() {
+            let guest = VmStopReason::GuestStopped;
+            let error = VmStopReason::Error("test".to_string());
+
+            assert_eq!(format!("{:?}", guest), "GuestStopped");
+            assert_eq!(format!("{:?}", error), "Error(\"test\")");
         }
     }
 }
