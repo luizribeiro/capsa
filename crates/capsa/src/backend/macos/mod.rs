@@ -1,4 +1,3 @@
-// TODO: audit and revisit every unsafe block of this file
 // TODO: make sure all capabilities are covered by tests using the minimal VM
 
 mod capabilities;

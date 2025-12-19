@@ -7,7 +7,6 @@
 //! the main thread. This module uses apple_main::on_main to ensure all VM
 //! operations happen on the main queue.
 
-// TODO: audit and revisit every unsafe block of this file
 // TODO: make sure all capabilities are covered by tests using the minimal VM
 // TODO: split this file further (mod.rs, handle.rs, console.rs?, etc)
 

@@ -3,8 +3,6 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-// TODO: audit and revisit every unsafe block of this file
-
 #[cfg(unix)]
 use nix::sys::termios::{self, ControlFlags, InputFlags, LocalFlags, OutputFlags, SetArg, Termios};
 
