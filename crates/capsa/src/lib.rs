@@ -14,7 +14,7 @@
 //!     // Minimal config - just kernel and initrd (disk is optional)
 //!     let config = LinuxDirectBootConfig::new("./bzImage", "./initrd");
 //!
-//!     let vm = Capsa::vm(config)
+//!     let vm = Capsa::linux(config)
 //!         .cpus(2)
 //!         .memory_mb(2048)
 //!         .disk(DiskImage::new("./rootfs.raw"))
@@ -34,8 +34,8 @@
 //! ```
 
 // TODO: document all public types exported by the capsa library
-// TODO: audit which types really should be exposed publicly. things like capabilities,
-// VmConfig, among others probably don't have to be public outside of this crate
+// TODO: audit which types really should be exposed publicly. things like capabilities
+// probably don't have to be public outside of this crate
 
 pub mod backend;
 mod builder;
@@ -52,7 +52,7 @@ mod pool;
 pub mod test_utils;
 
 pub use builder::LinuxVmBuilder;
-pub use config::{Capsa, VmConfig};
+pub use config::Capsa;
 pub use console::{ConsoleReader, ConsoleWriter, VmConsole};
 pub use handle::{VmHandle, VmStatus};
 pub use pool::{PooledVm, VmPool};

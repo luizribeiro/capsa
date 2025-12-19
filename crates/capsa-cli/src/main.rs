@@ -133,7 +133,7 @@ async fn run() -> anyhow::Result<()> {
                 }};
             }
 
-            let base = Capsa::vm(boot_config)
+            let base = Capsa::linux(boot_config)
                 .cpus(cpus)
                 .memory_mb(memory)
                 .console(console_mode);
