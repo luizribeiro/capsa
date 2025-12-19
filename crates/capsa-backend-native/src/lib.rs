@@ -14,9 +14,9 @@
 use async_trait::async_trait;
 use block2::RcBlock;
 use capsa_core::{
-    AsyncPipe, BackendCapabilities, BackendVmHandle, BootMethodSupport, ConsoleMode, ConsoleStream,
-    Error, GuestOsSupport, HypervisorBackend, ImageFormatSupport, InternalVmConfig, KernelCmdline,
-    NetworkMode, NetworkModeSupport, Result, ShareMechanismSupport,
+    AsyncPipe, BackendCapabilities, BackendVmHandle, ConsoleMode, ConsoleStream,
+    DEFAULT_ROOT_DEVICE, Error, HypervisorBackend, InternalVmConfig, KernelCmdline, NetworkMode,
+    Result, macos_cmdline_defaults, macos_virtualization_capabilities,
 };
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use objc2::AllocAnyThread;
@@ -38,26 +38,9 @@ pub struct NativeVirtualizationBackend {
 
 impl NativeVirtualizationBackend {
     pub fn new() -> Self {
-        let capabilities = BackendCapabilities {
-            guest_os: GuestOsSupport { linux: true },
-            boot_methods: BootMethodSupport { linux_direct: true },
-            image_formats: ImageFormatSupport {
-                raw: true,
-                qcow2: false,
-            },
-            network_modes: NetworkModeSupport {
-                none: true,
-                nat: true,
-            },
-            share_mechanisms: ShareMechanismSupport {
-                virtio_fs: true,
-                virtio_9p: false,
-            },
-            max_cpus: None,
-            max_memory_mb: None,
-        };
-
-        Self { capabilities }
+        Self {
+            capabilities: macos_virtualization_capabilities(),
+        }
     }
 }
 
@@ -153,15 +136,11 @@ impl HypervisorBackend for NativeVirtualizationBackend {
     }
 
     fn kernel_cmdline_defaults(&self) -> KernelCmdline {
-        let mut cmdline = KernelCmdline::new();
-        cmdline.console("hvc0");
-        cmdline.arg("reboot", "t");
-        cmdline.arg("panic", "-1");
-        cmdline
+        macos_cmdline_defaults()
     }
 
     fn default_root_device(&self) -> &str {
-        "/dev/vda"
+        DEFAULT_ROOT_DEVICE
     }
 }
 
