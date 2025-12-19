@@ -159,6 +159,15 @@ struct CreateVmConfig {
 }
 
 fn create_vm(config: CreateVmConfig) -> Result<usize> {
+    let kernel_path_str = config
+        .kernel_path
+        .to_str()
+        .ok_or_else(|| Error::StartFailed("Invalid kernel path".to_string()))?;
+    let initrd_path_str = config
+        .initrd_path
+        .to_str()
+        .ok_or_else(|| Error::StartFailed("Invalid initrd path".to_string()))?;
+
     // SAFETY: This block uses Objective-C FFI via objc2 bindings to Apple's
     // Virtualization.framework. The safety requirements are:
     // 1. All objc2 types (NSURL, NSString, VZ*) are used according to their API contracts
@@ -168,21 +177,11 @@ fn create_vm(config: CreateVmConfig) -> Result<usize> {
     // 3. File descriptors passed for console I/O must be valid open descriptors.
     //    NSFileHandle takes ownership and will manage their lifetime.
     unsafe {
-        let kernel_url = NSURL::fileURLWithPath(&NSString::from_str(
-            config
-                .kernel_path
-                .to_str()
-                .ok_or_else(|| Error::StartFailed("Invalid kernel path".to_string()))?,
-        ));
+        let kernel_url = NSURL::fileURLWithPath(&NSString::from_str(kernel_path_str));
         let boot_loader =
             VZLinuxBootLoader::initWithKernelURL(VZLinuxBootLoader::alloc(), &kernel_url);
 
-        let initrd_url = NSURL::fileURLWithPath(&NSString::from_str(
-            config
-                .initrd_path
-                .to_str()
-                .ok_or_else(|| Error::StartFailed("Invalid initrd path".to_string()))?,
-        ));
+        let initrd_url = NSURL::fileURLWithPath(&NSString::from_str(initrd_path_str));
         boot_loader.setInitialRamdiskURL(Some(&initrd_url));
         boot_loader.setCommandLine(&NSString::from_str(&config.cmdline));
 
