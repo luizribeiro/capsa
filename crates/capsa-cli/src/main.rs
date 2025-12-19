@@ -251,15 +251,10 @@ async fn run_stdio_console(vm: &capsa::VmHandle) -> anyhow::Result<()> {
     let console = vm.console().await?;
     let (mut reader, mut writer) = console.split().await?;
 
-    // Put terminal in raw mode so Ctrl+C etc go to the VM
+    // Put terminal in raw mode so Ctrl+C etc go to the VM.
+    // Raw mode disables ISIG, so Ctrl+C is passed as byte 0x03 instead of generating SIGINT.
     #[cfg(unix)]
     let _raw_guard = RawTerminalGuard::new();
-
-    // Ignore SIGINT so Ctrl+C doesn't kill us (we pass it to the VM instead)
-    #[cfg(unix)]
-    unsafe {
-        libc::signal(libc::SIGINT, libc::SIG_IGN);
-    }
 
     eprintln!("Connected to VM console. Press Ctrl+] to exit.\r");
 
