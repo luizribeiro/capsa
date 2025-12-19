@@ -1,31 +1,67 @@
-use std::process::Command;
-
 fn main() {
-    println!("cargo:rerun-if-changed=../../test-vms.nix");
+    #[cfg(all(target_os = "macos", feature = "macos-subprocess"))]
+    {
+        use std::path::PathBuf;
 
-    let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
-    let project_root = std::path::Path::new(&manifest_dir)
-        .parent()
-        .unwrap()
-        .parent()
-        .unwrap();
+        if let Ok(vzd_bin) = std::env::var("CARGO_BIN_FILE_CAPSA_APPLE_VZD_capsa-apple-vzd") {
+            let out_dir = PathBuf::from(std::env::var("OUT_DIR").unwrap());
+            let dest = out_dir.join("capsa-apple-vzd");
 
-    let test_vms_nix = project_root.join("test-vms.nix");
-    let result_link = project_root.join("result-vms");
+            std::fs::copy(&vzd_bin, &dest).unwrap_or_else(|e| {
+                panic!(
+                    "Failed to copy vzd binary from '{}' to '{}': {}",
+                    vzd_bin,
+                    dest.display(),
+                    e
+                )
+            });
 
-    if !test_vms_nix.exists() {
-        return;
-    }
+            let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap());
+            let workspace_root = manifest_dir
+                .parent()
+                .and_then(|p| p.parent())
+                .unwrap_or_else(|| {
+                    panic!(
+                        "Failed to find workspace root from manifest dir: {}",
+                        manifest_dir.display()
+                    )
+                });
+            let entitlements = workspace_root.join("entitlements.plist");
 
-    // Nix handles caching - if nothing changed, this returns instantly
-    let status = Command::new("nix-build")
-        .arg(&test_vms_nix)
-        .arg("-o")
-        .arg(&result_link)
-        .current_dir(project_root)
-        .status();
+            if !entitlements.exists() {
+                panic!(
+                    "entitlements.plist not found at '{}'. This file is required for codesigning.",
+                    entitlements.display()
+                );
+            }
 
-    if let Err(e) = status {
-        eprintln!("Failed to run nix-build: {}", e);
+            let status = std::process::Command::new("codesign")
+                .args([
+                    "-s",
+                    "-",
+                    "--entitlements",
+                    entitlements.to_str().unwrap(),
+                    "--force",
+                    dest.to_str().unwrap(),
+                ])
+                .status()
+                .unwrap_or_else(|e| {
+                    panic!(
+                        "Failed to execute codesign command: {}. Is Xcode command line tools installed?",
+                        e
+                    )
+                });
+
+            if !status.success() {
+                panic!(
+                    "codesign failed with status {} while signing '{}' with entitlements '{}'",
+                    status,
+                    dest.display(),
+                    entitlements.display()
+                );
+            }
+
+            println!("cargo:rustc-env=CAPSA_VZD_BUNDLED={}", dest.display());
+        }
     }
 }

@@ -3,8 +3,6 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-// TODO: audit and revisit every unsafe block of this file
-
 #[cfg(unix)]
 use nix::sys::termios::{self, ControlFlags, InputFlags, LocalFlags, OutputFlags, SetArg, Termios};
 
@@ -133,7 +131,7 @@ async fn run() -> anyhow::Result<()> {
                 }};
             }
 
-            let base = Capsa::vm(boot_config)
+            let base = Capsa::linux(boot_config)
                 .cpus(cpus)
                 .memory_mb(memory)
                 .console(console_mode);
@@ -199,10 +197,10 @@ struct RawTerminalGuard {
 #[cfg(unix)]
 impl RawTerminalGuard {
     fn new() -> Option<Self> {
-        use std::os::fd::BorrowedFd;
+        use std::os::fd::AsFd;
 
-        // SAFETY: stdin fd 0 is valid for the lifetime of the program
-        let stdin_fd = unsafe { BorrowedFd::borrow_raw(0) };
+        let stdin = std::io::stdin();
+        let stdin_fd = stdin.as_fd();
         let original = termios::tcgetattr(stdin_fd).ok()?;
         let mut raw = original.clone();
 
@@ -240,8 +238,9 @@ impl RawTerminalGuard {
 #[cfg(unix)]
 impl Drop for RawTerminalGuard {
     fn drop(&mut self) {
-        use std::os::fd::BorrowedFd;
-        let stdin_fd = unsafe { BorrowedFd::borrow_raw(0) };
+        use std::os::fd::AsFd;
+        let stdin = std::io::stdin();
+        let stdin_fd = stdin.as_fd();
         let _ = termios::tcsetattr(stdin_fd, SetArg::TCSANOW, &self.original);
     }
 }
@@ -250,15 +249,10 @@ async fn run_stdio_console(vm: &capsa::VmHandle) -> anyhow::Result<()> {
     let console = vm.console().await?;
     let (mut reader, mut writer) = console.split().await?;
 
-    // Put terminal in raw mode so Ctrl+C etc go to the VM
+    // Put terminal in raw mode so Ctrl+C etc go to the VM.
+    // Raw mode disables ISIG, so Ctrl+C is passed as byte 0x03 instead of generating SIGINT.
     #[cfg(unix)]
     let _raw_guard = RawTerminalGuard::new();
-
-    // Ignore SIGINT so Ctrl+C doesn't kill us (we pass it to the VM instead)
-    #[cfg(unix)]
-    unsafe {
-        libc::signal(libc::SIGINT, libc::SIG_IGN);
-    }
 
     eprintln!("Connected to VM console. Press Ctrl+] to exit.\r");
 

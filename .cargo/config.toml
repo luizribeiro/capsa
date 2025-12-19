@@ -1,3 +1,6 @@
+[unstable]
+bindeps = true
+
 [target.aarch64-apple-darwin]
 runner = ["codesign-run", "--entitlements", "/Users/luiz/capsa/entitlements.plist"]
 

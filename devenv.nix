@@ -14,6 +14,8 @@
     clippy.settings.allFeatures = true;
   };
 
+  # codesign-run wraps binary execution with ad-hoc codesigning using virtualization
+  # entitlements, required for running tests and examples that use Virtualization.framework
   enterShell = ''
     if ! command -v codesign-run &> /dev/null; then
       echo "Installing codesign-run..."

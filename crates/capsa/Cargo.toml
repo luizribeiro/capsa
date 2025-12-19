@@ -6,6 +6,7 @@ license.workspace = true
 description = "A cross-platform VM runtime library for secure workload isolation"
 
 [dependencies]
+capsa-core = { path = "../core" }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 thiserror = { workspace = true }
@@ -15,24 +16,27 @@ tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { version = "1.0", optional = true }
 apple-main = { git = "https://github.com/luizribeiro/apple-main", rev = "6f9e44b", optional = true, features = ["unstable-test-framework"] }
+capsa-apple-vzd-ipc = { path = "../apple/vzd-ipc", optional = true }
+tarpc = { version = "0.35", features = ["serde1", "tokio1", "serde-transport", "serde-transport-bincode"], optional = true }
+tokio-util = { version = "0.7", features = ["codec"], optional = true }
+tokio-serde = { version = "0.9", features = ["bincode"], optional = true }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["process", "signal", "fs", "term"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = { version = "0.6", optional = true }
-objc2-virtualization = { version = "0.3", optional = true }
-objc2-foundation = { version = "0.3", optional = true, features = ["NSData", "NSString", "NSURL", "NSError", "NSArray", "NSFileHandle"] }
-block2 = { version = "0.6", optional = true }
-libc = { version = "0.2", optional = true }
-dispatch = { version = "0.2", optional = true }
+capsa-apple-vz = { path = "../apple/vz", optional = true }
+
+[target.'cfg(target_os = "macos")'.build-dependencies]
+capsa-apple-vzd = { path = "../apple/vzd", artifact = "bin", optional = true }
 
 [features]
 default = []
 blocking = []
 test-utils = ["dep:serde_json", "dep:apple-main"]
 vfkit = []
-macos-native = ["dep:objc2", "dep:objc2-virtualization", "dep:objc2-foundation", "dep:block2", "dep:libc", "dep:apple-main", "dep:dispatch"]
+macos-native = ["dep:capsa-apple-vz"]
+macos-subprocess = ["dep:capsa-apple-vzd-ipc", "dep:tarpc", "dep:tokio-util", "dep:tokio-serde", "dep:capsa-apple-vzd"]
 
 [dev-dependencies]
 tempfile = { workspace = true }
