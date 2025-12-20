@@ -1,7 +1,7 @@
 //! Console interface for interacting with VM serial console.
 //!
-//! The [`VmConsole`] enables programmatic interaction with a VM's serial console,
-//! making it ideal for **integration testing** and automation.
+//! See the [Console Automation guide](crate::guides::console_automation) for
+//! patterns and best practices.
 
 use capsa_core::{ConsoleStream, Error, Result};
 use std::time::Duration;
@@ -11,98 +11,19 @@ use tokio::time::timeout;
 
 /// High-level interface for interacting with a VM's serial console.
 ///
-/// Obtain a console via [`VmHandle::console`](crate::VmHandle::console)
-/// (requires [`console_enabled`](crate::LinuxVmBuilder::console_enabled) on the builder).
-///
-/// # Integration Testing
-///
-/// The console is ideal for end-to-end testing. Share your build artifacts
-/// with the VM and verify behavior:
+/// Obtain via [`VmHandle::console`](crate::VmHandle::console)
+/// (requires [`console_enabled`](crate::LinuxVmBuilder::console_enabled)).
 ///
 /// ```rust,no_run
-/// # use capsa::{Capsa, LinuxDirectBootConfig, MountMode, VmConsole};
-/// # async fn example() -> capsa::Result<()> {
-/// # let config = LinuxDirectBootConfig::new("k", "i");
-/// let vm = Capsa::vm(config)
-///     .share("./target/release", "/app", MountMode::ReadOnly)
-///     .console_enabled()
-///     .build().await?;
-///
-/// let console = vm.console().await?;
-/// console.wait_for("# ").await?;
-///
-/// let output = console.run_command("/app/my-binary --test", "# ").await?;
-/// assert!(output.contains("PASSED"));
-/// # Ok(())
-/// # }
-/// ```
-///
-/// # Pattern Matching
-///
-/// Wait for specific output patterns:
-///
-/// ```rust,no_run
-/// # use capsa::VmConsole;
-/// # async fn example(console: VmConsole) -> capsa::Result<()> {
-/// // Wait for a single pattern
+/// # async fn example(console: capsa::VmConsole) -> capsa::Result<()> {
 /// console.wait_for("login:").await?;
-///
-/// // Wait for any of multiple patterns
-/// let (index, output) = console.wait_for_any(&["success", "error"]).await?;
-///
-/// // With timeout
-/// use std::time::Duration;
-/// console.wait_for_timeout("ready", Duration::from_secs(30)).await?;
+/// console.write_line("root").await?;
 /// # Ok(())
 /// # }
 /// ```
 ///
-/// # Running Commands
-///
-/// Execute commands and capture output:
-///
-/// ```rust,no_run
-/// # use capsa::VmConsole;
-/// # async fn example(console: VmConsole) -> capsa::Result<()> {
-/// // Run command, wait for prompt
-/// let output = console.run_command("ls -la /", "# ").await?;
-///
-/// // With timeout
-/// use std::time::Duration;
-/// let output = console.run_command_timeout("slow-cmd", "# ", Duration::from_secs(60)).await?;
-/// # Ok(())
-/// # }
-/// ```
-///
-/// # Login Automation
-///
-/// ```rust,no_run
-/// # use capsa::VmConsole;
-/// # async fn example(console: VmConsole) -> capsa::Result<()> {
-/// // With password
-/// console.login("root", Some("password")).await?;
-///
-/// // Without password (e.g., root on minimal images)
-/// console.login("root", None).await?;
-/// # Ok(())
-/// # }
-/// ```
-///
-/// # Concurrent I/O
-///
-/// For simultaneous reading and writing, split the console:
-///
-/// ```rust,no_run
-/// # use capsa::VmConsole;
-/// use tokio::io::{AsyncReadExt, AsyncWriteExt};
-///
-/// # async fn example(console: VmConsole) -> capsa::Result<()> {
-/// let (mut reader, mut writer) = console.split().await?;
-///
-/// // Now reader and writer can be used concurrently
-/// # Ok(())
-/// # }
-/// ```
+/// See the [Console Automation guide](crate::guides::console_automation) for
+/// integration testing patterns.
 pub struct VmConsole {
     stream: Mutex<Option<ConsoleStream>>,
     buffer: Mutex<String>,

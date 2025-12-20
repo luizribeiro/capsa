@@ -14,45 +14,20 @@ use std::time::Duration;
 /// Use [`Capsa::vm`](crate::Capsa::vm) for single VMs or
 /// [`Capsa::pool`](crate::Capsa::pool) for VM pools.
 ///
-/// # Single VM Mode (`Capsa::vm`)
-///
 /// ```rust,no_run
-/// # use capsa::{Capsa, LinuxDirectBootConfig, DiskImage};
+/// # use capsa::{Capsa, LinuxDirectBootConfig};
 /// # async fn example() -> capsa::Result<()> {
-/// let config = LinuxDirectBootConfig::new("./kernel", "./initrd")
-///     .with_root_disk(DiskImage::new("./rootfs.raw"));
-///
+/// let config = LinuxDirectBootConfig::new("./kernel", "./initrd");
 /// let vm = Capsa::vm(config)
-///     .cpus(4)
-///     .memory_mb(2048)
-///     .disk(DiskImage::new("./data.raw"))  // /dev/vdb
+///     .cpus(2)
+///     .memory_mb(1024)
 ///     .console_enabled()
 ///     .build().await?;
 /// # Ok(())
 /// # }
 /// ```
 ///
-/// # Pool Mode (`Capsa::pool`)
-///
-/// ```rust,no_run
-/// # use capsa::{Capsa, LinuxDirectBootConfig};
-/// # async fn example() -> capsa::Result<()> {
-/// let config = LinuxDirectBootConfig::new("./kernel", "./initrd");
-///
-/// let pool = Capsa::pool(config)
-///     .cpus(2)
-///     .memory_mb(512)
-///     .build(5).await?;  // Pool of 5 VMs
-///
-/// let vm = pool.reserve().await?;
-/// # Ok(())
-/// # }
-/// ```
-///
-/// # Type Parameter
-///
-/// - `LinuxVmBuilder<No>` - Single VM mode: has `.disk()` and `.build() -> VmHandle`
-/// - `LinuxVmBuilder<Yes>` - Pool mode: has `.build(size) -> VmPool`, no `.disk()`
+/// See the [Getting Started guide](crate::guides::getting_started) for complete examples.
 pub struct LinuxVmBuilder<P = No> {
     config: LinuxDirectBootConfig,
     resources: ResourceConfig,

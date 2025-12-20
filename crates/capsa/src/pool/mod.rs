@@ -1,77 +1,9 @@
 //! VM Pool management.
 //!
-//! A [`VmPool`] pre-creates a set of identical VMs that can be reserved for
-//! temporary use. When a [`PooledVm`] is dropped, the VM is killed and a
-//! fresh one is spawned to maintain pool size.
+//! A [`VmPool`] pre-creates identical VMs that can be reserved for temporary use.
+//! When a [`PooledVm`] is dropped, it is killed and replaced with a fresh VM.
 //!
-//! # Creating a Pool
-//!
-//! Use [`Capsa::pool`](crate::Capsa::pool) to create a pool builder, configure
-//! it, then call `.build(size)` with the number of VMs:
-//!
-//! ```no_run
-//! use capsa::{Capsa, LinuxDirectBootConfig};
-//!
-//! # async fn example() -> capsa::Result<()> {
-//! let config = LinuxDirectBootConfig::new("./kernel", "./initrd");
-//!
-//! let pool = Capsa::pool(config)
-//!     .cpus(2)
-//!     .memory_mb(512)
-//!     .console_enabled()
-//!     .build(5)  // Create 5 identical VMs
-//!     .await?;
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! # Reserving and Using VMs
-//!
-//! Call [`reserve`](VmPool::reserve) to get a VM from the pool. The returned
-//! [`PooledVm`] implements `Deref<Target=VmHandle>`, so all handle methods
-//! work directly:
-//!
-//! ```no_run
-//! # async fn example(pool: capsa::VmPool) -> capsa::Result<()> {
-//! let vm = pool.reserve().await?;
-//!
-//! // Use VmHandle methods directly
-//! let console = vm.console().await?;
-//! console.wait_for("login:").await?;
-//! console.write_line("whoami").await?;
-//!
-//! // VM is killed and replaced when `vm` goes out of scope
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! For non-blocking reservation, use [`try_reserve`](VmPool::try_reserve):
-//!
-//! ```no_run
-//! # fn example(pool: capsa::VmPool) -> capsa::Result<()> {
-//! match pool.try_reserve() {
-//!     Ok(vm) => { /* use vm */ }
-//!     Err(capsa::Error::PoolEmpty) => { /* no VMs available */ }
-//!     Err(e) => return Err(e),
-//! }
-//! # Ok(())
-//! # }
-//! ```
-//!
-//! # When to Use Pools
-//!
-//! Pools are useful when you need to run many short-lived workloads and want
-//! to amortize VM startup costs. Each reservation gets a fresh VM, ensuring
-//! clean state.
-//!
-//! # Limitations
-//!
-//! - **No additional disks**: Pool VMs cannot have disks added via `.disk()`.
-//!   The pool builder doesn't expose this method. Root disks set via
-//!   [`LinuxDirectBootConfig::with_root_disk`](crate::LinuxDirectBootConfig::with_root_disk)
-//!   are allowed but should be read-only to avoid state leaking between reservations.
-//! - **Silent respawn failures**: If spawning a replacement VM fails, the pool
-//!   size decreases silently (logged at error level).
+//! See the [VM Pools guide](crate::guides::vm_pools) for patterns and best practices.
 
 // TODO: even though VM pools don't allow for their VMs to have disks,
 // in practice, they might still allowed to have root disks (if the root
@@ -107,31 +39,12 @@ impl VmPoolInner {
 
 /// A pool of pre-created VMs that can be reserved for temporary use.
 ///
-/// Create a pool using [`Capsa::pool`](crate::Capsa::pool):
+/// Create via [`Capsa::pool`](crate::Capsa::pool). VMs are killed and replaced
+/// when the [`PooledVm`] is dropped, ensuring fresh state for each reservation.
 ///
-/// ```no_run
-/// use capsa::{Capsa, LinuxDirectBootConfig};
+/// Thread-safe: can be shared across tasks using `Arc`.
 ///
-/// # async fn example() -> capsa::Result<()> {
-/// let config = LinuxDirectBootConfig::new("./kernel", "./initrd");
-/// let pool = Capsa::pool(config)
-///     .cpus(2)
-///     .memory_mb(512)
-///     .build(5)
-///     .await?;
-///
-/// let vm = pool.reserve().await?;
-/// // Use vm...
-/// # Ok(())
-/// # }
-/// ```
-///
-/// VMs are killed and replaced when returned to the pool (when [`PooledVm`]
-/// is dropped), ensuring fresh state for each reservation.
-///
-/// # Thread Safety
-///
-/// `VmPool` is thread-safe and can be shared across tasks using `Arc`.
+/// See the [VM Pools guide](crate::guides::vm_pools) for usage patterns.
 pub struct VmPool {
     inner: Arc<VmPoolInner>,
 }
@@ -265,27 +178,8 @@ impl Drop for VmPool {
 
 /// A VM reserved from a pool.
 ///
-/// When dropped, the VM is killed and a fresh VM is spawned to replace it.
-/// The replacement happens in a background task, so the drop is non-blocking.
-///
-/// This type implements [`Deref<Target=VmHandle>`](std::ops::Deref), so all
-/// [`VmHandle`] methods are available directly on `PooledVm`.
-///
-/// # Example
-///
-/// ```no_run
-/// # async fn example(pool: capsa::VmPool) -> capsa::Result<()> {
-/// let vm = pool.reserve().await?;
-///
-/// // Access VmHandle methods directly via Deref
-/// let console = vm.console().await?;
-/// console.wait_for("login:").await?;
-///
-/// // VM is killed and replaced when dropped
-/// drop(vm);
-/// # Ok(())
-/// # }
-/// ```
+/// Implements [`Deref<Target=VmHandle>`](std::ops::Deref), so all [`VmHandle`]
+/// methods work directly. When dropped, the VM is killed and replaced.
 pub struct PooledVm {
     handle: Option<VmHandle>,
     pool: Arc<VmPoolInner>,
