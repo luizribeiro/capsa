@@ -1,13 +1,11 @@
+mod console;
+
 use capsa::{
     Capsa, DiskImage, HostPlatform, HypervisorBackend, LinuxDirectBootConfig, MountMode,
     available_backends,
 };
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-#[cfg(unix)]
-use nix::sys::termios::{self, ControlFlags, InputFlags, LocalFlags, OutputFlags, SetArg, Termios};
 
 fn print_backends_json(backends: &[Box<dyn HypervisorBackend>]) {
     println!("{{");
@@ -341,7 +339,7 @@ async fn run() -> anyhow::Result<()> {
                 let status = vm.wait().await?;
                 eprintln!("VM exited with status: {:?}", status);
             } else {
-                run_stdio_console(&vm).await?;
+                console::run_stdio_console(&vm).await?;
             }
         }
 
@@ -357,136 +355,6 @@ async fn run() -> anyhow::Result<()> {
 
         Commands::Version => {
             println!("capsa {}", env!("CARGO_PKG_VERSION"));
-        }
-    }
-
-    Ok(())
-}
-
-// TODO: split console stuff out of capsa-cli/src/main.rs
-
-#[cfg(unix)]
-struct RawTerminalGuard {
-    original: Termios,
-}
-
-#[cfg(unix)]
-impl RawTerminalGuard {
-    fn new() -> Option<Self> {
-        use std::os::fd::AsFd;
-
-        let stdin = std::io::stdin();
-        let stdin_fd = stdin.as_fd();
-        let original = termios::tcgetattr(stdin_fd).ok()?;
-        let mut raw = original.clone();
-
-        // Equivalent to cfmakeraw() - full raw mode
-        // Input flags
-        raw.input_flags.remove(InputFlags::IGNBRK);
-        raw.input_flags.remove(InputFlags::BRKINT);
-        raw.input_flags.remove(InputFlags::PARMRK);
-        raw.input_flags.remove(InputFlags::ISTRIP);
-        raw.input_flags.remove(InputFlags::INLCR);
-        raw.input_flags.remove(InputFlags::IGNCR);
-        raw.input_flags.remove(InputFlags::ICRNL);
-        raw.input_flags.remove(InputFlags::IXON);
-
-        // Output flags
-        raw.output_flags.remove(OutputFlags::OPOST);
-
-        // Local flags
-        raw.local_flags.remove(LocalFlags::ECHO);
-        raw.local_flags.remove(LocalFlags::ECHONL);
-        raw.local_flags.remove(LocalFlags::ICANON);
-        raw.local_flags.remove(LocalFlags::ISIG);
-        raw.local_flags.remove(LocalFlags::IEXTEN);
-
-        // Control flags
-        raw.control_flags.remove(ControlFlags::CSIZE);
-        raw.control_flags.remove(ControlFlags::PARENB);
-        raw.control_flags.insert(ControlFlags::CS8);
-
-        termios::tcsetattr(stdin_fd, SetArg::TCSANOW, &raw).ok()?;
-        Some(Self { original })
-    }
-}
-
-#[cfg(unix)]
-impl Drop for RawTerminalGuard {
-    fn drop(&mut self) {
-        use std::os::fd::AsFd;
-        let stdin = std::io::stdin();
-        let stdin_fd = stdin.as_fd();
-        let _ = termios::tcsetattr(stdin_fd, SetArg::TCSANOW, &self.original);
-    }
-}
-
-async fn run_stdio_console(vm: &capsa::VmHandle) -> anyhow::Result<()> {
-    let console = vm.console().await?;
-    let (mut reader, mut writer) = console.split().await?;
-
-    // Put terminal in raw mode so Ctrl+C etc go to the VM.
-    // Raw mode disables ISIG, so Ctrl+C is passed as byte 0x03 instead of generating SIGINT.
-    #[cfg(unix)]
-    let _raw_guard = RawTerminalGuard::new();
-
-    eprintln!("Connected to VM console. Press Ctrl+] to exit.\r");
-
-    let (detach_tx, mut detach_rx) = tokio::sync::oneshot::channel::<()>();
-
-    let stdin_task = tokio::spawn(async move {
-        let mut stdin = tokio::io::stdin();
-        let mut buf = [0u8; 1];
-        loop {
-            match stdin.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(1) => {
-                    // Ctrl+] (0x1D) is the escape sequence to exit
-                    if buf[0] == 0x1D {
-                        let _ = detach_tx.send(());
-                        break;
-                    }
-                    if writer.write_all(&buf).await.is_err() {
-                        break;
-                    }
-                }
-                Ok(_) | Err(_) => break,
-            }
-        }
-    });
-
-    let stdout_task = tokio::spawn(async move {
-        let mut stdout = tokio::io::stdout();
-        let mut buf = [0u8; 1024];
-        loop {
-            match reader.read(&mut buf).await {
-                Ok(0) => break,
-                Ok(n) => {
-                    if stdout.write_all(&buf[..n]).await.is_err() {
-                        break;
-                    }
-                    let _ = stdout.flush().await;
-                }
-                Err(_) => break,
-            }
-        }
-    });
-
-    tokio::select! {
-        _ = vm.wait() => {
-            eprintln!("\r\nVM exited.\r");
-        }
-        _ = &mut detach_rx => {
-            eprintln!("\r\nStopping VM...\r");
-            let _ = vm.kill().await;
-        }
-        _ = stdin_task => {
-            // EOF on stdin, kill the VM
-            let _ = vm.kill().await;
-        }
-        _ = stdout_task => {
-            // Console closed, kill the VM
-            let _ = vm.kill().await;
         }
     }
 
