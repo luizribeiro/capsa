@@ -19,8 +19,8 @@ impl LinuxDirectBootConfig {
         }
     }
 
-    pub fn with_root_disk(mut self, disk: DiskImage) -> Self {
-        self.root_disk = Some(disk);
+    pub fn with_root_disk(mut self, disk: impl Into<DiskImage>) -> Self {
+        self.root_disk = Some(disk.into());
         self
     }
 }

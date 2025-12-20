@@ -20,12 +20,21 @@ impl ImageFormat {
     }
 }
 
+/// A disk image to attach to a VM.
+///
+/// Format is inferred from file extension (`.raw`, `.img`, `.qcow2`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DiskImage {
     pub path: PathBuf,
     pub format: ImageFormat,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub read_only: bool,
+}
+
+impl<T: Into<PathBuf>> From<T> for DiskImage {
+    fn from(path: T) -> Self {
+        Self::new(path)
+    }
 }
 
 impl DiskImage {

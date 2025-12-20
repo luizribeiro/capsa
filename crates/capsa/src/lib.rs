@@ -10,11 +10,11 @@
 //! All interaction starts with [`Capsa`]:
 //!
 //! ```rust,no_run
-//! use capsa::{Capsa, LinuxDirectBootConfig, DiskImage};
+//! use capsa::{Capsa, LinuxDirectBootConfig};
 //!
 //! # async fn example() -> capsa::Result<()> {
 //! let config = LinuxDirectBootConfig::new("./kernel", "./initrd")
-//!     .with_root_disk(DiskImage::new("./rootfs.raw"));
+//!     .with_root_disk("./rootfs.raw");
 //!
 //! let vm = Capsa::vm(config)
 //!     .cpus(2)

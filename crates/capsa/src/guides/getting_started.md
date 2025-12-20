@@ -52,16 +52,28 @@ async fn main() -> capsa::Result<()> {
 Most VMs need a root filesystem. Add one via the boot configuration:
 
 ```rust,no_run
-use capsa::{Capsa, LinuxDirectBootConfig, DiskImage};
+use capsa::{Capsa, LinuxDirectBootConfig};
 
 # async fn example() -> capsa::Result<()> {
 let config = LinuxDirectBootConfig::new("./bzImage", "./initrd")
-    .with_root_disk(DiskImage::new("./rootfs.raw"));
+    .with_root_disk("./rootfs.raw");
 
 let vm = Capsa::vm(config)
     .console_enabled()
     .build()
     .await?;
+# Ok(())
+# }
+```
+
+For advanced options like read-only disks, use [`DiskImage`](crate::DiskImage) directly:
+
+```rust,no_run
+use capsa::{Capsa, LinuxDirectBootConfig, DiskImage};
+
+# async fn example() -> capsa::Result<()> {
+let config = LinuxDirectBootConfig::new("./bzImage", "./initrd")
+    .with_root_disk(DiskImage::new("./rootfs.raw").read_only());
 # Ok(())
 # }
 ```

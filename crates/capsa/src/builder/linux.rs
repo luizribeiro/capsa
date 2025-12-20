@@ -65,8 +65,8 @@ impl LinuxVmBuilder<No> {
     }
 
     /// Adds a disk to the VM (becomes /dev/vdb, /dev/vdc, etc.).
-    pub fn disk(mut self, disk: DiskImage) -> Self {
-        self.disks.push(disk);
+    pub fn disk(mut self, disk: impl Into<DiskImage>) -> Self {
+        self.disks.push(disk.into());
         self
     }
 

@@ -51,14 +51,12 @@ impl BootConfig for LinuxDirectBootConfig {
 /// # Example
 ///
 /// ```rust,no_run
-/// use capsa::{Capsa, LinuxDirectBootConfig, DiskImage, MountMode};
+/// use capsa::{Capsa, LinuxDirectBootConfig, MountMode};
 ///
 /// # async fn example() -> capsa::Result<()> {
-/// // Configure boot settings
 /// let config = LinuxDirectBootConfig::new("./kernel", "./initrd")
-///     .with_root_disk(DiskImage::new("./rootfs.raw"));
+///     .with_root_disk("./rootfs.raw");
 ///
-/// // Build and start the VM
 /// let vm = Capsa::vm(config)
 ///     .cpus(2)
 ///     .memory_mb(1024)
@@ -67,7 +65,6 @@ impl BootConfig for LinuxDirectBootConfig {
 ///     .build()
 ///     .await?;
 ///
-/// // Interact with the VM
 /// let console = vm.console().await?;
 /// console.wait_for("login:").await?;
 /// # Ok(())
@@ -87,17 +84,11 @@ impl Capsa {
     /// # Example
     ///
     /// ```rust,no_run
-    /// use capsa::{Capsa, LinuxDirectBootConfig, DiskImage};
+    /// use capsa::{Capsa, LinuxDirectBootConfig};
     ///
     /// # async fn example() -> capsa::Result<()> {
-    /// // Minimal configuration (no persistent storage)
-    /// let vm = Capsa::vm(LinuxDirectBootConfig::new("./kernel", "./initrd"))
-    ///     .build()
-    ///     .await?;
-    ///
-    /// // With a root filesystem
     /// let config = LinuxDirectBootConfig::new("./kernel", "./initrd")
-    ///     .with_root_disk(DiskImage::new("./rootfs.raw"));
+    ///     .with_root_disk("./rootfs.raw");
     /// let vm = Capsa::vm(config).build().await?;
     /// # Ok(())
     /// # }
