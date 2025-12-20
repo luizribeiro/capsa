@@ -15,13 +15,13 @@ mod vm;
 
 use async_trait::async_trait;
 use capsa_core::{
-    BackendCapabilities, BackendVmHandle, DEFAULT_ROOT_DEVICE, Error, HostPlatform,
+    BackendCapabilities, BackendVmHandle, BootMethod, DEFAULT_ROOT_DEVICE, Error, HostPlatform,
     HypervisorBackend, KernelCmdline, Result, VmConfig, macos_cmdline_defaults,
     macos_virtualization_capabilities,
 };
 use handle::NativeVmHandle;
 use std::os::fd::AsRawFd;
-use vm::{CreateVmConfig, create_pipe, create_vm, start_vm};
+use vm::{BootMethodConfig, CreateVmConfig, create_pipe, create_vm, start_vm};
 
 pub struct NativeVirtualizationBackend {
     capabilities: BackendCapabilities,
@@ -94,10 +94,27 @@ impl HypervisorBackend for NativeVirtualizationBackend {
 
         let (stop_tx, stop_rx) = std::sync::mpsc::sync_channel(1);
 
+        let boot = match &config.boot {
+            BootMethod::LinuxDirect {
+                kernel,
+                initrd,
+                cmdline,
+            } => BootMethodConfig::LinuxDirect {
+                kernel_path: kernel.clone(),
+                initrd_path: initrd.clone(),
+                cmdline: cmdline.clone(),
+            },
+            BootMethod::Uefi {
+                efi_variable_store,
+                create_variable_store,
+            } => BootMethodConfig::Uefi {
+                efi_variable_store: efi_variable_store.clone(),
+                create_variable_store: *create_variable_store,
+            },
+        };
+
         let vm_config = CreateVmConfig {
-            kernel_path: config.kernel.clone(),
-            initrd_path: config.initrd.clone(),
-            cmdline: config.cmdline.clone(),
+            boot,
             cpus: config.resources.cpus,
             memory_mb: config.resources.memory_mb as u64,
             root_disk: config.root_disk.clone(),

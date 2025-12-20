@@ -199,6 +199,91 @@ let
     '';
   };
 
+  # UEFI-capable kernel with EFI stub support
+  # This kernel can boot directly as an EFI application
+  uefiKernel = linuxPkgs.stdenv.mkDerivation {
+    name = "linux-uefi";
+    src = linuxPkgs.linux.src;
+
+    nativeBuildInputs = with linuxPkgs; [
+      flex bison bc perl openssl elfutils
+    ];
+
+    dontConfigure = true;
+
+    buildPhase = ''
+      make ARCH=arm64 tinyconfig
+
+      cat >> .config << 'EOF'
+      # 64-bit kernel
+      CONFIG_64BIT=y
+
+      # EFI support - required for UEFI boot
+      CONFIG_EFI=y
+      CONFIG_EFI_STUB=y
+      CONFIG_CMDLINE_EXTEND=y
+
+      # Basic requirements
+      CONFIG_PRINTK=y
+      CONFIG_BUG=y
+      CONFIG_BINFMT_ELF=y
+      CONFIG_BINFMT_SCRIPT=y
+      CONFIG_TTY=y
+      CONFIG_UNIX98_PTYS=y
+      CONFIG_PROC_FS=y
+      CONFIG_SYSFS=y
+      CONFIG_DEVTMPFS=y
+      CONFIG_DEVTMPFS_MOUNT=y
+      CONFIG_TMPFS=y
+      CONFIG_BLOCK=y
+
+      # PCI support (vfkit uses virtio-PCI)
+      CONFIG_PCI=y
+      CONFIG_PCI_HOST_COMMON=y
+      CONFIG_PCI_HOST_GENERIC=y
+
+      # VIRTIO support
+      CONFIG_VIRTIO_MENU=y
+      CONFIG_VIRTIO=y
+      CONFIG_VIRTIO_PCI=y
+      CONFIG_VIRTIO_PCI_LIB=y
+
+      # virtio-console for serial (hvc0)
+      CONFIG_HVC_DRIVER=y
+      CONFIG_VIRTIO_CONSOLE=y
+
+      # virtio-blk for disk support
+      CONFIG_VIRTIO_BLK=y
+
+      # FAT filesystem for ESP
+      CONFIG_VFAT_FS=y
+      CONFIG_FAT_FS=y
+      CONFIG_FAT_DEFAULT_CODEPAGE=437
+      CONFIG_FAT_DEFAULT_IOCHARSET="iso8859-1"
+      CONFIG_NLS=y
+      CONFIG_NLS_CODEPAGE_437=y
+      CONFIG_NLS_ISO8859_1=y
+
+      # ext4 filesystem support
+      CONFIG_EXT4_FS=y
+
+      # initramfs support
+      CONFIG_BLK_DEV=y
+      CONFIG_BLK_DEV_INITRD=y
+      CONFIG_RD_GZIP=y
+      EOF
+
+      make ARCH=arm64 olddefconfig
+      make ARCH=arm64 -j$NIX_BUILD_CORES Image
+    '';
+
+    installPhase = ''
+      mkdir -p $out
+      cp arch/arm64/boot/Image $out/Image
+      cp .config $out/config
+    '';
+  };
+
   # Common init script builder
   mkInitScript = { networking ? true }: ''
 #!/bin/sh
@@ -336,6 +421,107 @@ DHCP
     (cd initrd-root && find . | cpio -o -H newc | gzip) > $out/initrd
   '';
 
+  # Init script for UEFI VMs - similar to disk init but for UEFI boot
+  mkUefiInitScript = ''
+#!/bin/sh
+export PATH=/bin
+
+mount -t proc proc /proc
+mount -t sysfs sys /sys
+mount -t devtmpfs dev /dev
+
+exec < /dev/console > /dev/console 2>&1
+
+echo ""
+echo "======================================"
+echo "  UEFI Boot successful!"
+echo "======================================"
+echo ""
+
+# Check EFI variables if available
+if [ -d /sys/firmware/efi ]; then
+  echo "EFI runtime services available"
+else
+  echo "EFI runtime services not available (normal in VM)"
+fi
+
+echo ""
+exec sh
+  '';
+
+  # Build a UEFI-bootable VM with ESP partition
+  # The kernel with EFI_STUB can boot directly as an EFI application
+  mkUefiVm = { name, sizeMB ? 64 }: linuxPkgs.runCommand "capsa-test-vm-${name}" {
+    nativeBuildInputs = with linuxPkgs; [
+      cpio gzip
+      parted dosfstools mtools
+      util-linux  # for sfdisk
+    ];
+  } ''
+    mkdir -p $out
+
+    # Build initrd with UEFI init script
+    mkdir -p initrd-root/{bin,dev,proc,sys,etc,tmp,mnt}
+
+    cp ${linuxPkgs.pkgsStatic.busybox}/bin/busybox initrd-root/bin/
+    for cmd in \
+      sh ash \
+      ls cat echo pwd mkdir ln rm cp mv touch head tail tee \
+      mount umount \
+      ps kill sleep \
+      grep sed awk cut sort uniq wc tr \
+      df du free top uptime uname dmesg \
+      vi less more \
+      chmod chown id whoami \
+      date env printenv export \
+      true false test expr \
+    ; do
+      ln -s busybox initrd-root/bin/$cmd
+    done
+
+    cat > initrd-root/init << 'INIT'
+    ${mkUefiInitScript}
+    INIT
+    chmod +x initrd-root/init
+
+    (cd initrd-root && find . | cpio -o -H newc | gzip) > initrd.gz
+
+    # Create GPT disk image with ESP partition
+    dd if=/dev/zero of=$out/disk.raw bs=1M count=${toString sizeMB}
+
+    # Create GPT partition table with a single ESP partition
+    # ESP starts at sector 2048 (1MB offset) and uses most of the disk
+    parted -s $out/disk.raw mklabel gpt
+    parted -s $out/disk.raw mkpart ESP fat32 1MiB 100%
+    parted -s $out/disk.raw set 1 esp on
+
+    # Create FAT32 filesystem in the ESP partition
+    # We need to extract just the partition, format it, then put it back
+    ESP_OFFSET=$((1 * 1024 * 1024))  # 1MiB offset
+    ESP_SIZE=$(((${toString sizeMB} - 1) * 1024 * 1024))  # Rest of disk
+
+    # Create a separate ESP image
+    dd if=/dev/zero of=esp.img bs=1 count=$ESP_SIZE
+
+    # Format as FAT32
+    mkfs.vfat -F 32 -n EFI esp.img
+
+    # Create EFI boot directory structure and copy kernel
+    mmd -i esp.img ::/EFI
+    mmd -i esp.img ::/EFI/BOOT
+    mcopy -i esp.img ${uefiKernel}/Image ::/EFI/BOOT/BOOTAA64.EFI
+
+    # Copy initrd to ESP as well (we'll use it via kernel command line)
+    mcopy -i esp.img initrd.gz ::/initrd.gz
+
+    # Write ESP image back to the disk at the correct offset
+    dd if=esp.img of=$out/disk.raw bs=1 seek=$ESP_OFFSET conv=notrunc
+
+    # Also output the kernel separately for reference
+    cp ${uefiKernel}/Image $out/kernel
+    cp initrd.gz $out/initrd
+  '';
+
   # Init script for disk-enabled VMs
   mkDiskInitScript = ''
 #!/bin/sh
@@ -427,10 +613,14 @@ exec sh
     minimal-net = mkTestVm { name = "minimal-net"; networking = true; kernel = minimalNetKernel; };
     ultra-minimal = mkUltraMinimalVm { name = "ultra-minimal"; };
     with-disk = mkTestVmWithDisk { name = "with-disk"; };
+    uefi = mkUefiVm { name = "uefi"; };
   };
 
   # VMs that have disk images
-  vmsWithDisk = [ "with-disk" ];
+  vmsWithDisk = [ "with-disk" "uefi" ];
+
+  # UEFI VMs need special manifest handling
+  uefiVms = [ "uefi" ];
 
   combined = linuxPkgs.runCommand "capsa-test-vms" {} ''
     mkdir -p $out
@@ -448,8 +638,9 @@ exec sh
     ${builtins.toJSON (builtins.mapAttrs (name: vm:
       { kernel = "${vm}/kernel"; initrd = "${vm}/initrd"; }
       // (if builtins.elem name vmsWithDisk then { disk = "${vm}/disk.raw"; } else {})
+      // (if builtins.elem name uefiVms then { is_uefi = true; } else {})
     ) vms)}
     EOF
   '';
 
-in vms // { inherit combined minimalKernel minimalNetKernel ultraMinimalKernel; }
+in vms // { inherit combined minimalKernel minimalNetKernel ultraMinimalKernel uefiKernel; }

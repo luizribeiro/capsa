@@ -10,6 +10,7 @@ pub struct GuestOsSupport {
 #[derive(Debug, Clone, Default)]
 pub struct BootMethodSupport {
     pub linux_direct: bool,
+    pub uefi: bool,
 }
 
 #[derive(Debug, Clone, Default)]

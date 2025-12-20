@@ -1,40 +1,26 @@
-use crate::builder::LinuxVmBuilder;
+use crate::builder::{BootConfigBuilder, VmBuilder};
 use crate::pool::Yes;
-use capsa_core::LinuxDirectBootConfig;
 
 /// Trait for VM boot configurations.
 ///
-/// Each boot configuration type (e.g., [`LinuxDirectBootConfig`]) implements
-/// this trait to specify which builder it produces. This allows [`Capsa::vm`]
-/// to accept different configuration types and return the appropriate builder.
-///
-/// # Implementing for New VM Types
-///
-/// When adding support for a new VM type (e.g., Windows, UEFI boot), create
-/// a new config struct and implement this trait:
-///
-/// ```ignore
-/// impl BootConfig for WindowsBootConfig {
-///     type Builder = WindowsVmBuilder;
-///
-///     fn into_builder(self) -> Self::Builder {
-///         WindowsVmBuilder::new(self)
-///     }
-/// }
-/// ```
-pub trait BootConfig {
-    /// The builder type produced by this configuration.
-    type Builder;
-
-    /// Converts this configuration into its corresponding builder.
-    fn into_builder(self) -> Self::Builder;
+/// Each boot configuration type (e.g., [`LinuxDirectBootConfig`](capsa_core::LinuxDirectBootConfig))
+/// implements this trait to specify which builder it produces. This allows [`Capsa::vm`]
+/// and [`Capsa::pool`] to accept different configuration types and return
+/// the appropriate builder.
+pub trait BootConfig: BootConfigBuilder {
+    /// Converts this configuration into a single VM builder.
+    fn into_builder(self) -> VmBuilder<Self, crate::pool::No>;
+    /// Converts this configuration into a pool builder.
+    fn into_pool_builder(self) -> VmBuilder<Self, Yes>;
 }
 
-impl BootConfig for LinuxDirectBootConfig {
-    type Builder = LinuxVmBuilder;
+impl<B: BootConfigBuilder> BootConfig for B {
+    fn into_builder(self) -> VmBuilder<Self, crate::pool::No> {
+        VmBuilder::new(self)
+    }
 
-    fn into_builder(self) -> Self::Builder {
-        LinuxVmBuilder::new(self)
+    fn into_pool_builder(self) -> VmBuilder<Self, Yes> {
+        VmBuilder::new_pool(self)
     }
 }
 
@@ -70,16 +56,15 @@ impl BootConfig for LinuxDirectBootConfig {
 /// # Ok(())
 /// # }
 /// ```
-// TODO: Add LinuxUefiBootConfig for UEFI boot support
-// TODO: Add WindowsBootConfig for Windows guest support
 pub struct Capsa;
 
 impl Capsa {
     /// Creates a builder for a VM with the given boot configuration.
     ///
     /// The configuration type determines which builder is returned.
-    /// Currently supports:
-    /// - [`LinuxDirectBootConfig`] → [`LinuxVmBuilder`]
+    /// Supports:
+    /// - [`LinuxDirectBootConfig`] → [`LinuxVmBuilder`] (fast Linux boot)
+    /// - [`UefiBootConfig`] → [`UefiVmBuilder`] (UEFI boot for any OS)
     ///
     /// # Example
     ///
@@ -93,7 +78,7 @@ impl Capsa {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn vm<C: BootConfig>(config: C) -> C::Builder {
+    pub fn vm<C: BootConfig>(config: C) -> VmBuilder<C, crate::pool::No> {
         config.into_builder()
     }
 
@@ -120,7 +105,7 @@ impl Capsa {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn pool(config: LinuxDirectBootConfig) -> LinuxVmBuilder<Yes> {
-        LinuxVmBuilder::new_pool(config)
+    pub fn pool<C: BootConfig>(config: C) -> VmBuilder<C, Yes> {
+        config.into_pool_builder()
     }
 }

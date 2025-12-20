@@ -16,6 +16,7 @@
 
 use crate::console::VmConsole;
 use capsa_core::{BackendVmHandle, Error, GuestOs, ResourceConfig, Result};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
@@ -80,6 +81,8 @@ pub struct VmHandle {
     error_message: std::sync::Mutex<Option<String>>,
     guest_os: GuestOs,
     resources: ResourceConfig,
+    /// Auto-generated temp file to clean up when VM stops (e.g., EFI variable store)
+    temp_file: Option<PathBuf>,
 }
 
 impl VmHandle {
@@ -95,7 +98,13 @@ impl VmHandle {
             error_message: std::sync::Mutex::new(None),
             guest_os,
             resources,
+            temp_file: None,
         }
+    }
+
+    pub(crate) fn with_temp_file(mut self, path: PathBuf) -> Self {
+        self.temp_file = Some(path);
+        self
     }
 
     /// Starts the VM if it's not already running.
@@ -133,15 +142,18 @@ impl VmHandle {
             Ok(Ok(code)) => {
                 *self.exit_code.lock().unwrap() = Some(code);
                 self.status.store(STATUS_STOPPED, Ordering::SeqCst);
+                self.cleanup_temp_files();
             }
             Ok(Err(e)) => {
                 *self.error_message.lock().unwrap() = Some(e.to_string());
                 self.status.store(STATUS_FAILED, Ordering::SeqCst);
+                self.cleanup_temp_files();
                 return Err(e);
             }
             Err(_) => {
                 self.backend_handle.kill().await?;
                 self.status.store(STATUS_STOPPED, Ordering::SeqCst);
+                self.cleanup_temp_files();
             }
         }
 
@@ -152,7 +164,18 @@ impl VmHandle {
     pub async fn kill(&self) -> Result<()> {
         self.backend_handle.kill().await?;
         self.status.store(STATUS_STOPPED, Ordering::SeqCst);
+        self.cleanup_temp_files();
         Ok(())
+    }
+
+    fn cleanup_temp_files(&self) {
+        if let Some(path) = &self.temp_file {
+            if let Err(e) = std::fs::remove_file(path) {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    tracing::warn!("Failed to clean up temp file {:?}: {}", path, e);
+                }
+            }
+        }
     }
 
     /// Returns the current status of the VM.
@@ -168,6 +191,7 @@ impl VmHandle {
         let code = self.backend_handle.wait().await?;
         *self.exit_code.lock().unwrap() = Some(code);
         self.status.store(STATUS_STOPPED, Ordering::SeqCst);
+        self.cleanup_temp_files();
         Ok(self.status())
     }
 
@@ -206,5 +230,114 @@ impl VmHandle {
     /// Returns the resource configuration (CPUs, memory) of the VM.
     pub fn resources(&self) -> &ResourceConfig {
         &self.resources
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use async_trait::async_trait;
+    use capsa_core::ConsoleStream;
+    use tempfile::NamedTempFile;
+
+    #[test]
+    fn cleanup_temp_files_deletes_file() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_path_buf();
+        temp_file.keep().unwrap();
+
+        assert!(path.exists(), "Temp file should exist before cleanup");
+
+        let handle = create_test_handle().with_temp_file(path.clone());
+        handle.cleanup_temp_files();
+
+        assert!(!path.exists(), "Temp file should be deleted after cleanup");
+    }
+
+    #[test]
+    fn cleanup_temp_files_ignores_missing_file() {
+        let path = std::env::temp_dir().join("nonexistent-capsa-test-file.efivarstore");
+        assert!(!path.exists());
+
+        let handle = create_test_handle().with_temp_file(path);
+        handle.cleanup_temp_files();
+    }
+
+    #[test]
+    fn cleanup_temp_files_does_nothing_without_temp_file() {
+        let handle = create_test_handle();
+        handle.cleanup_temp_files();
+    }
+
+    #[test]
+    fn with_temp_file_sets_path() {
+        let path = PathBuf::from("/test/path.efivarstore");
+        let handle = create_test_handle().with_temp_file(path.clone());
+        assert_eq!(handle.temp_file, Some(path));
+    }
+
+    fn create_test_handle() -> VmHandle {
+        VmHandle {
+            backend_handle: Arc::new(Box::new(MockBackendHandle)),
+            status: AtomicU8::new(STATUS_RUNNING),
+            exit_code: std::sync::Mutex::new(None),
+            error_message: std::sync::Mutex::new(None),
+            guest_os: GuestOs::Linux,
+            resources: ResourceConfig::default(),
+            temp_file: None,
+        }
+    }
+
+    struct MockBackendHandle;
+
+    #[async_trait]
+    impl BackendVmHandle for MockBackendHandle {
+        async fn is_running(&self) -> bool {
+            true
+        }
+
+        async fn shutdown(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn kill(&self) -> Result<()> {
+            Ok(())
+        }
+
+        async fn wait(&self) -> Result<i32> {
+            Ok(0)
+        }
+
+        async fn console_stream(&self) -> Result<Option<ConsoleStream>> {
+            Ok(None)
+        }
+    }
+
+    #[tokio::test]
+    async fn kill_cleans_up_temp_file() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_path_buf();
+        temp_file.keep().unwrap();
+
+        assert!(path.exists());
+
+        let handle = create_test_handle().with_temp_file(path.clone());
+        handle.kill().await.unwrap();
+
+        assert!(!path.exists(), "Temp file should be deleted after kill");
+    }
+
+    #[tokio::test]
+    async fn wait_cleans_up_temp_file() {
+        let temp_file = NamedTempFile::new().unwrap();
+        let path = temp_file.path().to_path_buf();
+        temp_file.keep().unwrap();
+
+        assert!(path.exists());
+
+        let handle = create_test_handle().with_temp_file(path.clone());
+        handle.wait().await.unwrap();
+
+        assert!(!path.exists(), "Temp file should be deleted after wait");
     }
 }

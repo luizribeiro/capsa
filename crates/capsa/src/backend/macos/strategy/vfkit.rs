@@ -2,7 +2,8 @@ use super::ExecutionStrategy;
 use crate::backend::macos::pty::Pty;
 use async_trait::async_trait;
 use capsa_core::{
-    BackendVmHandle, ConsoleStream, Error, MountMode, NetworkMode, Result, ShareMechanism, VmConfig,
+    BackendVmHandle, BootMethod, ConsoleStream, Error, MountMode, NetworkMode, Result,
+    ShareMechanism, VmConfig,
 };
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -27,13 +28,35 @@ impl VfkitStrategy {
             config.resources.cpus.to_string(),
             "--memory".to_string(),
             config.resources.memory_mb.to_string(),
-            "--kernel".to_string(),
-            config.kernel.display().to_string(),
-            "--initrd".to_string(),
-            config.initrd.display().to_string(),
-            "--kernel-cmdline".to_string(),
-            config.cmdline.clone(),
         ];
+
+        match &config.boot {
+            BootMethod::LinuxDirect {
+                kernel,
+                initrd,
+                cmdline,
+            } => {
+                args.extend([
+                    "--kernel".to_string(),
+                    kernel.display().to_string(),
+                    "--initrd".to_string(),
+                    initrd.display().to_string(),
+                    "--kernel-cmdline".to_string(),
+                    cmdline.clone(),
+                ]);
+            }
+            BootMethod::Uefi {
+                efi_variable_store,
+                create_variable_store,
+            } => {
+                let mut bootloader_arg =
+                    format!("efi,variable-store={}", efi_variable_store.display());
+                if *create_variable_store {
+                    bootloader_arg.push_str(",create");
+                }
+                args.extend(["--bootloader".to_string(), bootloader_arg]);
+            }
+        }
 
         if let Some(disk) = &config.root_disk {
             args.push("--device".to_string());

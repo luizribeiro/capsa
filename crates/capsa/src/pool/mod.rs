@@ -17,8 +17,9 @@ mod poolable;
 pub(crate) use poolable::{No, Poolability, Yes};
 
 use crate::backend::select_backend;
+use crate::builder::generate_temp_efi_store_path;
 use crate::handle::VmHandle;
-use capsa_core::{Error, GuestOs, HypervisorBackend, Result, VmConfig};
+use capsa_core::{BootMethod, Error, GuestOs, HypervisorBackend, Result, VmConfig};
 use std::ops::Deref;
 use std::sync::Arc;
 use tokio::sync::{Mutex, Notify};
@@ -74,13 +75,26 @@ impl VmPool {
         Ok(Self { inner })
     }
 
-    async fn spawn_vm(config: &VmConfig, backend: &dyn HypervisorBackend) -> Result<VmHandle> {
-        let backend_handle = backend.start(config).await?;
-        Ok(VmHandle::new(
-            backend_handle,
-            GuestOs::Linux,
-            config.resources.clone(),
-        ))
+    async fn spawn_vm(base_config: &VmConfig, backend: &dyn HypervisorBackend) -> Result<VmHandle> {
+        let (vm_config, temp_file) = match &base_config.boot {
+            BootMethod::Uefi { .. } => {
+                let temp_efi_path = generate_temp_efi_store_path();
+                let mut uefi_config = base_config.clone();
+                uefi_config.boot = BootMethod::Uefi {
+                    efi_variable_store: temp_efi_path.clone(),
+                    create_variable_store: true,
+                };
+                (uefi_config, Some(temp_efi_path))
+            }
+            _ => (base_config.clone(), None),
+        };
+
+        let backend_handle = backend.start(&vm_config).await?;
+        let mut handle = VmHandle::new(backend_handle, GuestOs::Linux, vm_config.resources.clone());
+        if let Some(path) = temp_file {
+            handle = handle.with_temp_file(path);
+        }
+        Ok(handle)
     }
 
     /// Reserves a VM from the pool, waiting if none are available.

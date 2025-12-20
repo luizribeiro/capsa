@@ -8,7 +8,8 @@ use objc2::runtime::ProtocolObject;
 use objc2::{AnyThread, MainThreadMarker};
 use objc2_foundation::{NSError, NSString, NSURL};
 use objc2_virtualization::{
-    VZDiskImageStorageDeviceAttachment, VZLinuxBootLoader, VZNATNetworkDeviceAttachment,
+    VZDiskImageStorageDeviceAttachment, VZEFIBootLoader, VZEFIVariableStore,
+    VZEFIVariableStoreInitializationOptions, VZLinuxBootLoader, VZNATNetworkDeviceAttachment,
     VZStorageDeviceConfiguration, VZVirtioBlockDeviceConfiguration,
     VZVirtioConsoleDeviceSerialPortConfiguration, VZVirtioNetworkDeviceConfiguration,
     VZVirtualMachine, VZVirtualMachineConfiguration,
@@ -17,10 +18,20 @@ use std::os::fd::OwnedFd;
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
 
+pub enum BootMethodConfig {
+    LinuxDirect {
+        kernel_path: PathBuf,
+        initrd_path: PathBuf,
+        cmdline: String,
+    },
+    Uefi {
+        efi_variable_store: PathBuf,
+        create_variable_store: bool,
+    },
+}
+
 pub struct CreateVmConfig {
-    pub kernel_path: PathBuf,
-    pub initrd_path: PathBuf,
-    pub cmdline: String,
+    pub boot: BootMethodConfig,
     pub cpus: u32,
     pub memory_mb: u64,
     pub root_disk: Option<DiskImage>,
@@ -36,15 +47,6 @@ pub fn create_pipe() -> Result<(OwnedFd, OwnedFd)> {
 }
 
 pub fn create_vm(config: CreateVmConfig) -> Result<(usize, usize)> {
-    let kernel_path_str = config
-        .kernel_path
-        .to_str()
-        .ok_or_else(|| Error::StartFailed("Invalid kernel path".to_string()))?;
-    let initrd_path_str = config
-        .initrd_path
-        .to_str()
-        .ok_or_else(|| Error::StartFailed("Invalid initrd path".to_string()))?;
-
     // SAFETY: This block uses Objective-C FFI via objc2 bindings to Apple's
     // Virtualization.framework. The safety requirements are:
     // 1. All objc2 types (NSURL, NSString, VZ*) are used according to their API contracts
@@ -54,16 +56,59 @@ pub fn create_vm(config: CreateVmConfig) -> Result<(usize, usize)> {
     // 3. File descriptors passed for console I/O must be valid open descriptors.
     //    NSFileHandle takes ownership and will manage their lifetime.
     unsafe {
-        let kernel_url = NSURL::fileURLWithPath(&NSString::from_str(kernel_path_str));
-        let boot_loader =
-            VZLinuxBootLoader::initWithKernelURL(VZLinuxBootLoader::alloc(), &kernel_url);
-
-        let initrd_url = NSURL::fileURLWithPath(&NSString::from_str(initrd_path_str));
-        boot_loader.setInitialRamdiskURL(Some(&initrd_url));
-        boot_loader.setCommandLine(&NSString::from_str(&config.cmdline));
-
         let vm_config = VZVirtualMachineConfiguration::new();
-        vm_config.setBootLoader(Some(&boot_loader));
+
+        match &config.boot {
+            BootMethodConfig::LinuxDirect {
+                kernel_path,
+                initrd_path,
+                cmdline,
+            } => {
+                let kernel_path_str = kernel_path
+                    .to_str()
+                    .ok_or_else(|| Error::StartFailed("Invalid kernel path".to_string()))?;
+                let initrd_path_str = initrd_path
+                    .to_str()
+                    .ok_or_else(|| Error::StartFailed("Invalid initrd path".to_string()))?;
+
+                let kernel_url = NSURL::fileURLWithPath(&NSString::from_str(kernel_path_str));
+                let boot_loader =
+                    VZLinuxBootLoader::initWithKernelURL(VZLinuxBootLoader::alloc(), &kernel_url);
+
+                let initrd_url = NSURL::fileURLWithPath(&NSString::from_str(initrd_path_str));
+                boot_loader.setInitialRamdiskURL(Some(&initrd_url));
+                boot_loader.setCommandLine(&NSString::from_str(cmdline));
+
+                vm_config.setBootLoader(Some(&boot_loader));
+            }
+            BootMethodConfig::Uefi {
+                efi_variable_store,
+                create_variable_store,
+            } => {
+                let store_path_str = efi_variable_store
+                    .to_str()
+                    .ok_or_else(|| Error::StartFailed("Invalid EFI store path".to_string()))?;
+                let store_url = NSURL::fileURLWithPath(&NSString::from_str(store_path_str));
+
+                let variable_store = if *create_variable_store {
+                    VZEFIVariableStore::initCreatingVariableStoreAtURL_options_error(
+                        VZEFIVariableStore::alloc(),
+                        &store_url,
+                        VZEFIVariableStoreInitializationOptions::AllowOverwrite,
+                    )
+                    .map_err(|e| {
+                        Error::StartFailed(format!("Failed to create EFI variable store: {}", e))
+                    })?
+                } else {
+                    VZEFIVariableStore::initWithURL(VZEFIVariableStore::alloc(), &store_url)
+                };
+
+                let boot_loader = VZEFIBootLoader::init(VZEFIBootLoader::alloc());
+                boot_loader.setVariableStore(Some(&variable_store));
+
+                vm_config.setBootLoader(Some(&boot_loader));
+            }
+        }
         vm_config.setCPUCount(config.cpus as usize);
         vm_config.setMemorySize(config.memory_mb * 1024 * 1024);
 

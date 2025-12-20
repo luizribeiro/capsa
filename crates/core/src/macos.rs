@@ -6,7 +6,10 @@ use crate::{
 pub fn macos_virtualization_capabilities() -> BackendCapabilities {
     BackendCapabilities {
         guest_os: GuestOsSupport { linux: true },
-        boot_methods: BootMethodSupport { linux_direct: true },
+        boot_methods: BootMethodSupport {
+            linux_direct: true,
+            uefi: true,
+        },
         image_formats: ImageFormatSupport {
             raw: true,
             qcow2: false,
@@ -51,6 +54,12 @@ mod tests {
         fn supports_linux_direct_boot() {
             let caps = macos_virtualization_capabilities();
             assert!(caps.boot_methods.linux_direct);
+        }
+
+        #[test]
+        fn supports_uefi_boot() {
+            let caps = macos_virtualization_capabilities();
+            assert!(caps.boot_methods.uefi);
         }
 
         #[test]

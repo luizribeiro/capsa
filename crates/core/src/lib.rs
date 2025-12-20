@@ -7,8 +7,12 @@ pub mod macos;
 pub mod types;
 
 pub use async_fd::{AsyncOwnedFd, AsyncPipe};
-pub use backend::{BackendVmHandle, ConsoleIo, ConsoleStream, HypervisorBackend, VmConfig};
-pub use boot::{CmdlineArg, KernelCmdline, LinuxDirectBootConfig};
+pub use backend::{
+    BackendVmHandle, BootMethod, ConsoleIo, ConsoleStream, HypervisorBackend, VmConfig,
+};
+pub use boot::{
+    CmdlineArg, EfiVariableStore, KernelCmdline, LinuxDirectBootConfig, UefiBootConfig,
+};
 pub use capabilities::{
     BackendCapabilities, BootMethodSupport, GuestOsSupport, ImageFormatSupport, NetworkModeSupport,
     ShareMechanismSupport,

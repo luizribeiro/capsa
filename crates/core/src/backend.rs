@@ -7,14 +7,28 @@ use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use tokio::io::{AsyncRead, AsyncWrite};
 
+/// Boot method configuration for a VM.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum BootMethod {
+    /// Linux direct kernel boot - bypasses bootloader for faster boot.
+    LinuxDirect {
+        kernel: PathBuf,
+        initrd: PathBuf,
+        cmdline: String,
+    },
+    /// UEFI boot - uses EFI bootloader on disk (OS-agnostic).
+    Uefi {
+        efi_variable_store: PathBuf,
+        create_variable_store: bool,
+    },
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VmConfig {
-    pub kernel: PathBuf,
-    pub initrd: PathBuf,
+    pub boot: BootMethod,
     pub root_disk: Option<DiskImage>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub disks: Vec<DiskImage>,
-    pub cmdline: String,
     pub resources: ResourceConfig,
     pub shares: Vec<SharedDir>,
     pub network: NetworkMode,

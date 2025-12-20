@@ -61,14 +61,16 @@ pub mod test_utils;
 // Core API - The types most users need
 // ============================================================================
 
-pub use builder::LinuxVmBuilder;
+pub use builder::{LinuxVmBuilder, UefiVmBuilder};
 pub use config::{BootConfig, Capsa};
 pub use console::{ConsoleReader, ConsoleWriter, VmConsole};
 pub use handle::{VmHandle, VmStatus};
 pub use pool::{PooledVm, VmPool};
 
 // Boot and disk configuration
-pub use capsa_core::{DiskImage, ImageFormat, LinuxDirectBootConfig};
+pub use capsa_core::{
+    DiskImage, EfiVariableStore, ImageFormat, LinuxDirectBootConfig, UefiBootConfig,
+};
 
 // Directory sharing
 pub use capsa_core::{MountMode, SharedDir};
