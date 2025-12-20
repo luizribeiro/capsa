@@ -357,13 +357,16 @@ echo ""
 if [ -e /dev/vda ]; then
   echo "Mounting disk /dev/vda..."
   mkdir -p /mnt
-  if mount /dev/vda /mnt; then
-    echo "Disk mounted at /mnt"
-    echo "Disk contents:"
-    ls -la /mnt
+  # Try read-write first, fallback to read-only
+  if mount /dev/vda /mnt 2>/dev/null; then
+    echo "Disk mounted at /mnt (read-write)"
+  elif mount -o ro /dev/vda /mnt; then
+    echo "Disk mounted at /mnt (read-only)"
   else
     echo "Failed to mount disk"
   fi
+  echo "Disk contents:"
+  ls -la /mnt
 else
   echo "No disk found at /dev/vda"
 fi

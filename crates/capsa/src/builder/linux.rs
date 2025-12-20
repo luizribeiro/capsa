@@ -700,4 +700,112 @@ mod tests {
         let err = builder.validate_disk_files().unwrap_err();
         assert!(matches!(err, Error::InvalidConfig(msg) if msg.contains("not writable")));
     }
+
+    #[test]
+    fn disk_method_adds_to_disks_vector() {
+        let config = LinuxDirectBootConfig::new("/kernel", "/initrd");
+        let builder = LinuxVmBuilder::new(config)
+            .disk(DiskImage::new("/disk1.raw"))
+            .disk(DiskImage::new("/disk2.raw"));
+
+        assert!(builder.config.root_disk.is_none());
+        assert_eq!(builder.disks.len(), 2);
+        assert_eq!(builder.disks[0].path, PathBuf::from("/disk1.raw"));
+        assert_eq!(builder.disks[1].path, PathBuf::from("/disk2.raw"));
+    }
+
+    #[test]
+    fn root_disk_and_additional_disks_separate() {
+        let config = LinuxDirectBootConfig::new("/kernel", "/initrd")
+            .with_root_disk(DiskImage::new("/root.raw"));
+        let builder = LinuxVmBuilder::new(config)
+            .disk(DiskImage::new("/data1.raw"))
+            .disk(DiskImage::new("/data2.raw"));
+
+        assert!(builder.config.root_disk.is_some());
+        assert_eq!(
+            builder.config.root_disk.as_ref().unwrap().path,
+            PathBuf::from("/root.raw")
+        );
+        assert_eq!(builder.disks.len(), 2);
+    }
+
+    #[test]
+    fn validate_additional_disk_format_unsupported() {
+        let config = LinuxDirectBootConfig::new("/kernel", "/initrd");
+        let builder = LinuxVmBuilder::new(config)
+            .disk(DiskImage::with_format("/disk.qcow2", ImageFormat::Qcow2));
+
+        let mut caps = all_capabilities();
+        caps.image_formats.qcow2 = false;
+        let err = builder.validate(&caps).unwrap_err();
+        assert!(matches!(err, Error::UnsupportedFeature(f) if f.contains("qcow2")));
+    }
+
+    #[test]
+    fn validate_disk_files_additional_disk_readonly_not_found() {
+        let disk = DiskImage::new("/nonexistent/additional.raw").read_only();
+        let builder: LinuxVmBuilder<Yes> = LinuxVmBuilder {
+            config: LinuxDirectBootConfig {
+                kernel: PathBuf::from("/kernel"),
+                initrd: PathBuf::from("/initrd"),
+                root_disk: None,
+            },
+            resources: ResourceConfig::default(),
+            disks: vec![disk],
+            shares: vec![],
+            network: NetworkMode::default(),
+            console_enabled: false,
+            cmdline: KernelCmdline::new(),
+            timeout: None,
+            poolable: Poolability::new(),
+        };
+        let err = builder.validate_disk_files().unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig(msg) if msg.contains("not found")));
+    }
+
+    #[test]
+    fn validate_disk_files_additional_disk_writable() {
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let disk = DiskImage::new(temp_file.path());
+        let builder: LinuxVmBuilder<Yes> = LinuxVmBuilder {
+            config: LinuxDirectBootConfig {
+                kernel: PathBuf::from("/kernel"),
+                initrd: PathBuf::from("/initrd"),
+                root_disk: None,
+            },
+            resources: ResourceConfig::default(),
+            disks: vec![disk],
+            shares: vec![],
+            network: NetworkMode::default(),
+            console_enabled: false,
+            cmdline: KernelCmdline::new(),
+            timeout: None,
+            poolable: Poolability::new(),
+        };
+        assert!(builder.validate_disk_files().is_ok());
+    }
+
+    #[test]
+    fn validate_disk_files_mixed_root_and_additional() {
+        let temp_root = tempfile::NamedTempFile::new().unwrap();
+        let temp_additional = tempfile::NamedTempFile::new().unwrap();
+
+        let builder: LinuxVmBuilder<Yes> = LinuxVmBuilder {
+            config: LinuxDirectBootConfig {
+                kernel: PathBuf::from("/kernel"),
+                initrd: PathBuf::from("/initrd"),
+                root_disk: Some(DiskImage::new(temp_root.path()).read_only()),
+            },
+            resources: ResourceConfig::default(),
+            disks: vec![DiskImage::new(temp_additional.path())],
+            shares: vec![],
+            network: NetworkMode::default(),
+            console_enabled: false,
+            cmdline: KernelCmdline::new(),
+            timeout: None,
+            poolable: Poolability::new(),
+        };
+        assert!(builder.validate_disk_files().is_ok());
+    }
 }

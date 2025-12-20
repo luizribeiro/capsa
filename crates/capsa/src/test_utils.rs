@@ -10,11 +10,11 @@ use std::path::PathBuf;
 use std::sync::OnceLock;
 
 #[derive(Debug, Deserialize)]
-struct VmPaths {
-    kernel: PathBuf,
-    initrd: PathBuf,
+pub struct VmPaths {
+    pub kernel: PathBuf,
+    pub initrd: PathBuf,
     #[serde(default)]
-    disk: Option<PathBuf>,
+    pub disk: Option<PathBuf>,
 }
 
 type VmManifest = HashMap<String, VmPaths>;
@@ -41,11 +41,16 @@ fn load_manifest() -> &'static VmManifest {
         .expect("Manifest should be loaded")
 }
 
-fn boot_config(name: &str) -> LinuxDirectBootConfig {
+/// Returns the paths for a test VM from the manifest.
+pub fn vm_paths(name: &str) -> &'static VmPaths {
     let manifest = load_manifest();
-    let paths = manifest
+    manifest
         .get(name)
-        .unwrap_or_else(|| panic!("Unknown test VM: {name}. Available: {:?}", manifest.keys()));
+        .unwrap_or_else(|| panic!("Unknown test VM: {name}. Available: {:?}", manifest.keys()))
+}
+
+fn boot_config(name: &str) -> LinuxDirectBootConfig {
+    let paths = vm_paths(name);
 
     if !paths.kernel.exists() {
         panic!("Kernel not found at {:?}", paths.kernel);
@@ -60,7 +65,8 @@ fn boot_config(name: &str) -> LinuxDirectBootConfig {
         if !disk_path.exists() {
             panic!("Disk not found at {:?}", disk_path);
         }
-        config = config.with_root_disk(DiskImage::new(disk_path));
+        // Default to read-only since disk images are typically in the Nix store
+        config = config.with_root_disk(DiskImage::new(disk_path).read_only());
     }
 
     config

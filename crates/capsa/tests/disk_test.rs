@@ -3,11 +3,13 @@
 
 //! Integration tests for VM disk functionality.
 
-use capsa::test_utils::test_vm;
+use capsa::test_utils::{test_vm, vm_paths};
+use capsa::{Capsa, DiskImage, LinuxDirectBootConfig};
 use std::time::Duration;
 
 #[apple_main::harness_test]
-async fn test_vm_with_disk_mounts_successfully() {
+async fn test_vm_with_readonly_disk_mounts() {
+    // Uses read-only disk (default for test VMs since disk is in Nix store)
     let vm = test_vm("with-disk")
         .build()
         .await
@@ -24,12 +26,29 @@ async fn test_vm_with_disk_mounts_successfully() {
         .await
         .expect("Disk was not mounted");
 
+    // Verify it's mounted read-only
+    console
+        .wait_for_timeout("read-only", Duration::from_secs(5))
+        .await
+        .expect("Disk should be mounted read-only");
+
     vm.kill().await.expect("Failed to kill VM");
 }
 
 #[apple_main::harness_test]
 async fn test_disk_read_write() {
-    let vm = test_vm("with-disk")
+    // Copy disk to temp file so we can write to it
+    let paths = vm_paths("with-disk");
+    let disk_path = paths.disk.as_ref().expect("with-disk should have a disk");
+
+    let temp_disk = tempfile::NamedTempFile::new().expect("Failed to create temp file");
+    std::fs::copy(disk_path, temp_disk.path()).expect("Failed to copy disk");
+
+    let config = LinuxDirectBootConfig::new(&paths.kernel, &paths.initrd)
+        .with_root_disk(DiskImage::new(temp_disk.path()));
+
+    let vm = Capsa::linux(config)
+        .console_enabled()
         .build()
         .await
         .expect("Failed to build VM");
@@ -39,6 +58,12 @@ async fn test_disk_read_write() {
         .wait_for_timeout("Disk mounted at /mnt", Duration::from_secs(30))
         .await
         .expect("Disk was not mounted");
+
+    // Verify it's mounted read-write
+    console
+        .wait_for_timeout("read-write", Duration::from_secs(5))
+        .await
+        .expect("Disk should be mounted read-write");
 
     tokio::time::sleep(Duration::from_millis(50)).await;
 
