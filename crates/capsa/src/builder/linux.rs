@@ -75,9 +75,7 @@ pub struct LinuxVmBuilder<P = No> {
 
 impl LinuxVmBuilder<No> {
     /// Creates a new builder for a single VM.
-    ///
-    /// Prefer using [`Capsa::vm`](crate::Capsa::vm) instead of calling this directly.
-    pub fn new(config: LinuxDirectBootConfig) -> Self {
+    pub(crate) fn new(config: LinuxDirectBootConfig) -> Self {
         Self {
             config,
             resources: ResourceConfig::default(),
@@ -132,9 +130,7 @@ impl LinuxVmBuilder<No> {
 
 impl LinuxVmBuilder<Yes> {
     /// Creates a new builder for a VM pool.
-    ///
-    /// Prefer using [`Capsa::pool`](crate::Capsa::pool) instead of calling this directly.
-    pub fn new_pool(config: LinuxDirectBootConfig) -> Self {
+    pub(crate) fn new_pool(config: LinuxDirectBootConfig) -> Self {
         Self {
             config,
             resources: ResourceConfig::default(),
