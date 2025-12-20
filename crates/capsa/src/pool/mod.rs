@@ -24,7 +24,7 @@
 //!
 //! # async fn example() -> capsa::Result<()> {
 //! let config = LinuxDirectBootConfig::new("./kernel", "./initrd");
-//! let pool = Capsa::linux(config)
+//! let pool = Capsa::vm(config)
 //!     .cpus(2)
 //!     .memory_mb(512)
 //!     .build_pool(5)

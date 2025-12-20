@@ -16,7 +16,7 @@
 //! let config = LinuxDirectBootConfig::new("./kernel", "./initrd")
 //!     .with_root_disk(DiskImage::new("./rootfs.raw"));
 //!
-//! let vm = Capsa::linux(config)
+//! let vm = Capsa::vm(config)
 //!     .cpus(2)
 //!     .memory_mb(1024)
 //!     .console_enabled()

@@ -10,7 +10,7 @@
 //!
 //! # Lifecycle
 //!
-//! VMs created via [`Capsa::linux`](crate::Capsa::linux) start in the `Running`
+//! VMs created via [`Capsa::vm`](crate::Capsa::vm) start in the `Running`
 //! state. Use [`stop`](VmHandle::stop) for graceful shutdown or
 //! [`kill`](VmHandle::kill) for immediate termination.
 

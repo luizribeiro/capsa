@@ -52,7 +52,7 @@ async fn test_disk_read_write() {
     let config = LinuxDirectBootConfig::new(&paths.kernel, &paths.initrd)
         .with_root_disk(DiskImage::new(&temp_disk_path));
 
-    let vm = Capsa::linux(config)
+    let vm = Capsa::vm(config)
         .console_enabled()
         .build()
         .await

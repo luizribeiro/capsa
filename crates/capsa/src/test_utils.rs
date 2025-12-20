@@ -85,7 +85,7 @@ fn boot_config(name: &str) -> LinuxDirectBootConfig {
 /// `nix-build test-vms.nix -o result-vms`
 pub fn test_vm(name: &str) -> LinuxVmBuilder {
     let config = boot_config(name);
-    Capsa::linux(config).console_enabled()
+    Capsa::vm(config).console_enabled()
 }
 
 /// Convenience function for the default test VM (with networking).

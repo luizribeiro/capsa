@@ -70,7 +70,7 @@ pub async fn run(args: RunArgs) -> anyhow::Result<()> {
         }};
     }
 
-    let mut base = Capsa::linux(boot_config)
+    let mut base = Capsa::vm(boot_config)
         .cpus(args.cpus)
         .memory_mb(args.memory);
 

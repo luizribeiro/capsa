@@ -11,7 +11,7 @@ use std::time::Duration;
 
 /// Builder for configuring and creating Linux virtual machines.
 ///
-/// Use [`Capsa::linux`](crate::Capsa::linux) to create a builder instance.
+/// Use [`Capsa::vm`](crate::Capsa::vm) to create a builder instance.
 /// The builder uses a fluent API—chain methods to configure, then call
 /// [`build`](Self::build) or [`build_pool`](Self::build_pool).
 ///
@@ -21,7 +21,7 @@ use std::time::Duration;
 /// # use capsa::{Capsa, LinuxDirectBootConfig};
 /// # async fn example() -> capsa::Result<()> {
 /// # let config = LinuxDirectBootConfig::new("k", "i");
-/// let vm = Capsa::linux(config)
+/// let vm = Capsa::vm(config)
 ///     .cpus(4)           // Default: 1
 ///     .memory_mb(2048)   // Default: 512
 ///     .build().await?;
@@ -40,7 +40,7 @@ use std::time::Duration;
 /// let config = LinuxDirectBootConfig::new("./kernel", "./initrd")
 ///     .with_root_disk(DiskImage::new("./rootfs.raw"));
 ///
-/// let vm = Capsa::linux(config)
+/// let vm = Capsa::vm(config)
 ///     .disk(DiskImage::new("./data.raw"))  // /dev/vdb
 ///     .build().await?;
 /// # Ok(())
@@ -55,7 +55,7 @@ use std::time::Duration;
 /// # use capsa::{Capsa, LinuxDirectBootConfig, MountMode};
 /// # async fn example() -> capsa::Result<()> {
 /// # let config = LinuxDirectBootConfig::new("k", "i");
-/// let vm = Capsa::linux(config)
+/// let vm = Capsa::vm(config)
 ///     .share("./src", "/mnt/src", MountMode::ReadOnly)
 ///     .share("./output", "/mnt/output", MountMode::ReadWrite)
 ///     .build().await?;
@@ -70,11 +70,11 @@ use std::time::Duration;
 /// # async fn example() -> capsa::Result<()> {
 /// # let config = LinuxDirectBootConfig::new("k", "i");
 /// // NAT networking (default)
-/// let vm = Capsa::linux(config).network(NetworkMode::Nat).build().await?;
+/// let vm = Capsa::vm(config).network(NetworkMode::Nat).build().await?;
 ///
 /// // No networking
 /// # let config = LinuxDirectBootConfig::new("k", "i");
-/// let vm = Capsa::linux(config).no_network().build().await?;
+/// let vm = Capsa::vm(config).no_network().build().await?;
 /// # Ok(())
 /// # }
 /// ```
@@ -87,7 +87,7 @@ use std::time::Duration;
 /// # use capsa::{Capsa, LinuxDirectBootConfig};
 /// # async fn example() -> capsa::Result<()> {
 /// # let config = LinuxDirectBootConfig::new("k", "i");
-/// let vm = Capsa::linux(config)
+/// let vm = Capsa::vm(config)
 ///     .console_enabled()  // Required for vm.console()
 ///     .build().await?;
 ///
@@ -124,7 +124,7 @@ pub struct LinuxVmBuilder<P = Yes> {
 impl LinuxVmBuilder<Yes> {
     /// Creates a new builder with the given boot configuration.
     ///
-    /// Prefer using [`Capsa::linux`](crate::Capsa::linux) instead of calling this directly.
+    /// Prefer using [`Capsa::vm`](crate::Capsa::vm) instead of calling this directly.
     pub fn new(config: LinuxDirectBootConfig) -> Self {
         Self {
             config,

@@ -23,7 +23,7 @@ use tokio::time::timeout;
 /// # use capsa::{Capsa, LinuxDirectBootConfig, MountMode, VmConsole};
 /// # async fn example() -> capsa::Result<()> {
 /// # let config = LinuxDirectBootConfig::new("k", "i");
-/// let vm = Capsa::linux(config)
+/// let vm = Capsa::vm(config)
 ///     .share("./target/release", "/app", MountMode::ReadOnly)
 ///     .console_enabled()
 ///     .build().await?;

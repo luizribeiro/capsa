@@ -22,7 +22,7 @@ use capsa_core::LinuxDirectBootConfig;
 ///     .with_root_disk(DiskImage::new("./rootfs.raw"));
 ///
 /// // Build and start the VM
-/// let vm = Capsa::linux(config)
+/// let vm = Capsa::vm(config)
 ///     .cpus(2)
 ///     .memory_mb(1024)
 ///     .share("./workspace", "/mnt", MountMode::ReadWrite)
@@ -36,20 +36,19 @@ use capsa_core::LinuxDirectBootConfig;
 /// # Ok(())
 /// # }
 /// ```
-// TODO: Add Capsa::linux_uefi for UEFI boot support
-// TODO: Add Capsa::windows for Windows guest support
+// TODO: Add LinuxUefiBootConfig for UEFI boot support
+// TODO: Add WindowsBootConfig for Windows guest support
 pub struct Capsa;
 
 impl Capsa {
-    /// Creates a builder for a Linux VM using direct kernel boot.
+    /// Creates a builder for a VM with the given boot configuration.
     ///
-    /// Direct boot bypasses the bootloader and boots the kernel directly,
-    /// which is faster and simpler for headless Linux VMs. You provide
-    /// the kernel image (bzImage) and initrd directly.
+    /// The type of VM is determined by the configuration passed in.
+    /// Currently supports Linux direct boot via [`LinuxDirectBootConfig`].
     ///
     /// # Arguments
     ///
-    /// * `config` - Boot configuration specifying kernel, initrd, and optional root disk
+    /// * `config` - Boot configuration specifying how to boot the VM
     ///
     /// # Example
     ///
@@ -58,18 +57,18 @@ impl Capsa {
     ///
     /// # async fn example() -> capsa::Result<()> {
     /// // Minimal configuration (no persistent storage)
-    /// let vm = Capsa::linux(LinuxDirectBootConfig::new("./kernel", "./initrd"))
+    /// let vm = Capsa::vm(LinuxDirectBootConfig::new("./kernel", "./initrd"))
     ///     .build()
     ///     .await?;
     ///
     /// // With a root filesystem
     /// let config = LinuxDirectBootConfig::new("./kernel", "./initrd")
     ///     .with_root_disk(DiskImage::new("./rootfs.raw"));
-    /// let vm = Capsa::linux(config).build().await?;
+    /// let vm = Capsa::vm(config).build().await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn linux(config: LinuxDirectBootConfig) -> LinuxVmBuilder {
+    pub fn vm(config: LinuxDirectBootConfig) -> LinuxVmBuilder {
         LinuxVmBuilder::new(config)
     }
 }

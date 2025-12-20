@@ -77,7 +77,7 @@ Spawns `capsa-apple-vzd` in a separate process:
 ```rust
 #[tokio::main]  // Tokio owns main thread - that's fine!
 async fn main() {
-    let vm = Capsa::linux(config).build().await?;
+    let vm = Capsa::vm(config).build().await?;
 }
 ```
 
@@ -90,7 +90,7 @@ Uses Virtualization.framework directly, but requires `#[apple_main::main]`:
 ```rust
 #[apple_main::main]  // Manages main thread for Apple frameworks
 async fn main() {
-    let vm = Capsa::linux(config).build().await?;
+    let vm = Capsa::vm(config).build().await?;
 }
 ```
 
