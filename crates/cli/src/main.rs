@@ -1,5 +1,5 @@
 use capsa::{
-    BackendInfo, Capsa, DiskImage, HostPlatform, LinuxDirectBootConfig, MountMode,
+    Capsa, DiskImage, HostPlatform, HypervisorBackend, LinuxDirectBootConfig, MountMode,
     available_backends,
 };
 use clap::{Parser, Subcommand};
@@ -9,18 +9,18 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 #[cfg(unix)]
 use nix::sys::termios::{self, ControlFlags, InputFlags, LocalFlags, OutputFlags, SetArg, Termios};
 
-fn print_backends_json(backends: &[BackendInfo]) {
+fn print_backends_json(backends: &[Box<dyn HypervisorBackend>]) {
     println!("{{");
     println!("  \"backends\": [");
     for (i, backend) in backends.iter().enumerate() {
-        let caps = &backend.capabilities;
+        let caps = backend.capabilities();
         println!("    {{");
-        println!("      \"name\": \"{}\",", backend.name);
+        println!("      \"name\": \"{}\",", backend.name());
         println!(
             "      \"platform\": \"{}\",",
-            platform_name(backend.platform)
+            platform_name(backend.platform())
         );
-        println!("      \"available\": {},", backend.available);
+        println!("      \"available\": {},", backend.is_available());
         println!("      \"capabilities\": {{");
         println!("        \"guest_os\": {{");
         println!("          \"linux\": {}", caps.guest_os.linux);
@@ -69,7 +69,7 @@ fn print_backends_json(backends: &[BackendInfo]) {
     println!("}}");
 }
 
-fn print_backends_text(backends: &[BackendInfo]) {
+fn print_backends_text(backends: &[Box<dyn HypervisorBackend>]) {
     if backends.is_empty() {
         println!("No backends available.");
         return;
@@ -79,14 +79,18 @@ fn print_backends_text(backends: &[BackendInfo]) {
     println!();
 
     for backend in backends {
-        let caps = &backend.capabilities;
-        let status = if backend.available {
+        let caps = backend.capabilities();
+        let status = if backend.is_available() {
             "Available"
         } else {
             "Not available"
         };
 
-        println!("  {} ({})", backend.name, platform_name(backend.platform));
+        println!(
+            "  {} ({})",
+            backend.name(),
+            platform_name(backend.platform())
+        );
         println!("    Status: {status}");
         println!("    Guest OS: Linux={}", yes_no(caps.guest_os.linux));
         println!(
