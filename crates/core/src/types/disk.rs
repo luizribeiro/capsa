@@ -24,22 +24,32 @@ impl ImageFormat {
 pub struct DiskImage {
     pub path: PathBuf,
     pub format: ImageFormat,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub read_only: bool,
 }
 
 impl DiskImage {
-    // TODO: rename as root_disk?
     pub fn new(path: impl Into<PathBuf>) -> Self {
         let path = path.into();
         let format = ImageFormat::from_extension(&path).unwrap_or_default();
-        Self { path, format }
+        Self {
+            path,
+            format,
+            read_only: false,
+        }
     }
 
-    // TODO: rename as with_root_disk?
     pub fn with_format(path: impl Into<PathBuf>, format: ImageFormat) -> Self {
         Self {
             path: path.into(),
             format,
+            read_only: false,
         }
+    }
+
+    pub fn read_only(mut self) -> Self {
+        self.read_only = true;
+        self
     }
 }
 
@@ -110,12 +120,14 @@ mod tests {
             let disk = DiskImage::new("/path/to/disk.raw");
             assert_eq!(disk.path, PathBuf::from("/path/to/disk.raw"));
             assert_eq!(disk.format, ImageFormat::Raw);
+            assert!(!disk.read_only);
         }
 
         #[test]
         fn new_infers_qcow2_format() {
             let disk = DiskImage::new("/path/to/disk.qcow2");
             assert_eq!(disk.format, ImageFormat::Qcow2);
+            assert!(!disk.read_only);
         }
 
         #[test]
@@ -129,6 +141,20 @@ mod tests {
             let disk = DiskImage::with_format("/path/to/disk.raw", ImageFormat::Qcow2);
             assert_eq!(disk.path, PathBuf::from("/path/to/disk.raw"));
             assert_eq!(disk.format, ImageFormat::Qcow2);
+            assert!(!disk.read_only);
+        }
+
+        #[test]
+        fn read_only_sets_flag() {
+            let disk = DiskImage::new("/path/to/disk.raw").read_only();
+            assert!(disk.read_only);
+        }
+
+        #[test]
+        fn read_only_chains_with_format() {
+            let disk = DiskImage::with_format("/path/to/disk.raw", ImageFormat::Qcow2).read_only();
+            assert_eq!(disk.format, ImageFormat::Qcow2);
+            assert!(disk.read_only);
         }
     }
 
@@ -163,6 +189,30 @@ mod tests {
             let deserialized: DiskImage = serde_json::from_str(&json).unwrap();
             assert_eq!(deserialized.path, disk.path);
             assert_eq!(deserialized.format, disk.format);
+            assert_eq!(deserialized.read_only, disk.read_only);
+        }
+
+        #[test]
+        fn disk_image_omits_read_only_when_false() {
+            let disk = DiskImage::new("/path/to/disk.raw");
+            let json = serde_json::to_string(&disk).unwrap();
+            assert!(!json.contains("read_only"));
+        }
+
+        #[test]
+        fn disk_image_includes_read_only_when_true() {
+            let disk = DiskImage::new("/path/to/disk.raw").read_only();
+            let json = serde_json::to_string(&disk).unwrap();
+            assert!(json.contains("read_only"));
+            assert!(json.contains("true"));
+        }
+
+        #[test]
+        fn disk_image_read_only_roundtrip() {
+            let disk = DiskImage::new("/path/to/disk.qcow2").read_only();
+            let json = serde_json::to_string(&disk).unwrap();
+            let deserialized: DiskImage = serde_json::from_str(&json).unwrap();
+            assert!(deserialized.read_only);
         }
     }
 }
