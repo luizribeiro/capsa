@@ -17,10 +17,7 @@ mod macos;
 ))]
 pub use macos::MacOsBackend;
 
-pub use capsa_core::{
-    BackendCapabilities, BackendVmHandle, ConsoleIo, ConsoleStream, HostPlatform,
-    HypervisorBackend, KernelCmdline, Result, VmConfig,
-};
+pub use capsa_core::{HostPlatform, HypervisorBackend, Result};
 
 /// Returns all compiled-in backends.
 pub fn available_backends() -> Vec<Box<dyn HypervisorBackend>> {

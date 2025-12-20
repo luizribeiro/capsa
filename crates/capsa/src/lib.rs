@@ -32,10 +32,7 @@
 //! }
 //! ```
 
-// TODO: audit which types really should be exposed publicly. things like capabilities
-// probably don't have to be public outside of this crate
-
-pub mod backend;
+mod backend;
 mod builder;
 mod config;
 mod console;

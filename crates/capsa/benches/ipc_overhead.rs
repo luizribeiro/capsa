@@ -3,32 +3,13 @@
 
 use apple_main::criterion::Criterion;
 use apple_main::criterion_macro::criterion;
-use capsa::backend::{HypervisorBackend, VmConfig};
 use capsa::test_utils::test_vm;
-use capsa::{NetworkMode, ResourceConfig};
-use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 fn custom_criterion() -> Criterion {
     Criterion::default()
         .measurement_time(Duration::from_secs(120))
         .sample_size(10)
-}
-
-fn make_test_config(kernel: PathBuf, initrd: PathBuf) -> VmConfig {
-    VmConfig {
-        kernel,
-        initrd,
-        disk: None,
-        cmdline: "console=hvc0 reboot=t panic=-1".to_string(),
-        resources: ResourceConfig {
-            cpus: 1,
-            memory_mb: 512,
-        },
-        shares: vec![],
-        network: NetworkMode::None,
-        console_enabled: true,
-    }
 }
 
 #[criterion(custom_criterion())]
