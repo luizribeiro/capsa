@@ -38,6 +38,7 @@
 //! - **[`VmHandle`]** - VM lifecycle management (start, stop, status)
 //! - **[`VmConsole`]** - Console automation for integration testing
 //! - **[`VmPool`]** - Pre-warmed VM pools for fast acquisition
+//! - **[`BootConfig`]** - Trait connecting boot configs to builders (for extensibility)
 //! - **[`capabilities`]** - Querying backend/hypervisor support
 //!
 //! <!-- TODO: Add guide for custom kernel/initrd preparation -->
@@ -63,7 +64,7 @@ pub mod test_utils;
 // ============================================================================
 
 pub use builder::LinuxVmBuilder;
-pub use config::Capsa;
+pub use config::{BootConfig, Capsa};
 pub use console::{ConsoleReader, ConsoleWriter, VmConsole};
 pub use handle::{VmHandle, VmStatus};
 pub use pool::{PooledVm, VmPool};

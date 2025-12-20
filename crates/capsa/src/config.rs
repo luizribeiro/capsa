@@ -1,6 +1,42 @@
 use crate::builder::LinuxVmBuilder;
 use capsa_core::LinuxDirectBootConfig;
 
+/// Trait for VM boot configurations.
+///
+/// Each boot configuration type (e.g., [`LinuxDirectBootConfig`]) implements
+/// this trait to specify which builder it produces. This allows [`Capsa::vm`]
+/// to accept different configuration types and return the appropriate builder.
+///
+/// # Implementing for New VM Types
+///
+/// When adding support for a new VM type (e.g., Windows, UEFI boot), create
+/// a new config struct and implement this trait:
+///
+/// ```ignore
+/// impl BootConfig for WindowsBootConfig {
+///     type Builder = WindowsVmBuilder;
+///
+///     fn into_builder(self) -> Self::Builder {
+///         WindowsVmBuilder::new(self)
+///     }
+/// }
+/// ```
+pub trait BootConfig {
+    /// The builder type produced by this configuration.
+    type Builder;
+
+    /// Converts this configuration into its corresponding builder.
+    fn into_builder(self) -> Self::Builder;
+}
+
+impl BootConfig for LinuxDirectBootConfig {
+    type Builder = LinuxVmBuilder;
+
+    fn into_builder(self) -> Self::Builder {
+        LinuxVmBuilder::new(self)
+    }
+}
+
 /// Entry point for creating virtual machines.
 ///
 /// `Capsa` is the starting point for all VM creation. It provides factory
@@ -43,12 +79,9 @@ pub struct Capsa;
 impl Capsa {
     /// Creates a builder for a VM with the given boot configuration.
     ///
-    /// The type of VM is determined by the configuration passed in.
-    /// Currently supports Linux direct boot via [`LinuxDirectBootConfig`].
-    ///
-    /// # Arguments
-    ///
-    /// * `config` - Boot configuration specifying how to boot the VM
+    /// The configuration type determines which builder is returned.
+    /// Currently supports:
+    /// - [`LinuxDirectBootConfig`] → [`LinuxVmBuilder`]
     ///
     /// # Example
     ///
@@ -68,7 +101,7 @@ impl Capsa {
     /// # Ok(())
     /// # }
     /// ```
-    pub fn vm(config: LinuxDirectBootConfig) -> LinuxVmBuilder {
-        LinuxVmBuilder::new(config)
+    pub fn vm<C: BootConfig>(config: C) -> C::Builder {
+        config.into_builder()
     }
 }
