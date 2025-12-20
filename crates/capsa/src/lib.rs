@@ -35,10 +35,8 @@
 //! # Guides
 //!
 //! - **[`LinuxVmBuilder`]** - Configuring VMs (CPUs, memory, disks, networking, shared directories)
-//! - **[`VmHandle`]** - VM lifecycle management (start, stop, status)
 //! - **[`VmConsole`]** - Console automation for integration testing
 //! - **[`VmPool`]** - Pre-warmed VM pools for fast acquisition
-//! - **[`BootConfig`]** - Trait connecting boot configs to builders (for extensibility)
 //! - **[`capabilities`]** - Querying backend/hypervisor support
 //!
 //! <!-- TODO: Add guide for custom kernel/initrd preparation -->

@@ -107,6 +107,25 @@ impl VmPoolInner {
 
 /// A pool of pre-created VMs that can be reserved for temporary use.
 ///
+/// Create a pool using [`Capsa::pool`](crate::Capsa::pool):
+///
+/// ```no_run
+/// use capsa::{Capsa, LinuxDirectBootConfig};
+///
+/// # async fn example() -> capsa::Result<()> {
+/// let config = LinuxDirectBootConfig::new("./kernel", "./initrd");
+/// let pool = Capsa::pool(config)
+///     .cpus(2)
+///     .memory_mb(512)
+///     .build(5)
+///     .await?;
+///
+/// let vm = pool.reserve().await?;
+/// // Use vm...
+/// # Ok(())
+/// # }
+/// ```
+///
 /// VMs are killed and replaced when returned to the pool (when [`PooledVm`]
 /// is dropped), ensuring fresh state for each reservation.
 ///
