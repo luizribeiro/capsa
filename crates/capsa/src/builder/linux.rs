@@ -12,6 +12,7 @@ use std::time::Duration;
 pub struct LinuxVmBuilder<P = Yes> {
     config: LinuxDirectBootConfig,
     resources: ResourceConfig,
+    disks: Vec<DiskImage>,
     shares: Vec<SharedDir>,
     network: NetworkMode,
     console_enabled: bool,
@@ -32,6 +33,7 @@ impl LinuxVmBuilder<Yes> {
         Self {
             config,
             resources: ResourceConfig::default(),
+            disks: Vec::new(),
             shares: Vec::new(),
             network: NetworkMode::default(),
             console_enabled: false,
@@ -51,7 +53,8 @@ impl LinuxVmBuilder<Yes> {
         let internal_config = VmConfig {
             kernel: self.config.kernel,
             initrd: self.config.initrd,
-            disk: self.config.root_disk,
+            root_disk: self.config.root_disk,
+            disks: self.disks,
             cmdline,
             resources: self.resources,
             shares: self.shares,
@@ -79,11 +82,13 @@ impl<P> LinuxVmBuilder<P> {
         self
     }
 
+    /// Add a non-root disk (becomes /dev/vdb, /dev/vdc, etc.)
     pub fn disk(mut self, disk: DiskImage) -> LinuxVmBuilder<No> {
-        self.config.root_disk = Some(disk);
+        self.disks.push(disk);
         LinuxVmBuilder {
             config: self.config,
             resources: self.resources,
+            disks: self.disks,
             shares: self.shares,
             network: self.network,
             console_enabled: self.console_enabled,
@@ -257,7 +262,8 @@ impl<P> LinuxVmBuilder<P> {
         let internal_config = VmConfig {
             kernel: self.config.kernel,
             initrd: self.config.initrd,
-            disk: self.config.root_disk,
+            root_disk: self.config.root_disk,
+            disks: self.disks,
             cmdline,
             resources: self.resources.clone(),
             shares: self.shares,
@@ -292,6 +298,7 @@ mod tests {
                 root_disk: None,
             },
             resources: ResourceConfig::default(),
+            disks: vec![],
             shares: vec![],
             network,
             console_enabled: false,
@@ -309,6 +316,7 @@ mod tests {
                 root_disk: None,
             },
             resources: ResourceConfig { cpus, memory_mb },
+            disks: vec![],
             shares: vec![],
             network: NetworkMode::default(),
             console_enabled: false,
@@ -326,6 +334,7 @@ mod tests {
                 root_disk: None,
             },
             resources: ResourceConfig::default(),
+            disks: vec![],
             shares,
             network: NetworkMode::default(),
             console_enabled: false,
@@ -343,6 +352,7 @@ mod tests {
                 root_disk: Some(DiskImage::with_format("/disk.img", format)),
             },
             resources: ResourceConfig::default(),
+            disks: vec![],
             shares: vec![],
             network: NetworkMode::default(),
             console_enabled: false,

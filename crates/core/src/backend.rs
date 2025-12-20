@@ -11,7 +11,9 @@ use tokio::io::{AsyncRead, AsyncWrite};
 pub struct VmConfig {
     pub kernel: PathBuf,
     pub initrd: PathBuf,
-    pub disk: Option<DiskImage>,
+    pub root_disk: Option<DiskImage>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub disks: Vec<DiskImage>,
     pub cmdline: String,
     pub resources: ResourceConfig,
     pub shares: Vec<SharedDir>,

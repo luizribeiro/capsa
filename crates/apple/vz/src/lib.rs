@@ -161,7 +161,8 @@ impl HypervisorBackend for NativeVirtualizationBackend {
             cmdline: config.cmdline.clone(),
             cpus: config.resources.cpus,
             memory_mb: config.resources.memory_mb as u64,
-            disk: config.disk.clone(),
+            root_disk: config.root_disk.clone(),
+            disks: config.disks.clone(),
             network: config.network.clone(),
             console_input_read_fd: console_input_read.as_ref().map(|fd| fd.as_raw_fd()),
             console_output_write_fd: console_output_write.as_ref().map(|fd| fd.as_raw_fd()),
@@ -216,7 +217,8 @@ struct CreateVmConfig {
     cmdline: String,
     cpus: u32,
     memory_mb: u64,
-    disk: Option<DiskImage>,
+    root_disk: Option<DiskImage>,
+    disks: Vec<DiskImage>,
     network: NetworkMode,
     console_input_read_fd: Option<RawFd>,
     console_output_write_fd: Option<RawFd>,
@@ -255,30 +257,40 @@ fn create_vm(config: CreateVmConfig) -> Result<(usize, usize)> {
         vm_config.setCPUCount(config.cpus as usize);
         vm_config.setMemorySize(config.memory_mb * 1024 * 1024);
 
-        if let Some(disk) = &config.disk {
-            let disk_path_str = disk
-                .path
-                .to_str()
-                .ok_or_else(|| Error::StartFailed("Invalid disk path".to_string()))?;
-            let disk_url = NSURL::fileURLWithPath(&NSString::from_str(disk_path_str));
+        // Collect all disks: root_disk first, then additional disks
+        let all_disks: Vec<&DiskImage> =
+            config.root_disk.iter().chain(config.disks.iter()).collect();
 
-            let read_only = false;
-            let disk_attachment = VZDiskImageStorageDeviceAttachment::initWithURL_readOnly_error(
-                VZDiskImageStorageDeviceAttachment::alloc(),
-                &disk_url,
-                read_only,
-            )
-            .map_err(|e| Error::StartFailed(format!("Failed to create disk attachment: {}", e)))?;
+        if !all_disks.is_empty() {
+            let mut block_configs: Vec<Retained<VZStorageDeviceConfiguration>> = Vec::new();
 
-            let block_config = VZVirtioBlockDeviceConfiguration::initWithAttachment(
-                VZVirtioBlockDeviceConfiguration::alloc(),
-                &disk_attachment,
-            );
+            for disk in all_disks {
+                let disk_path_str = disk
+                    .path
+                    .to_str()
+                    .ok_or_else(|| Error::StartFailed("Invalid disk path".to_string()))?;
+                let disk_url = NSURL::fileURLWithPath(&NSString::from_str(disk_path_str));
+
+                let disk_attachment =
+                    VZDiskImageStorageDeviceAttachment::initWithURL_readOnly_error(
+                        VZDiskImageStorageDeviceAttachment::alloc(),
+                        &disk_url,
+                        disk.read_only,
+                    )
+                    .map_err(|e| {
+                        Error::StartFailed(format!("Failed to create disk attachment: {}", e))
+                    })?;
+
+                let block_config = VZVirtioBlockDeviceConfiguration::initWithAttachment(
+                    VZVirtioBlockDeviceConfiguration::alloc(),
+                    &disk_attachment,
+                );
+
+                block_configs.push(Retained::into_super(block_config));
+            }
 
             let storage_configs: Retained<objc2_foundation::NSArray<VZStorageDeviceConfiguration>> =
-                objc2_foundation::NSArray::from_retained_slice(&[Retained::into_super(
-                    block_config,
-                )]);
+                objc2_foundation::NSArray::from_retained_slice(&block_configs);
             vm_config.setStorageDevices(&storage_configs);
         }
 

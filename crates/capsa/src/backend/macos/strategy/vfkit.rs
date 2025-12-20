@@ -35,7 +35,12 @@ impl VfkitStrategy {
             config.cmdline.clone(),
         ];
 
-        if let Some(disk) = &config.disk {
+        if let Some(disk) = &config.root_disk {
+            args.push("--device".to_string());
+            args.push(format!("virtio-blk,path={}", disk.path.display()));
+        }
+
+        for disk in &config.disks {
             args.push("--device".to_string());
             args.push(format!("virtio-blk,path={}", disk.path.display()));
         }
