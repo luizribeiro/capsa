@@ -34,19 +34,19 @@
 //!
 //! # Guides
 //!
-//! - **[`LinuxVmBuilder`]** - Configuring VMs (CPUs, memory, disks, networking, shared directories)
-//! - **[`VmConsole`]** - Console automation for integration testing
-//! - **[`VmPool`]** - Pre-warmed VM pools for fast acquisition
-//! - **[`capabilities`]** - Querying backend/hypervisor support
+//! - **[Getting Started](guides::getting_started)** - Creating your first VM
+//! - **[Console Automation](guides::console_automation)** - Testing patterns with the console
+//! - **[VM Pools](guides::vm_pools)** - Pre-warmed VMs for faster startup
+//! - **[Shared Directories](guides::shared_directories)** - File sharing between host and guest
 //!
-//! <!-- TODO: Add guide for custom kernel/initrd preparation -->
-//! <!-- TODO: Add guide for disk image creation -->
-//! <!-- TODO: Add platform-specific notes (macOS vs Linux backends) -->
+//! For API reference, see the individual type documentation:
+//! [`LinuxVmBuilder`], [`VmHandle`], [`VmConsole`], [`VmPool`].
 
 mod backend;
 mod builder;
 mod config;
 mod console;
+pub mod guides;
 mod handle;
 mod pool;
 
