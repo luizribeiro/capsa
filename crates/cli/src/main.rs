@@ -1,4 +1,7 @@
-use capsa::{BackendInfo, Capsa, DiskImage, LinuxDirectBootConfig, MountMode, available_backends};
+use capsa::{
+    BackendInfo, Capsa, DiskImage, HostPlatform, LinuxDirectBootConfig, MountMode,
+    available_backends,
+};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -13,7 +16,10 @@ fn print_backends_json(backends: &[BackendInfo]) {
         let caps = &backend.capabilities;
         println!("    {{");
         println!("      \"name\": \"{}\",", backend.name);
-        println!("      \"platform\": \"{}\",", backend.platform);
+        println!(
+            "      \"platform\": \"{}\",",
+            platform_name(backend.platform)
+        );
         println!("      \"available\": {},", backend.available);
         println!("      \"capabilities\": {{");
         println!("        \"guest_os\": {{");
@@ -80,7 +86,7 @@ fn print_backends_text(backends: &[BackendInfo]) {
             "Not available"
         };
 
-        println!("  {} ({})", backend.name, backend.platform);
+        println!("  {} ({})", backend.name, platform_name(backend.platform));
         println!("    Status: {status}");
         println!("    Guest OS: Linux={}", yes_no(caps.guest_os.linux));
         println!(
@@ -117,6 +123,13 @@ fn print_backends_text(backends: &[BackendInfo]) {
 
 fn yes_no(b: bool) -> &'static str {
     if b { "yes" } else { "no" }
+}
+
+fn platform_name(platform: HostPlatform) -> &'static str {
+    match platform {
+        HostPlatform::MacOs => "macos",
+        HostPlatform::Linux => "linux",
+    }
 }
 
 const MAX_CPUS: u32 = 256;

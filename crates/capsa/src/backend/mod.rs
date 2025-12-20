@@ -12,8 +12,8 @@ mod macos;
 pub use macos::MacOsBackend;
 
 pub use capsa_core::{
-    BackendCapabilities, BackendVmHandle, ConsoleIo, ConsoleStream, HypervisorBackend,
-    KernelCmdline, Result, VmConfig,
+    BackendCapabilities, BackendVmHandle, ConsoleIo, ConsoleStream, HostPlatform,
+    HypervisorBackend, KernelCmdline, Result, VmConfig,
 };
 
 /// Information about a hypervisor backend.
@@ -21,8 +21,8 @@ pub use capsa_core::{
 pub struct BackendInfo {
     /// Backend name (e.g., "vfkit", "native-virtualization")
     pub name: &'static str,
-    /// Target platform (e.g., "macos", "linux")
-    pub platform: &'static str,
+    /// Host platform the backend runs on
+    pub platform: HostPlatform,
     /// Whether the backend is available on this system
     pub available: bool,
     /// Backend capabilities
@@ -60,7 +60,7 @@ fn available_backends_with_constructors() -> Vec<(BackendInfo, BackendConstructo
             backends.push((
                 BackendInfo {
                     name: backend.name(),
-                    platform: "macos",
+                    platform: backend.platform(),
                     available: backend.is_available(),
                     capabilities: backend.capabilities().clone(),
                 },
@@ -74,7 +74,7 @@ fn available_backends_with_constructors() -> Vec<(BackendInfo, BackendConstructo
             backends.push((
                 BackendInfo {
                     name: backend.name(),
-                    platform: "macos",
+                    platform: backend.platform(),
                     available: backend.is_available(),
                     capabilities: backend.capabilities().clone(),
                 },
@@ -88,7 +88,7 @@ fn available_backends_with_constructors() -> Vec<(BackendInfo, BackendConstructo
             backends.push((
                 BackendInfo {
                     name: backend.name(),
-                    platform: "macos",
+                    platform: backend.platform(),
                     available: backend.is_available(),
                     capabilities: backend.capabilities().clone(),
                 },

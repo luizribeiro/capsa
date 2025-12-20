@@ -51,7 +51,7 @@ mod pool;
 #[cfg(feature = "test-utils")]
 pub mod test_utils;
 
-pub use backend::{BackendInfo, available_backends};
+pub use backend::{BackendInfo, HostPlatform, available_backends};
 pub use builder::LinuxVmBuilder;
 pub use config::Capsa;
 pub use console::{ConsoleReader, ConsoleWriter, VmConsole};

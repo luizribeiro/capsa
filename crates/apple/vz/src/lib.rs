@@ -14,8 +14,8 @@ use async_trait::async_trait;
 use block2::RcBlock;
 use capsa_core::{
     AsyncPipe, BackendCapabilities, BackendVmHandle, ConsoleStream, DEFAULT_ROOT_DEVICE, DiskImage,
-    Error, HypervisorBackend, KernelCmdline, NetworkMode, Result, VmConfig, macos_cmdline_defaults,
-    macos_virtualization_capabilities,
+    Error, HostPlatform, HypervisorBackend, KernelCmdline, NetworkMode, Result, VmConfig,
+    macos_cmdline_defaults, macos_virtualization_capabilities,
 };
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use objc2::rc::Retained;
@@ -110,6 +110,10 @@ impl Default for NativeVirtualizationBackend {
 impl HypervisorBackend for NativeVirtualizationBackend {
     fn name(&self) -> &'static str {
         "native-virtualization"
+    }
+
+    fn platform(&self) -> HostPlatform {
+        HostPlatform::MacOs
     }
 
     fn capabilities(&self) -> &BackendCapabilities {

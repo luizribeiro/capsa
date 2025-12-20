@@ -15,6 +15,14 @@ pub enum GuestOs {
     Linux,
 }
 
+/// Host platform the backend runs on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HostPlatform {
+    MacOs,
+    Linux,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResourceConfig {
     pub cpus: u32,
@@ -70,6 +78,34 @@ mod tests {
             assert_eq!(
                 serde_json::from_str::<GuestOs>("\"linux\"").unwrap(),
                 GuestOs::Linux
+            );
+        }
+    }
+
+    mod host_platform {
+        use super::*;
+
+        #[test]
+        fn serializes_lowercase() {
+            assert_eq!(
+                serde_json::to_string(&HostPlatform::MacOs).unwrap(),
+                "\"macos\""
+            );
+            assert_eq!(
+                serde_json::to_string(&HostPlatform::Linux).unwrap(),
+                "\"linux\""
+            );
+        }
+
+        #[test]
+        fn deserializes_lowercase() {
+            assert_eq!(
+                serde_json::from_str::<HostPlatform>("\"macos\"").unwrap(),
+                HostPlatform::MacOs
+            );
+            assert_eq!(
+                serde_json::from_str::<HostPlatform>("\"linux\"").unwrap(),
+                HostPlatform::Linux
             );
         }
     }

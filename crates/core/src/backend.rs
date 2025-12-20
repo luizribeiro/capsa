@@ -1,7 +1,7 @@
 use crate::boot::KernelCmdline;
 use crate::capabilities::BackendCapabilities;
 use crate::error::Result;
-use crate::types::{DiskImage, NetworkMode, ResourceConfig, SharedDir};
+use crate::types::{DiskImage, HostPlatform, NetworkMode, ResourceConfig, SharedDir};
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -39,6 +39,7 @@ pub trait BackendVmHandle: Send + Sync {
 #[async_trait]
 pub trait HypervisorBackend: Send + Sync {
     fn name(&self) -> &'static str;
+    fn platform(&self) -> HostPlatform;
     fn capabilities(&self) -> &BackendCapabilities;
     fn is_available(&self) -> bool;
     async fn start(&self, config: &VmConfig) -> Result<Box<dyn BackendVmHandle>>;

@@ -16,6 +16,6 @@ pub use capabilities::{
 pub use error::{Error, Result};
 pub use macos::{DEFAULT_ROOT_DEVICE, macos_cmdline_defaults, macos_virtualization_capabilities};
 pub use types::{
-    DiskImage, GuestOs, ImageFormat, MountMode, NetworkMode, ResourceConfig, ShareMechanism,
-    SharedDir, Virtio9pConfig, VirtioFsConfig,
+    DiskImage, GuestOs, HostPlatform, ImageFormat, MountMode, NetworkMode, ResourceConfig,
+    ShareMechanism, SharedDir, Virtio9pConfig, VirtioFsConfig,
 };

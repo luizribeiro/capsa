@@ -7,7 +7,8 @@ mod strategy;
 
 use async_trait::async_trait;
 use capsa_core::{
-    BackendCapabilities, BackendVmHandle, HypervisorBackend, KernelCmdline, Result, VmConfig,
+    BackendCapabilities, BackendVmHandle, HostPlatform, HypervisorBackend, KernelCmdline, Result,
+    VmConfig,
 };
 
 pub use capabilities::macos_virtualization_capabilities;
@@ -53,6 +54,10 @@ impl MacOsBackend {
 impl HypervisorBackend for MacOsBackend {
     fn name(&self) -> &'static str {
         self.strategy.name()
+    }
+
+    fn platform(&self) -> HostPlatform {
+        HostPlatform::MacOs
     }
 
     fn capabilities(&self) -> &BackendCapabilities {
