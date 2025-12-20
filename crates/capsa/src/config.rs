@@ -1,4 +1,5 @@
 use crate::builder::LinuxVmBuilder;
+use crate::pool::Yes;
 use capsa_core::LinuxDirectBootConfig;
 
 /// Trait for VM boot configurations.
@@ -103,5 +104,32 @@ impl Capsa {
     /// ```
     pub fn vm<C: BootConfig>(config: C) -> C::Builder {
         config.into_builder()
+    }
+
+    /// Creates a builder for a VM pool with the given boot configuration.
+    ///
+    /// Pools pre-start multiple identical VMs that can be reserved and released.
+    /// This is useful when you need to run many short-lived workloads.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use capsa::{Capsa, LinuxDirectBootConfig};
+    ///
+    /// # async fn example() -> capsa::Result<()> {
+    /// let config = LinuxDirectBootConfig::new("./kernel", "./initrd");
+    ///
+    /// let pool = Capsa::pool(config)
+    ///     .cpus(2)
+    ///     .memory_mb(512)
+    ///     .build(5)
+    ///     .await?;
+    ///
+    /// let vm = pool.reserve().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn pool(config: LinuxDirectBootConfig) -> LinuxVmBuilder<Yes> {
+        LinuxVmBuilder::new_pool(config)
     }
 }

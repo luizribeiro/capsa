@@ -11,28 +11,10 @@ use std::time::Duration;
 
 /// Builder for configuring and creating Linux virtual machines.
 ///
-/// Use [`Capsa::vm`](crate::Capsa::vm) to create a builder instance.
-/// The builder uses a fluent API—chain methods to configure, then call
-/// [`build`](Self::build) or [`build_pool`](Self::build_pool).
+/// Use [`Capsa::vm`](crate::Capsa::vm) for single VMs or
+/// [`Capsa::pool`](crate::Capsa::pool) for VM pools.
 ///
-/// # Resources
-///
-/// ```rust,no_run
-/// # use capsa::{Capsa, LinuxDirectBootConfig};
-/// # async fn example() -> capsa::Result<()> {
-/// # let config = LinuxDirectBootConfig::new("k", "i");
-/// let vm = Capsa::vm(config)
-///     .cpus(4)           // Default: 1
-///     .memory_mb(2048)   // Default: 512
-///     .build().await?;
-/// # Ok(())
-/// # }
-/// ```
-///
-/// # Storage
-///
-/// The root disk is set via [`LinuxDirectBootConfig::with_root_disk`]. Additional
-/// disks can be added with [`disk`](Self::disk) (appears as `/dev/vdb`, `/dev/vdc`, etc.):
+/// # Single VM Mode (`Capsa::vm`)
 ///
 /// ```rust,no_run
 /// # use capsa::{Capsa, LinuxDirectBootConfig, DiskImage};
@@ -41,68 +23,37 @@ use std::time::Duration;
 ///     .with_root_disk(DiskImage::new("./rootfs.raw"));
 ///
 /// let vm = Capsa::vm(config)
+///     .cpus(4)
+///     .memory_mb(2048)
 ///     .disk(DiskImage::new("./data.raw"))  // /dev/vdb
+///     .console_enabled()
 ///     .build().await?;
 /// # Ok(())
 /// # }
 /// ```
 ///
-/// # Shared Directories
-///
-/// Share host directories with the guest using [`share`](Self::share):
-///
-/// ```rust,no_run
-/// # use capsa::{Capsa, LinuxDirectBootConfig, MountMode};
-/// # async fn example() -> capsa::Result<()> {
-/// # let config = LinuxDirectBootConfig::new("k", "i");
-/// let vm = Capsa::vm(config)
-///     .share("./src", "/mnt/src", MountMode::ReadOnly)
-///     .share("./output", "/mnt/output", MountMode::ReadWrite)
-///     .build().await?;
-/// # Ok(())
-/// # }
-/// ```
-///
-/// # Networking
-///
-/// ```rust,no_run
-/// # use capsa::{Capsa, LinuxDirectBootConfig, NetworkMode};
-/// # async fn example() -> capsa::Result<()> {
-/// # let config = LinuxDirectBootConfig::new("k", "i");
-/// // NAT networking (default)
-/// let vm = Capsa::vm(config).network(NetworkMode::Nat).build().await?;
-///
-/// // No networking
-/// # let config = LinuxDirectBootConfig::new("k", "i");
-/// let vm = Capsa::vm(config).no_network().build().await?;
-/// # Ok(())
-/// # }
-/// ```
-///
-/// # Console Access
-///
-/// Enable console access for programmatic interaction:
+/// # Pool Mode (`Capsa::pool`)
 ///
 /// ```rust,no_run
 /// # use capsa::{Capsa, LinuxDirectBootConfig};
 /// # async fn example() -> capsa::Result<()> {
-/// # let config = LinuxDirectBootConfig::new("k", "i");
-/// let vm = Capsa::vm(config)
-///     .console_enabled()  // Required for vm.console()
-///     .build().await?;
+/// let config = LinuxDirectBootConfig::new("./kernel", "./initrd");
 ///
-/// let console = vm.console().await?;
+/// let pool = Capsa::pool(config)
+///     .cpus(2)
+///     .memory_mb(512)
+///     .build(5).await?;  // Pool of 5 VMs
+///
+/// let vm = pool.reserve().await?;
 /// # Ok(())
 /// # }
 /// ```
 ///
-/// # Poolability
+/// # Type Parameter
 ///
-/// The type parameter `P` tracks whether the VM can be pooled. Adding a disk
-/// via [`disk`](Self::disk) changes the type to `LinuxVmBuilder<No>`, which
-/// removes the [`build_pool`](Self::build_pool) method at compile time.
-/// This prevents sharing mutable disk state across pool instances.
-pub struct LinuxVmBuilder<P = Yes> {
+/// - `LinuxVmBuilder<No>` - Single VM mode: has `.disk()` and `.build() -> VmHandle`
+/// - `LinuxVmBuilder<Yes>` - Pool mode: has `.build(size) -> VmPool`, no `.disk()`
+pub struct LinuxVmBuilder<P = No> {
     config: LinuxDirectBootConfig,
     resources: ResourceConfig,
     disks: Vec<DiskImage>,
@@ -121,8 +72,9 @@ pub struct LinuxVmBuilder<P = Yes> {
 // simpler
 // TODO: allow for backend type to be forced by caller, instead of automatically selecting it
 // through select_backend
-impl LinuxVmBuilder<Yes> {
-    /// Creates a new builder with the given boot configuration.
+
+impl LinuxVmBuilder<No> {
+    /// Creates a new builder for a single VM.
     ///
     /// Prefer using [`Capsa::vm`](crate::Capsa::vm) instead of calling this directly.
     pub fn new(config: LinuxDirectBootConfig) -> Self {
@@ -134,7 +86,63 @@ impl LinuxVmBuilder<Yes> {
             network: NetworkMode::default(),
             console_enabled: false,
             cmdline: KernelCmdline::new(),
-            // TODO: either remove this or make it actually used
+            timeout: None,
+            poolable: Poolability::new(),
+        }
+    }
+
+    /// Adds a disk to the VM (becomes /dev/vdb, /dev/vdc, etc.).
+    pub fn disk(mut self, disk: DiskImage) -> Self {
+        self.disks.push(disk);
+        self
+    }
+
+    /// Builds and starts the virtual machine.
+    ///
+    /// Validates the configuration, selects an available backend,
+    /// and starts the VM. Returns a handle for interacting with the running VM.
+    pub async fn build(self) -> Result<VmHandle> {
+        let backend = select_backend()?;
+        self.validate(backend.capabilities())?;
+        self.validate_disk_files()?;
+
+        let cmdline = self.generate_cmdline(backend.as_ref());
+
+        let internal_config = VmConfig {
+            kernel: self.config.kernel,
+            initrd: self.config.initrd,
+            root_disk: self.config.root_disk,
+            disks: self.disks,
+            cmdline,
+            resources: self.resources.clone(),
+            shares: self.shares,
+            network: self.network,
+            console_enabled: self.console_enabled,
+        };
+
+        let backend_handle = backend.start(&internal_config).await?;
+
+        Ok(VmHandle::new(
+            backend_handle,
+            GuestOs::Linux,
+            self.resources,
+        ))
+    }
+}
+
+impl LinuxVmBuilder<Yes> {
+    /// Creates a new builder for a VM pool.
+    ///
+    /// Prefer using [`Capsa::pool`](crate::Capsa::pool) instead of calling this directly.
+    pub fn new_pool(config: LinuxDirectBootConfig) -> Self {
+        Self {
+            config,
+            resources: ResourceConfig::default(),
+            disks: Vec::new(),
+            shares: Vec::new(),
+            network: NetworkMode::default(),
+            console_enabled: false,
+            cmdline: KernelCmdline::new(),
             timeout: None,
             poolable: Poolability::new(),
         }
@@ -143,8 +151,7 @@ impl LinuxVmBuilder<Yes> {
     /// Builds a pool of identical VMs for concurrent use.
     ///
     /// The pool pre-starts `size` VMs that can be acquired and released.
-    /// Only available for poolable configurations (no disks attached).
-    pub async fn build_pool(self, size: usize) -> Result<VmPool> {
+    pub async fn build(self, size: usize) -> Result<VmPool> {
         let backend = select_backend()?;
         self.validate(backend.capabilities())?;
         self.validate_disk_files()?;
@@ -184,25 +191,6 @@ impl<P> LinuxVmBuilder<P> {
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.timeout = Some(duration);
         self
-    }
-
-    /// Adds a disk to the VM (becomes /dev/vdb, /dev/vdc, etc.).
-    ///
-    /// Adding a disk makes the VM non-poolable since disk state would be
-    /// shared across pool instances.
-    pub fn disk(mut self, disk: DiskImage) -> LinuxVmBuilder<No> {
-        self.disks.push(disk);
-        LinuxVmBuilder {
-            config: self.config,
-            resources: self.resources,
-            disks: self.disks,
-            shares: self.shares,
-            network: self.network,
-            console_enabled: self.console_enabled,
-            cmdline: self.cmdline,
-            timeout: self.timeout,
-            poolable: Poolability::new(),
-        }
     }
 
     /// Adds a shared directory between host and guest.
@@ -404,38 +392,6 @@ impl<P> LinuxVmBuilder<P> {
         cmdline.merge(&self.cmdline);
 
         cmdline.build()
-    }
-
-    /// Builds and starts the virtual machine.
-    ///
-    /// This validates the configuration, selects an available backend,
-    /// and starts the VM. Returns a handle for interacting with the running VM.
-    pub async fn build(self) -> Result<VmHandle> {
-        let backend = select_backend()?;
-        self.validate(backend.capabilities())?;
-        self.validate_disk_files()?;
-
-        let cmdline = self.generate_cmdline(backend.as_ref());
-
-        let internal_config = VmConfig {
-            kernel: self.config.kernel,
-            initrd: self.config.initrd,
-            root_disk: self.config.root_disk,
-            disks: self.disks,
-            cmdline,
-            resources: self.resources.clone(),
-            shares: self.shares,
-            network: self.network,
-            console_enabled: self.console_enabled,
-        };
-
-        let backend_handle = backend.start(&internal_config).await?;
-
-        Ok(VmHandle::new(
-            backend_handle,
-            GuestOs::Linux,
-            self.resources,
-        ))
     }
 }
 

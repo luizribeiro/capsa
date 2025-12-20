@@ -1,6 +1,9 @@
 use std::marker::PhantomData;
 
+/// Marker for pool mode - `Capsa::pool()` returns this.
 pub struct Yes;
+
+/// Marker for single VM mode - `Capsa::vm()` returns this.
 pub struct No;
 
 pub struct Poolability<P>(PhantomData<P>);

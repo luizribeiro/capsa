@@ -24,10 +24,10 @@
 //!
 //! # async fn example() -> capsa::Result<()> {
 //! let config = LinuxDirectBootConfig::new("./kernel", "./initrd");
-//! let pool = Capsa::vm(config)
+//! let pool = Capsa::pool(config)
 //!     .cpus(2)
 //!     .memory_mb(512)
-//!     .build_pool(5)
+//!     .build(5)
 //!     .await?;
 //!
 //! // Reserve a VM (waits if none available)
