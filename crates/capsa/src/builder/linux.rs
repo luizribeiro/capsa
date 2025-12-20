@@ -47,6 +47,7 @@ impl LinuxVmBuilder<Yes> {
     pub async fn build_pool(self, size: usize) -> Result<VmPool> {
         let backend = select_backend()?;
         self.validate(backend.capabilities())?;
+        self.validate_disk_files()?;
 
         let cmdline = self.generate_cmdline(backend.as_ref());
 
@@ -200,7 +201,15 @@ impl<P> LinuxVmBuilder<P> {
             }
         }
 
-        if let Some(disk) = &self.config.root_disk {
+        // Validate all disks (root_disk and additional disks)
+        let all_disks: Vec<&DiskImage> = self
+            .config
+            .root_disk
+            .iter()
+            .chain(self.disks.iter())
+            .collect();
+
+        for disk in all_disks {
             match disk.format {
                 ImageFormat::Raw => {
                     if !capabilities.image_formats.raw {
@@ -233,6 +242,38 @@ impl<P> LinuxVmBuilder<P> {
         Ok(())
     }
 
+    fn validate_disk_files(&self) -> Result<()> {
+        let all_disks: Vec<&DiskImage> = self
+            .config
+            .root_disk
+            .iter()
+            .chain(self.disks.iter())
+            .collect();
+
+        for disk in all_disks {
+            if disk.read_only {
+                if !disk.path.exists() {
+                    return Err(Error::InvalidConfig(format!(
+                        "read-only disk not found: {}",
+                        disk.path.display()
+                    )));
+                }
+            } else {
+                std::fs::OpenOptions::new()
+                    .write(true)
+                    .open(&disk.path)
+                    .map_err(|e| {
+                        Error::InvalidConfig(format!(
+                            "disk not writable: {}: {}",
+                            disk.path.display(),
+                            e
+                        ))
+                    })?;
+            }
+        }
+        Ok(())
+    }
+
     // TODO: since this is only relevant to LinuxDirectBootConfig, we may possibly
     // move this whole logic into LinuxDirectBootConfig?
     fn generate_cmdline(&self, backend: &dyn HypervisorBackend) -> String {
@@ -256,6 +297,7 @@ impl<P> LinuxVmBuilder<P> {
     pub async fn build(self) -> Result<VmHandle> {
         let backend = select_backend()?;
         self.validate(backend.capabilities())?;
+        self.validate_disk_files()?;
 
         let cmdline = self.generate_cmdline(backend.as_ref());
 
@@ -569,5 +611,93 @@ mod tests {
         caps.image_formats.qcow2 = false;
         let err = builder.validate(&caps).unwrap_err();
         assert!(matches!(err, Error::UnsupportedFeature(f) if f.contains("qcow2")));
+    }
+
+    #[test]
+    fn validate_disk_files_readonly_exists() {
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let disk = DiskImage::new(temp_file.path()).read_only();
+        let builder: LinuxVmBuilder<Yes> = LinuxVmBuilder {
+            config: LinuxDirectBootConfig {
+                kernel: PathBuf::from("/kernel"),
+                initrd: PathBuf::from("/initrd"),
+                root_disk: Some(disk),
+            },
+            resources: ResourceConfig::default(),
+            disks: vec![],
+            shares: vec![],
+            network: NetworkMode::default(),
+            console_enabled: false,
+            cmdline: KernelCmdline::new(),
+            timeout: None,
+            poolable: Poolability::new(),
+        };
+        assert!(builder.validate_disk_files().is_ok());
+    }
+
+    #[test]
+    fn validate_disk_files_readonly_not_found() {
+        let disk = DiskImage::new("/nonexistent/path/disk.raw").read_only();
+        let builder: LinuxVmBuilder<Yes> = LinuxVmBuilder {
+            config: LinuxDirectBootConfig {
+                kernel: PathBuf::from("/kernel"),
+                initrd: PathBuf::from("/initrd"),
+                root_disk: Some(disk),
+            },
+            resources: ResourceConfig::default(),
+            disks: vec![],
+            shares: vec![],
+            network: NetworkMode::default(),
+            console_enabled: false,
+            cmdline: KernelCmdline::new(),
+            timeout: None,
+            poolable: Poolability::new(),
+        };
+        let err = builder.validate_disk_files().unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig(msg) if msg.contains("not found")));
+    }
+
+    #[test]
+    fn validate_disk_files_writable() {
+        let temp_file = tempfile::NamedTempFile::new().unwrap();
+        let disk = DiskImage::new(temp_file.path());
+        let builder: LinuxVmBuilder<Yes> = LinuxVmBuilder {
+            config: LinuxDirectBootConfig {
+                kernel: PathBuf::from("/kernel"),
+                initrd: PathBuf::from("/initrd"),
+                root_disk: Some(disk),
+            },
+            resources: ResourceConfig::default(),
+            disks: vec![],
+            shares: vec![],
+            network: NetworkMode::default(),
+            console_enabled: false,
+            cmdline: KernelCmdline::new(),
+            timeout: None,
+            poolable: Poolability::new(),
+        };
+        assert!(builder.validate_disk_files().is_ok());
+    }
+
+    #[test]
+    fn validate_disk_files_not_writable() {
+        let disk = DiskImage::new("/nonexistent/path/disk.raw");
+        let builder: LinuxVmBuilder<Yes> = LinuxVmBuilder {
+            config: LinuxDirectBootConfig {
+                kernel: PathBuf::from("/kernel"),
+                initrd: PathBuf::from("/initrd"),
+                root_disk: Some(disk),
+            },
+            resources: ResourceConfig::default(),
+            disks: vec![],
+            shares: vec![],
+            network: NetworkMode::default(),
+            console_enabled: false,
+            cmdline: KernelCmdline::new(),
+            timeout: None,
+            poolable: Poolability::new(),
+        };
+        let err = builder.validate_disk_files().unwrap_err();
+        assert!(matches!(err, Error::InvalidConfig(msg) if msg.contains("not writable")));
     }
 }
