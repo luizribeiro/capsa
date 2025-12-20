@@ -14,8 +14,8 @@ use async_trait::async_trait;
 use block2::RcBlock;
 use capsa_core::{
     AsyncPipe, BackendCapabilities, BackendVmHandle, ConsoleMode, ConsoleStream,
-    DEFAULT_ROOT_DEVICE, Error, HypervisorBackend, KernelCmdline, NetworkMode, Result, VmConfig,
-    macos_cmdline_defaults, macos_virtualization_capabilities,
+    DEFAULT_ROOT_DEVICE, DiskImage, Error, HypervisorBackend, KernelCmdline, NetworkMode, Result,
+    VmConfig, macos_cmdline_defaults, macos_virtualization_capabilities,
 };
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use objc2::rc::Retained;
@@ -23,9 +23,10 @@ use objc2::runtime::ProtocolObject;
 use objc2::{AllocAnyThread, DefinedClass, MainThreadMarker, MainThreadOnly, define_class};
 use objc2_foundation::{NSError, NSObject, NSObjectProtocol, NSString, NSURL};
 use objc2_virtualization::{
-    VZLinuxBootLoader, VZNATNetworkDeviceAttachment, VZVirtioConsoleDeviceSerialPortConfiguration,
-    VZVirtioNetworkDeviceConfiguration, VZVirtualMachine, VZVirtualMachineConfiguration,
-    VZVirtualMachineDelegate,
+    VZDiskImageStorageDeviceAttachment, VZLinuxBootLoader, VZNATNetworkDeviceAttachment,
+    VZStorageDeviceConfiguration, VZVirtioBlockDeviceConfiguration,
+    VZVirtioConsoleDeviceSerialPortConfiguration, VZVirtioNetworkDeviceConfiguration,
+    VZVirtualMachine, VZVirtualMachineConfiguration, VZVirtualMachineDelegate,
 };
 use std::cell::Cell;
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -160,6 +161,7 @@ impl HypervisorBackend for NativeVirtualizationBackend {
             cmdline: config.cmdline.clone(),
             cpus: config.resources.cpus,
             memory_mb: config.resources.memory_mb as u64,
+            disk: config.disk.clone(),
             network: config.network.clone(),
             console_input_read_fd: console_input_read.as_ref().map(|fd| fd.as_raw_fd()),
             console_output_write_fd: console_output_write.as_ref().map(|fd| fd.as_raw_fd()),
@@ -214,6 +216,7 @@ struct CreateVmConfig {
     cmdline: String,
     cpus: u32,
     memory_mb: u64,
+    disk: Option<DiskImage>,
     network: NetworkMode,
     console_input_read_fd: Option<RawFd>,
     console_output_write_fd: Option<RawFd>,
@@ -252,7 +255,32 @@ fn create_vm(config: CreateVmConfig) -> Result<(usize, usize)> {
         vm_config.setCPUCount(config.cpus as usize);
         vm_config.setMemorySize(config.memory_mb * 1024 * 1024);
 
-        // TODO: setup root disk if config.disk is Some
+        if let Some(disk) = &config.disk {
+            let disk_path_str = disk
+                .path
+                .to_str()
+                .ok_or_else(|| Error::StartFailed("Invalid disk path".to_string()))?;
+            let disk_url = NSURL::fileURLWithPath(&NSString::from_str(disk_path_str));
+
+            let read_only = false;
+            let disk_attachment = VZDiskImageStorageDeviceAttachment::initWithURL_readOnly_error(
+                VZDiskImageStorageDeviceAttachment::alloc(),
+                &disk_url,
+                read_only,
+            )
+            .map_err(|e| Error::StartFailed(format!("Failed to create disk attachment: {}", e)))?;
+
+            let block_config = VZVirtioBlockDeviceConfiguration::initWithAttachment(
+                VZVirtioBlockDeviceConfiguration::alloc(),
+                &disk_attachment,
+            );
+
+            let storage_configs: Retained<objc2_foundation::NSArray<VZStorageDeviceConfiguration>> =
+                objc2_foundation::NSArray::from_retained_slice(&[Retained::into_super(
+                    block_config,
+                )]);
+            vm_config.setStorageDevices(&storage_configs);
+        }
 
         if let NetworkMode::Nat = config.network {
             let net_attachment = VZNATNetworkDeviceAttachment::new();

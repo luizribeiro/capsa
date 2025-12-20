@@ -72,6 +72,12 @@ let
       CONFIG_HVC_DRIVER=y
       CONFIG_VIRTIO_CONSOLE=y
 
+      # virtio-blk for disk support
+      CONFIG_VIRTIO_BLK=y
+
+      # ext4 filesystem support
+      CONFIG_EXT4_FS=y
+
       # Basic initramfs support
       CONFIG_BLK_DEV=y
       CONFIG_BLK_DEV_INITRD=y
@@ -330,6 +336,86 @@ DHCP
     (cd initrd-root && find . | cpio -o -H newc | gzip) > $out/initrd
   '';
 
+  # Init script for disk-enabled VMs
+  mkDiskInitScript = ''
+#!/bin/sh
+export PATH=/bin
+
+mount -t proc proc /proc
+mount -t sysfs sys /sys
+mount -t devtmpfs dev /dev
+
+exec < /dev/console > /dev/console 2>&1
+
+echo ""
+echo "======================================"
+echo "  Capsa Test VM - Boot successful!"
+echo "======================================"
+echo ""
+
+# Mount disk if present
+if [ -e /dev/vda ]; then
+  echo "Mounting disk /dev/vda..."
+  mkdir -p /mnt
+  if mount /dev/vda /mnt; then
+    echo "Disk mounted at /mnt"
+    echo "Disk contents:"
+    ls -la /mnt
+  else
+    echo "Failed to mount disk"
+  fi
+else
+  echo "No disk found at /dev/vda"
+fi
+
+echo ""
+exec sh
+  '';
+
+  # Build a test VM with a disk image
+  mkTestVmWithDisk = { name, sizeMB ? 32 }: linuxPkgs.runCommand "capsa-test-vm-${name}" {
+    nativeBuildInputs = [ linuxPkgs.cpio linuxPkgs.gzip linuxPkgs.e2fsprogs ];
+  } ''
+    mkdir -p $out
+
+    # Copy kernel (using minimal kernel which now has disk support)
+    cp ${minimalKernel}/Image $out/kernel
+
+    # Build initrd
+    mkdir -p initrd-root/{bin,dev,proc,sys,etc,tmp,mnt}
+
+    # Add busybox and symlinks
+    cp ${linuxPkgs.pkgsStatic.busybox}/bin/busybox initrd-root/bin/
+    for cmd in \
+      sh ash \
+      ls cat echo pwd mkdir ln rm cp mv touch head tail tee \
+      mount umount \
+      ps kill sleep \
+      grep sed awk cut sort uniq wc tr \
+      df du free top uptime uname dmesg \
+      vi less more \
+      tar gzip gunzip \
+      chmod chown id whoami \
+      date env printenv export \
+      true false test expr \
+    ; do
+      ln -s busybox initrd-root/bin/$cmd
+    done
+
+    # Add init script with disk mounting
+    cat > initrd-root/init << 'INIT'
+    ${mkDiskInitScript}
+    INIT
+    chmod +x initrd-root/init
+
+    # Create initrd
+    (cd initrd-root && find . | cpio -o -H newc | gzip) > $out/initrd
+
+    # Create disk image
+    dd if=/dev/zero of=$out/disk.raw bs=1M count=${toString sizeMB}
+    mkfs.ext4 -L rootfs $out/disk.raw
+  '';
+
   # Define our test VMs
   vms = {
     default = mkTestVm { name = "default"; networking = true; };
@@ -337,7 +423,11 @@ DHCP
     minimal = mkTestVm { name = "minimal"; networking = false; kernel = minimalKernel; };
     minimal-net = mkTestVm { name = "minimal-net"; networking = true; kernel = minimalNetKernel; };
     ultra-minimal = mkUltraMinimalVm { name = "ultra-minimal"; };
+    with-disk = mkTestVmWithDisk { name = "with-disk"; };
   };
+
+  # VMs that have disk images
+  vmsWithDisk = [ "with-disk" ];
 
   combined = linuxPkgs.runCommand "capsa-test-vms" {} ''
     mkdir -p $out
@@ -347,14 +437,15 @@ DHCP
       mkdir -p $out/${name}
       ln -s ${vm}/kernel $out/${name}/kernel
       ln -s ${vm}/initrd $out/${name}/initrd
+      ${if builtins.elem name vmsWithDisk then "ln -s ${vm}/disk.raw $out/${name}/disk.raw" else ""}
     '') vms))}
 
     # Generate manifest.json
     cat > $out/manifest.json << 'EOF'
-    ${builtins.toJSON (builtins.mapAttrs (name: vm: {
-      kernel = "${vm}/kernel";
-      initrd = "${vm}/initrd";
-    }) vms)}
+    ${builtins.toJSON (builtins.mapAttrs (name: vm:
+      { kernel = "${vm}/kernel"; initrd = "${vm}/initrd"; }
+      // (if builtins.elem name vmsWithDisk then { disk = "${vm}/disk.raw"; } else {})
+    ) vms)}
     EOF
   '';
 
