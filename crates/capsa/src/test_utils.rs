@@ -60,7 +60,7 @@ fn boot_config(name: &str) -> LinuxDirectBootConfig {
         if !disk_path.exists() {
             panic!("Disk not found at {:?}", disk_path);
         }
-        config = config.with_disk(DiskImage::new(disk_path));
+        config = config.with_root_disk(DiskImage::new(disk_path));
     }
 
     config

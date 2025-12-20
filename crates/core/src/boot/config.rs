@@ -7,7 +7,7 @@ pub struct LinuxDirectBootConfig {
     pub kernel: PathBuf,
     pub initrd: PathBuf,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub disk: Option<DiskImage>,
+    pub root_disk: Option<DiskImage>,
 }
 
 impl LinuxDirectBootConfig {
@@ -15,12 +15,12 @@ impl LinuxDirectBootConfig {
         Self {
             kernel: kernel.into(),
             initrd: initrd.into(),
-            disk: None,
+            root_disk: None,
         }
     }
 
-    pub fn with_disk(mut self, disk: DiskImage) -> Self {
-        self.disk = Some(disk);
+    pub fn with_root_disk(mut self, disk: DiskImage) -> Self {
+        self.root_disk = Some(disk);
         self
     }
 }
@@ -30,20 +30,20 @@ mod tests {
     use super::*;
 
     #[test]
-    fn new_creates_config_without_disk() {
+    fn new_creates_config_without_root_disk() {
         let config = LinuxDirectBootConfig::new("/path/to/kernel", "/path/to/initrd");
         assert_eq!(config.kernel, PathBuf::from("/path/to/kernel"));
         assert_eq!(config.initrd, PathBuf::from("/path/to/initrd"));
-        assert!(config.disk.is_none());
+        assert!(config.root_disk.is_none());
     }
 
     #[test]
-    fn with_disk_adds_disk() {
+    fn with_root_disk_adds_root_disk() {
         let config = LinuxDirectBootConfig::new("/path/to/kernel", "/path/to/initrd")
-            .with_disk(DiskImage::new("/path/to/disk.raw"));
-        assert!(config.disk.is_some());
+            .with_root_disk(DiskImage::new("/path/to/disk.raw"));
+        assert!(config.root_disk.is_some());
         assert_eq!(
-            config.disk.as_ref().unwrap().path,
+            config.root_disk.as_ref().unwrap().path,
             PathBuf::from("/path/to/disk.raw")
         );
     }
@@ -58,17 +58,17 @@ mod tests {
     }
 
     #[test]
-    fn serialization_without_disk_omits_field() {
+    fn serialization_without_root_disk_omits_field() {
         let config = LinuxDirectBootConfig::new("/path/to/kernel", "/path/to/initrd");
         let json = serde_json::to_string(&config).unwrap();
-        assert!(!json.contains("disk"));
+        assert!(!json.contains("root_disk"));
     }
 
     #[test]
-    fn serialization_with_disk_includes_field() {
+    fn serialization_with_root_disk_includes_field() {
         let config = LinuxDirectBootConfig::new("/path/to/kernel", "/path/to/initrd")
-            .with_disk(DiskImage::new("/path/to/disk.raw"));
+            .with_root_disk(DiskImage::new("/path/to/disk.raw"));
         let json = serde_json::to_string(&config).unwrap();
-        assert!(json.contains("disk"));
+        assert!(json.contains("root_disk"));
     }
 }

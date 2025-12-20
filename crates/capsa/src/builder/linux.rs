@@ -51,7 +51,7 @@ impl LinuxVmBuilder<Yes> {
         let internal_config = VmConfig {
             kernel: self.config.kernel,
             initrd: self.config.initrd,
-            disk: self.config.disk,
+            disk: self.config.root_disk,
             cmdline,
             resources: self.resources,
             shares: self.shares,
@@ -79,11 +79,8 @@ impl<P> LinuxVmBuilder<P> {
         self
     }
 
-    // TODO: maybe this should be root_disk? or maybe it shouldn't even be a thing
-    // and people should just set it up directly on LinuxDirectBootConfig and this
-    // should be turned into support for multiple disks?
     pub fn disk(mut self, disk: DiskImage) -> LinuxVmBuilder<No> {
-        self.config.disk = Some(disk);
+        self.config.root_disk = Some(disk);
         LinuxVmBuilder {
             config: self.config,
             resources: self.resources,
@@ -198,7 +195,7 @@ impl<P> LinuxVmBuilder<P> {
             }
         }
 
-        if let Some(disk) = &self.config.disk {
+        if let Some(disk) = &self.config.root_disk {
             match disk.format {
                 ImageFormat::Raw => {
                     if !capabilities.image_formats.raw {
@@ -241,8 +238,8 @@ impl<P> LinuxVmBuilder<P> {
         let mut cmdline = KernelCmdline::new();
         cmdline.merge(&backend.kernel_cmdline_defaults());
 
-        // Only set root device if we have a disk
-        if self.config.disk.is_some() {
+        // Only set root device if we have a root disk
+        if self.config.root_disk.is_some() {
             cmdline.root(backend.default_root_device());
         }
 
@@ -260,7 +257,7 @@ impl<P> LinuxVmBuilder<P> {
         let internal_config = VmConfig {
             kernel: self.config.kernel,
             initrd: self.config.initrd,
-            disk: self.config.disk,
+            disk: self.config.root_disk,
             cmdline,
             resources: self.resources.clone(),
             shares: self.shares,
@@ -292,7 +289,7 @@ mod tests {
             config: LinuxDirectBootConfig {
                 kernel: PathBuf::from("/kernel"),
                 initrd: PathBuf::from("/initrd"),
-                disk: None,
+                root_disk: None,
             },
             resources: ResourceConfig::default(),
             shares: vec![],
@@ -309,7 +306,7 @@ mod tests {
             config: LinuxDirectBootConfig {
                 kernel: PathBuf::from("/kernel"),
                 initrd: PathBuf::from("/initrd"),
-                disk: None,
+                root_disk: None,
             },
             resources: ResourceConfig { cpus, memory_mb },
             shares: vec![],
@@ -326,7 +323,7 @@ mod tests {
             config: LinuxDirectBootConfig {
                 kernel: PathBuf::from("/kernel"),
                 initrd: PathBuf::from("/initrd"),
-                disk: None,
+                root_disk: None,
             },
             resources: ResourceConfig::default(),
             shares,
@@ -338,12 +335,12 @@ mod tests {
         }
     }
 
-    fn builder_with_disk(format: ImageFormat) -> LinuxVmBuilder {
+    fn builder_with_root_disk(format: ImageFormat) -> LinuxVmBuilder {
         LinuxVmBuilder {
             config: LinuxDirectBootConfig {
                 kernel: PathBuf::from("/kernel"),
                 initrd: PathBuf::from("/initrd"),
-                disk: Some(DiskImage::with_format("/disk.img", format)),
+                root_disk: Some(DiskImage::with_format("/disk.img", format)),
             },
             resources: ResourceConfig::default(),
             shares: vec![],
@@ -536,13 +533,13 @@ mod tests {
 
     #[test]
     fn validate_raw_disk_supported() {
-        let builder = builder_with_disk(ImageFormat::Raw);
+        let builder = builder_with_root_disk(ImageFormat::Raw);
         assert!(builder.validate(&all_capabilities()).is_ok());
     }
 
     #[test]
     fn validate_raw_disk_unsupported() {
-        let builder = builder_with_disk(ImageFormat::Raw);
+        let builder = builder_with_root_disk(ImageFormat::Raw);
         let mut caps = all_capabilities();
         caps.image_formats.raw = false;
         let err = builder.validate(&caps).unwrap_err();
@@ -551,13 +548,13 @@ mod tests {
 
     #[test]
     fn validate_qcow2_disk_supported() {
-        let builder = builder_with_disk(ImageFormat::Qcow2);
+        let builder = builder_with_root_disk(ImageFormat::Qcow2);
         assert!(builder.validate(&all_capabilities()).is_ok());
     }
 
     #[test]
     fn validate_qcow2_disk_unsupported() {
-        let builder = builder_with_disk(ImageFormat::Qcow2);
+        let builder = builder_with_root_disk(ImageFormat::Qcow2);
         let mut caps = all_capabilities();
         caps.image_formats.qcow2 = false;
         let err = builder.validate(&caps).unwrap_err();
