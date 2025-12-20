@@ -1,11 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Access mode for shared directories.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum MountMode {
+    /// Guest can read but not modify files.
     #[default]
     ReadOnly,
+    /// Guest can read and write files.
     ReadWrite,
 }
 
@@ -21,15 +24,32 @@ pub struct Virtio9pConfig {
     pub msize: Option<u32>,
 }
 
+/// Mechanism for sharing directories with the guest.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ShareMechanism {
+    /// Automatically select the best available mechanism.
     #[default]
     Auto,
+    /// Use virtio-fs (higher performance).
     VirtioFs(VirtioFsConfig),
+    /// Use virtio-9p (wider compatibility).
     Virtio9p(Virtio9pConfig),
 }
 
+impl ShareMechanism {
+    /// Use virtio-fs with default configuration.
+    pub fn virtio_fs() -> Self {
+        Self::VirtioFs(VirtioFsConfig::default())
+    }
+
+    /// Use virtio-9p with default configuration.
+    pub fn virtio_9p() -> Self {
+        Self::Virtio9p(Virtio9pConfig::default())
+    }
+}
+
+/// A directory shared between host and guest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SharedDir {
     pub host_path: PathBuf,

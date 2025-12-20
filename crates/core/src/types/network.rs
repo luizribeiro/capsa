@@ -1,9 +1,12 @@
 use serde::{Deserialize, Serialize};
 
+/// Network configuration for VMs.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum NetworkMode {
+    /// No network access.
     None,
+    /// NAT networking with internet access.
     #[default]
     Nat,
 }

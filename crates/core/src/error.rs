@@ -1,5 +1,6 @@
 use crate::types::GuestOs;
 
+/// Errors that can occur when using Capsa.
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("no suitable hypervisor backend available")]

@@ -47,6 +47,10 @@ impl fmt::Display for CmdlineArg {
     }
 }
 
+/// Builder for Linux kernel command line arguments.
+///
+/// Use the builder's `cmdline_arg` and `cmdline_flag` methods for typical usage.
+/// This type is for advanced scenarios requiring direct manipulation.
 #[derive(Debug, Clone, Default)]
 pub struct KernelCmdline {
     args: Vec<CmdlineArg>,

@@ -1,11 +1,14 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
+/// Disk image format.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum ImageFormat {
+    /// Raw disk image.
     #[default]
     Raw,
+    /// QEMU Copy-On-Write v2 format.
     Qcow2,
 }
 

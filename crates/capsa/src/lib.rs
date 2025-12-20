@@ -84,13 +84,10 @@ pub use capsa_core::{Error, Result};
 // ============================================================================
 
 // Kernel command line customization
-pub use capsa_core::{CmdlineArg, KernelCmdline};
+pub use capsa_core::KernelCmdline;
 
 // Fine-grained sharing configuration
-pub use capsa_core::{ShareMechanism, Virtio9pConfig, VirtioFsConfig};
-
-// Guest OS type (currently only Linux)
-pub use capsa_core::GuestOs;
+pub use capsa_core::ShareMechanism;
 
 /// Backend capabilities and hypervisor information.
 ///

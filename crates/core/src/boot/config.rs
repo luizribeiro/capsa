@@ -2,6 +2,10 @@ use crate::types::DiskImage;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Boot configuration for Linux VMs using direct kernel boot.
+///
+/// Bypasses the bootloader and boots the kernel directly, which is faster
+/// and simpler for headless Linux VMs.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LinuxDirectBootConfig {
     pub kernel: PathBuf,
