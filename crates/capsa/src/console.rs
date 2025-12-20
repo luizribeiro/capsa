@@ -1,9 +1,17 @@
+//! Console interface for interacting with VM serial console.
+
 use capsa_core::{ConsoleStream, Error, Result};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
 
+/// High-level interface for interacting with a VM's serial console.
+///
+/// Provides methods for reading output, writing input, and automating
+/// common tasks like waiting for prompts and running commands.
+///
+/// Obtain a console via [`VmHandle::console`](crate::VmHandle::console).
 pub struct VmConsole {
     stream: Mutex<Option<ConsoleStream>>,
     buffer: Mutex<String>,
@@ -17,6 +25,9 @@ impl VmConsole {
         }
     }
 
+    /// Splits the console into separate reader and writer halves.
+    ///
+    /// This consumes the console and allows concurrent reading and writing.
     pub async fn split(self) -> Result<(ConsoleReader, ConsoleWriter)> {
         let stream = self.stream.into_inner().ok_or(Error::ConsoleNotEnabled)?;
         let (reader, writer) = tokio::io::split(stream);
@@ -26,6 +37,7 @@ impl VmConsole {
         ))
     }
 
+    /// Reads bytes from the console into the provided buffer.
     pub async fn read(&self, buf: &mut [u8]) -> Result<usize> {
         let mut stream_guard = self.stream.lock().await;
         let stream = stream_guard.as_mut().ok_or(Error::ConsoleNotEnabled)?;
@@ -33,6 +45,9 @@ impl VmConsole {
         Ok(n)
     }
 
+    /// Waits for a pattern to appear in the console output.
+    ///
+    /// Returns all output up to and including the pattern.
     pub async fn wait_for(&self, pattern: &str) -> Result<String> {
         let mut stream_guard = self.stream.lock().await;
         let stream = stream_guard.as_mut().ok_or(Error::ConsoleNotEnabled)?;
@@ -60,6 +75,9 @@ impl VmConsole {
         }
     }
 
+    /// Waits for a pattern with a timeout.
+    ///
+    /// Returns [`Error::Timeout`] if the pattern isn't found within the duration.
     pub async fn wait_for_timeout(&self, pattern: &str, duration: Duration) -> Result<String> {
         match timeout(duration, self.wait_for(pattern)).await {
             Ok(result) => result,
@@ -67,6 +85,9 @@ impl VmConsole {
         }
     }
 
+    /// Waits for any of the given patterns to appear.
+    ///
+    /// Returns the index of the matched pattern and the output up to it.
     pub async fn wait_for_any(&self, patterns: &[&str]) -> Result<(usize, String)> {
         let mut stream_guard = self.stream.lock().await;
         let stream = stream_guard.as_mut().ok_or(Error::ConsoleNotEnabled)?;
@@ -96,6 +117,7 @@ impl VmConsole {
         }
     }
 
+    /// Reads all currently available output without blocking.
     pub async fn read_available(&self) -> Result<String> {
         let mut stream_guard = self.stream.lock().await;
         let stream = stream_guard.as_mut().ok_or(Error::ConsoleNotEnabled)?;
@@ -117,6 +139,7 @@ impl VmConsole {
         Ok(output)
     }
 
+    /// Writes raw bytes to the console.
     pub async fn write(&self, data: &[u8]) -> Result<()> {
         let mut stream_guard = self.stream.lock().await;
         let stream = stream_guard.as_mut().ok_or(Error::ConsoleNotEnabled)?;
@@ -125,23 +148,31 @@ impl VmConsole {
         Ok(())
     }
 
+    /// Writes a string to the console.
     pub async fn write_str(&self, s: &str) -> Result<()> {
         self.write(s.as_bytes()).await
     }
 
+    /// Writes a string followed by a newline to the console.
     pub async fn write_line(&self, s: &str) -> Result<()> {
         let line = format!("{}\n", s);
         self.write(line.as_bytes()).await
     }
 
+    /// Sends Ctrl+C (interrupt signal) to the console.
     pub async fn send_interrupt(&self) -> Result<()> {
         self.write(&[0x03]).await
     }
 
+    /// Sends Ctrl+D (EOF) to the console.
     pub async fn send_eof(&self) -> Result<()> {
         self.write(&[0x04]).await
     }
 
+    /// Performs a login sequence with username and optional password.
+    ///
+    /// Waits for "login:", sends the username, optionally waits for "Password:"
+    /// and sends the password, then waits for a shell prompt.
     pub async fn login(&self, username: &str, password: Option<&str>) -> Result<()> {
         self.wait_for("login:").await?;
         self.write_line(username).await?;
@@ -155,12 +186,16 @@ impl VmConsole {
         Ok(())
     }
 
+    /// Runs a command and waits for the prompt to return.
+    ///
+    /// Returns all output including the command echo and prompt.
     pub async fn run_command(&self, cmd: &str, prompt: &str) -> Result<String> {
         self.write_line(cmd).await?;
         let output = self.wait_for(prompt).await?;
         Ok(output)
     }
 
+    /// Runs a command with a timeout for the prompt to return.
     pub async fn run_command_timeout(
         &self,
         cmd: &str,
@@ -173,6 +208,7 @@ impl VmConsole {
     }
 }
 
+/// Read half of a split console, implementing [`AsyncRead`].
 pub struct ConsoleReader {
     inner: tokio::io::ReadHalf<ConsoleStream>,
 }
@@ -187,6 +223,7 @@ impl AsyncRead for ConsoleReader {
     }
 }
 
+/// Write half of a split console, implementing [`AsyncWrite`].
 pub struct ConsoleWriter {
     inner: tokio::io::WriteHalf<ConsoleStream>,
 }

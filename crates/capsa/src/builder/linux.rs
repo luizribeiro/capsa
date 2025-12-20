@@ -9,6 +9,33 @@ use capsa_core::{
 use std::path::PathBuf;
 use std::time::Duration;
 
+/// Builder for configuring and creating Linux virtual machines.
+///
+/// Use [`Capsa::linux`](crate::Capsa::linux) to create a builder instance.
+/// The builder follows a fluent API pattern for configuration.
+///
+/// # Type Parameter
+///
+/// The `P` parameter tracks whether the VM can be pooled. Adding a disk
+/// makes the VM non-poolable since disk state would be shared across instances.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// use capsa::{Capsa, LinuxDirectBootConfig, DiskImage};
+///
+/// # async fn example() -> capsa::Result<()> {
+/// let config = LinuxDirectBootConfig::new("./bzImage", "./initrd")
+///     .with_root_disk(DiskImage::new("./rootfs.raw"));
+///
+/// let vm = Capsa::linux(config)
+///     .cpus(4)
+///     .memory_mb(2048)
+///     .build()
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
 pub struct LinuxVmBuilder<P = Yes> {
     config: LinuxDirectBootConfig,
     resources: ResourceConfig,
@@ -29,6 +56,9 @@ pub struct LinuxVmBuilder<P = Yes> {
 // TODO: allow for backend type to be forced by caller, instead of automatically selecting it
 // through select_backend
 impl LinuxVmBuilder<Yes> {
+    /// Creates a new builder with the given boot configuration.
+    ///
+    /// Prefer using [`Capsa::linux`](crate::Capsa::linux) instead of calling this directly.
     pub fn new(config: LinuxDirectBootConfig) -> Self {
         Self {
             config,
@@ -44,6 +74,10 @@ impl LinuxVmBuilder<Yes> {
         }
     }
 
+    /// Builds a pool of identical VMs for concurrent use.
+    ///
+    /// The pool pre-starts `size` VMs that can be acquired and released.
+    /// Only available for poolable configurations (no disks attached).
     pub async fn build_pool(self, size: usize) -> Result<VmPool> {
         let backend = select_backend()?;
         self.validate(backend.capabilities())?;
@@ -68,22 +102,28 @@ impl LinuxVmBuilder<Yes> {
 }
 
 impl<P> LinuxVmBuilder<P> {
+    /// Sets the number of virtual CPUs for the VM.
     pub fn cpus(mut self, count: u32) -> Self {
         self.resources.cpus = count;
         self
     }
 
+    /// Sets the amount of memory in megabytes for the VM.
     pub fn memory_mb(mut self, mb: u32) -> Self {
         self.resources.memory_mb = mb;
         self
     }
 
+    /// Sets a timeout for VM operations.
     pub fn timeout(mut self, duration: Duration) -> Self {
         self.timeout = Some(duration);
         self
     }
 
-    /// Add a non-root disk (becomes /dev/vdb, /dev/vdc, etc.)
+    /// Adds a disk to the VM (becomes /dev/vdb, /dev/vdc, etc.).
+    ///
+    /// Adding a disk makes the VM non-poolable since disk state would be
+    /// shared across pool instances.
     pub fn disk(mut self, disk: DiskImage) -> LinuxVmBuilder<No> {
         self.disks.push(disk);
         LinuxVmBuilder {
@@ -99,10 +139,10 @@ impl<P> LinuxVmBuilder<P> {
         }
     }
 
-    // TODO: improve ergonomics of shared directories on Linux VMs
-    // maybe it's better ergonomics to just have share(SharedDir { ... }) (and fn shares)
-    // with ShareMechanism having a default value? or maybe it's better to just have share
-    // and require the mechanism to be used?
+    /// Adds a shared directory between host and guest.
+    ///
+    /// The directory will be accessible inside the VM at the specified guest path.
+    /// The sharing mechanism (virtio-fs or 9p) is automatically selected.
     pub fn share(
         mut self,
         host: impl Into<PathBuf>,
@@ -113,6 +153,7 @@ impl<P> LinuxVmBuilder<P> {
         self
     }
 
+    /// Adds a shared directory with a specific sharing mechanism.
     pub fn share_with_mechanism(
         mut self,
         host: impl Into<PathBuf>,
@@ -125,16 +166,19 @@ impl<P> LinuxVmBuilder<P> {
         self
     }
 
+    /// Adds multiple shared directories.
     pub fn shares(mut self, shares: impl IntoIterator<Item = SharedDir>) -> Self {
         self.shares.extend(shares);
         self
     }
 
+    /// Sets the network mode for the VM.
     pub fn network(mut self, mode: NetworkMode) -> Self {
         self.network = mode;
         self
     }
 
+    /// Disables networking for the VM.
     pub fn no_network(self) -> Self {
         self.network(NetworkMode::None)
     }
@@ -145,19 +189,21 @@ impl<P> LinuxVmBuilder<P> {
         self
     }
 
-    // TODO: maybe revisit ergonomics of cmdline? it seems odd to have these methods here since
-    // they aren't really about the VM but really about the boot process. maybe they should be
-    // restricted to LinuxDirectBootConfig?
+    /// Adds a kernel command line argument (key=value pair).
     pub fn cmdline_arg(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.cmdline.arg(key, value);
         self
     }
 
+    /// Adds a kernel command line flag (single value without =).
     pub fn cmdline_flag(mut self, name: impl Into<String>) -> Self {
         self.cmdline.flag(name);
         self
     }
 
+    /// Overrides the entire kernel command line with a custom string.
+    ///
+    /// This replaces all default arguments. Use with caution.
     pub fn cmdline_override(mut self, cmdline: impl Into<String>) -> Self {
         self.cmdline.override_with(cmdline);
         self
@@ -294,6 +340,10 @@ impl<P> LinuxVmBuilder<P> {
         cmdline.build()
     }
 
+    /// Builds and starts the virtual machine.
+    ///
+    /// This validates the configuration, selects an available backend,
+    /// and starts the VM. Returns a handle for interacting with the running VM.
     pub async fn build(self) -> Result<VmHandle> {
         let backend = select_backend()?;
         self.validate(backend.capabilities())?;

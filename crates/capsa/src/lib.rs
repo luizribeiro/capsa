@@ -11,13 +11,12 @@
 //!
 //! #[apple_main::main]
 //! async fn main() {
-//!     // Minimal config - just kernel and initrd (disk is optional)
-//!     let config = LinuxDirectBootConfig::new("./bzImage", "./initrd");
+//!     let config = LinuxDirectBootConfig::new("./bzImage", "./initrd")
+//!         .with_root_disk(DiskImage::new("./rootfs.raw"));
 //!
 //!     let vm = Capsa::linux(config)
 //!         .cpus(2)
 //!         .memory_mb(2048)
-//!         .disk(DiskImage::new("./rootfs.raw"))
 //!         .share("./workspace", "/workspace", MountMode::ReadWrite)
 //!         .console_enabled()
 //!         .build()
@@ -33,7 +32,6 @@
 //! }
 //! ```
 
-// TODO: document all public types exported by the capsa library
 // TODO: audit which types really should be exposed publicly. things like capabilities
 // probably don't have to be public outside of this crate
 

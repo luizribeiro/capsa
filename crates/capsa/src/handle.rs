@@ -1,3 +1,5 @@
+//! VM handle for managing running virtual machines.
+
 use crate::console::VmConsole;
 use capsa_core::{BackendVmHandle, Error, GuestOs, ResourceConfig, Result};
 use std::sync::Arc;
@@ -12,14 +14,27 @@ const STATUS_STOPPING: u8 = 3;
 const STATUS_STOPPED: u8 = 4;
 const STATUS_FAILED: u8 = 5;
 
+/// Current status of a virtual machine.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VmStatus {
+    /// VM has been created but not yet started.
     Created,
+    /// VM is in the process of starting.
     Starting,
+    /// VM is running.
     Running,
+    /// VM is in the process of stopping.
     Stopping,
-    Stopped { exit_code: Option<i32> },
-    Failed { message: String },
+    /// VM has stopped.
+    Stopped {
+        /// Exit code from the VM, if available.
+        exit_code: Option<i32>,
+    },
+    /// VM has failed.
+    Failed {
+        /// Error message describing the failure.
+        message: String,
+    },
 }
 
 impl VmStatus {
@@ -40,10 +55,12 @@ impl VmStatus {
     }
 }
 
+/// Handle to a running virtual machine.
+///
+/// Provides methods for controlling the VM lifecycle (start, stop, kill),
+/// monitoring status, and accessing the console.
 pub struct VmHandle {
     backend_handle: Arc<Box<dyn BackendVmHandle>>,
-    // TODO: exit code and error message already have mutexes... is it really worth it to
-    // keep this as AtomicU8?
     status: AtomicU8,
     exit_code: std::sync::Mutex<Option<i32>>,
     error_message: std::sync::Mutex<Option<String>>,
@@ -67,6 +84,7 @@ impl VmHandle {
         }
     }
 
+    /// Starts the VM if it's not already running.
     pub async fn start(&self) -> Result<()> {
         let current = self.status.load(Ordering::SeqCst);
         if current == STATUS_RUNNING {
@@ -78,10 +96,15 @@ impl VmHandle {
         Ok(())
     }
 
+    /// Gracefully stops the VM with a 30-second timeout.
+    ///
+    /// Sends a shutdown request to the guest. If the guest doesn't stop
+    /// within the timeout, it will be forcefully killed.
     pub async fn stop(&self) -> Result<()> {
         self.stop_with_timeout(Duration::from_secs(30)).await
     }
 
+    /// Gracefully stops the VM with a custom timeout.
     pub async fn stop_with_timeout(&self, grace_period: Duration) -> Result<()> {
         let current = self.status.load(Ordering::SeqCst);
         if current != STATUS_RUNNING {
@@ -111,12 +134,14 @@ impl VmHandle {
         Ok(())
     }
 
+    /// Forcefully terminates the VM immediately.
     pub async fn kill(&self) -> Result<()> {
         self.backend_handle.kill().await?;
         self.status.store(STATUS_STOPPED, Ordering::SeqCst);
         Ok(())
     }
 
+    /// Returns the current status of the VM.
     pub fn status(&self) -> VmStatus {
         let status = self.status.load(Ordering::SeqCst);
         let exit_code = *self.exit_code.lock().unwrap();
@@ -124,6 +149,7 @@ impl VmHandle {
         VmStatus::from_atomic(status, exit_code, error_msg)
     }
 
+    /// Waits for the VM to exit and returns its final status.
     pub async fn wait(&self) -> Result<VmStatus> {
         let code = self.backend_handle.wait().await?;
         *self.exit_code.lock().unwrap() = Some(code);
@@ -131,6 +157,9 @@ impl VmHandle {
         Ok(self.status())
     }
 
+    /// Waits for the VM to exit with a timeout.
+    ///
+    /// Returns `None` if the timeout expires before the VM exits.
     pub async fn wait_timeout(&self, duration: Duration) -> Result<Option<VmStatus>> {
         match timeout(duration, self.wait()).await {
             Ok(result) => result.map(Some),
@@ -138,6 +167,9 @@ impl VmHandle {
         }
     }
 
+    /// Gets the console interface for interacting with the VM.
+    ///
+    /// Requires that the VM was built with `.console_enabled()`.
     pub async fn console(&self) -> Result<VmConsole> {
         let stream = self
             .backend_handle
@@ -152,10 +184,12 @@ impl VmHandle {
     // serial console manually). this might require a VmBuilder that has enabled agent support
     // (and a guest with the agent running in it, of course)
 
+    /// Returns the guest operating system type.
     pub fn guest_os(&self) -> GuestOs {
         self.guest_os
     }
 
+    /// Returns the resource configuration (CPUs, memory) of the VM.
     pub fn resources(&self) -> &ResourceConfig {
         &self.resources
     }

@@ -1,3 +1,9 @@
+//! Backend implementations for different hypervisors.
+//!
+//! This module provides the hypervisor backend abstraction and platform-specific
+//! implementations. Users typically don't need to interact with this module directly;
+//! the [`Capsa`](crate::Capsa) builder automatically selects an available backend.
+
 #[cfg(target_os = "macos")]
 mod macos;
 
