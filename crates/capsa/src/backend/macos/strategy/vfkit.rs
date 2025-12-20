@@ -2,8 +2,7 @@ use super::ExecutionStrategy;
 use crate::backend::macos::pty::Pty;
 use async_trait::async_trait;
 use capsa_core::{
-    BackendVmHandle, ConsoleMode, ConsoleStream, Error, MountMode, NetworkMode, Result,
-    ShareMechanism, VmConfig,
+    BackendVmHandle, ConsoleStream, Error, MountMode, NetworkMode, Result, ShareMechanism, VmConfig,
 };
 use std::path::PathBuf;
 use std::process::Stdio;
@@ -82,12 +81,9 @@ impl VfkitStrategy {
             ));
         }
 
-        match &config.console {
-            ConsoleMode::Disabled => {}
-            ConsoleMode::Enabled | ConsoleMode::Stdio => {
-                args.push("--device".to_string());
-                args.push("virtio-serial,stdio".to_string());
-            }
+        if config.console_enabled {
+            args.push("--device".to_string());
+            args.push("virtio-serial,stdio".to_string());
         }
 
         args
@@ -123,7 +119,7 @@ impl ExecutionStrategy for VfkitStrategy {
 
         tracing::debug!("Starting vfkit with args: {:?}", args);
 
-        let pty = if config.console != ConsoleMode::Disabled {
+        let pty = if config.console_enabled {
             Some(
                 Pty::new()
                     .map_err(|e| Error::StartFailed(format!("Failed to create PTY: {}", e)))?,

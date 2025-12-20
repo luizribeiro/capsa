@@ -5,7 +5,7 @@ use apple_main::criterion::Criterion;
 use apple_main::criterion_macro::criterion;
 use capsa::backend::{HypervisorBackend, VmConfig};
 use capsa::test_utils::test_vm;
-use capsa::{ConsoleMode, NetworkMode, ResourceConfig};
+use capsa::{NetworkMode, ResourceConfig};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -27,7 +27,7 @@ fn make_test_config(kernel: PathBuf, initrd: PathBuf) -> VmConfig {
         },
         shares: vec![],
         network: NetworkMode::None,
-        console: ConsoleMode::Enabled,
+        console_enabled: true,
     }
 }
 

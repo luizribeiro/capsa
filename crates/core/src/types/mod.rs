@@ -1,9 +1,7 @@
-mod console;
 mod disk;
 mod network;
 mod share;
 
-pub use console::ConsoleMode;
 pub use disk::{DiskImage, ImageFormat};
 pub use network::NetworkMode;
 pub use share::{MountMode, ShareMechanism, SharedDir, Virtio9pConfig, VirtioFsConfig};

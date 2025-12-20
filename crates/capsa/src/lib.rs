@@ -58,8 +58,8 @@ pub use handle::{VmHandle, VmStatus};
 pub use pool::{PooledVm, VmPool};
 
 pub use capsa_core::{
-    BackendCapabilities, BootMethodSupport, CmdlineArg, ConsoleMode, DiskImage, Error, GuestOs,
-    GuestOsSupport, ImageFormat, ImageFormatSupport, KernelCmdline, LinuxDirectBootConfig,
-    MountMode, NetworkMode, NetworkModeSupport, ResourceConfig, Result, ShareMechanism,
-    ShareMechanismSupport, SharedDir, Virtio9pConfig, VirtioFsConfig,
+    BackendCapabilities, BootMethodSupport, CmdlineArg, DiskImage, Error, GuestOs, GuestOsSupport,
+    ImageFormat, ImageFormatSupport, KernelCmdline, LinuxDirectBootConfig, MountMode, NetworkMode,
+    NetworkModeSupport, ResourceConfig, Result, ShareMechanism, ShareMechanismSupport, SharedDir,
+    Virtio9pConfig, VirtioFsConfig,
 };

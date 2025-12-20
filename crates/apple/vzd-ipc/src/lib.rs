@@ -2,9 +2,7 @@ mod transport;
 
 pub use transport::PipeTransport;
 
-pub use capsa_core::{
-    ConsoleMode, DiskImage, MountMode, NetworkMode, ResourceConfig, SharedDir, VmConfig,
-};
+pub use capsa_core::{DiskImage, MountMode, NetworkMode, ResourceConfig, SharedDir, VmConfig};
 
 use serde::{Deserialize, Serialize};
 

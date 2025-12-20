@@ -2,9 +2,9 @@ use crate::backend::select_backend;
 use crate::handle::VmHandle;
 use crate::pool::{No, Poolability, VmPool, Yes};
 use capsa_core::{
-    BackendCapabilities, ConsoleMode, DiskImage, Error, GuestOs, HypervisorBackend, ImageFormat,
-    KernelCmdline, LinuxDirectBootConfig, MountMode, NetworkMode, ResourceConfig, Result,
-    ShareMechanism, SharedDir, VmConfig,
+    BackendCapabilities, DiskImage, Error, GuestOs, HypervisorBackend, ImageFormat, KernelCmdline,
+    LinuxDirectBootConfig, MountMode, NetworkMode, ResourceConfig, Result, ShareMechanism,
+    SharedDir, VmConfig,
 };
 use std::path::PathBuf;
 use std::time::Duration;
@@ -14,7 +14,7 @@ pub struct LinuxVmBuilder<P = Yes> {
     resources: ResourceConfig,
     shares: Vec<SharedDir>,
     network: NetworkMode,
-    console: ConsoleMode,
+    console_enabled: bool,
     cmdline: KernelCmdline,
     #[allow(dead_code)]
     timeout: Option<Duration>,
@@ -34,7 +34,7 @@ impl LinuxVmBuilder<Yes> {
             resources: ResourceConfig::default(),
             shares: Vec::new(),
             network: NetworkMode::default(),
-            console: ConsoleMode::default(),
+            console_enabled: false,
             cmdline: KernelCmdline::new(),
             // TODO: either remove this or make it actually used
             timeout: None,
@@ -56,7 +56,7 @@ impl LinuxVmBuilder<Yes> {
             resources: self.resources,
             shares: self.shares,
             network: self.network,
-            console: self.console,
+            console_enabled: self.console_enabled,
         };
 
         VmPool::new(internal_config, size).await
@@ -89,7 +89,7 @@ impl<P> LinuxVmBuilder<P> {
             resources: self.resources,
             shares: self.shares,
             network: self.network,
-            console: self.console,
+            console_enabled: self.console_enabled,
             cmdline: self.cmdline,
             timeout: self.timeout,
             poolable: Poolability::new(),
@@ -136,18 +136,10 @@ impl<P> LinuxVmBuilder<P> {
         self.network(NetworkMode::None)
     }
 
-    pub fn console(mut self, mode: ConsoleMode) -> Self {
-        self.console = mode;
+    /// Enables the console device for programmatic access via `vm.console()`.
+    pub fn console_enabled(mut self) -> Self {
+        self.console_enabled = true;
         self
-    }
-
-    // TODO: revisit ergonomics of console. maybe we don't need console_enabled and console_stdio?
-    pub fn console_enabled(self) -> Self {
-        self.console(ConsoleMode::Enabled)
-    }
-
-    pub fn console_stdio(self) -> Self {
-        self.console(ConsoleMode::Stdio)
     }
 
     // TODO: maybe revisit ergonomics of cmdline? it seems odd to have these methods here since
@@ -273,7 +265,7 @@ impl<P> LinuxVmBuilder<P> {
             resources: self.resources.clone(),
             shares: self.shares,
             network: self.network,
-            console: self.console,
+            console_enabled: self.console_enabled,
         };
 
         let backend_handle = backend.start(&internal_config).await?;
@@ -305,7 +297,7 @@ mod tests {
             resources: ResourceConfig::default(),
             shares: vec![],
             network,
-            console: ConsoleMode::default(),
+            console_enabled: false,
             cmdline: KernelCmdline::new(),
             timeout: None,
             poolable: Poolability::new(),
@@ -322,7 +314,7 @@ mod tests {
             resources: ResourceConfig { cpus, memory_mb },
             shares: vec![],
             network: NetworkMode::default(),
-            console: ConsoleMode::default(),
+            console_enabled: false,
             cmdline: KernelCmdline::new(),
             timeout: None,
             poolable: Poolability::new(),
@@ -339,7 +331,7 @@ mod tests {
             resources: ResourceConfig::default(),
             shares,
             network: NetworkMode::default(),
-            console: ConsoleMode::default(),
+            console_enabled: false,
             cmdline: KernelCmdline::new(),
             timeout: None,
             poolable: Poolability::new(),
@@ -356,7 +348,7 @@ mod tests {
             resources: ResourceConfig::default(),
             shares: vec![],
             network: NetworkMode::default(),
-            console: ConsoleMode::default(),
+            console_enabled: false,
             cmdline: KernelCmdline::new(),
             timeout: None,
             poolable: Poolability::new(),

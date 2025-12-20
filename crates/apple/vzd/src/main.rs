@@ -1,5 +1,5 @@
 use capsa_apple_vz::NativeVirtualizationBackend;
-use capsa_apple_vzd_ipc::{ConsoleMode, PipeTransport, RpcResult, VmConfig, VmHandleId, VmService};
+use capsa_apple_vzd_ipc::{PipeTransport, RpcResult, VmConfig, VmHandleId, VmService};
 use capsa_core::{AsyncOwnedFd, BackendVmHandle, ConsoleStream, HypervisorBackend};
 use futures::prelude::*;
 use std::collections::HashMap;
@@ -51,7 +51,7 @@ impl VmService for VzdServer {
         let handle: Box<dyn BackendVmHandle> =
             backend.start(&config).await.map_err(|e| e.to_string())?;
 
-        if config.console != ConsoleMode::Disabled
+        if config.console_enabled
             && let Ok(Some(console)) = handle.console_stream().await
             && let Some(fd3) = try_get_fd3()
         {

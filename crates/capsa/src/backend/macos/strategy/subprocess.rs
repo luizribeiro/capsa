@@ -2,7 +2,7 @@ use super::ExecutionStrategy;
 use crate::backend::macos::pty::Pty;
 use async_trait::async_trait;
 use capsa_apple_vzd_ipc::{PipeTransport, VmHandleId, VmServiceClient};
-use capsa_core::{BackendVmHandle, ConsoleMode, ConsoleStream, Error, Result, VmConfig};
+use capsa_core::{BackendVmHandle, ConsoleStream, Error, Result, VmConfig};
 use std::os::fd::AsRawFd;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -64,8 +64,7 @@ impl ExecutionStrategy for SubprocessStrategy {
     async fn start(&self, config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         let vzd_path = Self::find_vzd_binary().ok_or(Error::NoBackendAvailable)?;
 
-        let console_enabled = config.console != ConsoleMode::Disabled;
-        let pty = if console_enabled {
+        let pty = if config.console_enabled {
             Some(
                 Pty::new()
                     .map_err(|e| Error::StartFailed(format!("Failed to create PTY: {}", e)))?,

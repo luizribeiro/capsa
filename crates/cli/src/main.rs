@@ -48,9 +48,9 @@ enum Commands {
         #[arg(long, short)]
         share: Vec<String>,
 
-        /// Console mode (disabled, enabled, stdio)
-        #[arg(long, default_value = "stdio")]
-        console: String,
+        /// Disable console (by default, console is enabled and connected to stdio)
+        #[arg(long)]
+        no_console: bool,
     },
 
     /// Show available backends and their capabilities
@@ -87,20 +87,13 @@ async fn run() -> anyhow::Result<()> {
             cpus,
             memory,
             share,
-            console,
+            no_console,
         } => {
             // TODO: better validation and parsing of all parameters through clap
             let kernel = kernel.ok_or_else(|| anyhow::anyhow!("--kernel is required"))?;
             let initrd = initrd.ok_or_else(|| anyhow::anyhow!("--initrd is required"))?;
 
             let boot_config = LinuxDirectBootConfig::new(&kernel, &initrd);
-
-            let use_stdio = console == "stdio";
-            let console_mode = match console.as_str() {
-                "disabled" => capsa::ConsoleMode::Disabled,
-                "enabled" => capsa::ConsoleMode::Enabled,
-                _ => capsa::ConsoleMode::Stdio,
-            };
 
             let shares: Vec<_> = share
                 .iter()
@@ -131,22 +124,23 @@ async fn run() -> anyhow::Result<()> {
                 }};
             }
 
-            let base = Capsa::linux(boot_config)
-                .cpus(cpus)
-                .memory_mb(memory)
-                .console(console_mode);
+            let mut base = Capsa::linux(boot_config).cpus(cpus).memory_mb(memory);
+
+            if !no_console {
+                base = base.console_enabled();
+            }
 
             let vm = match disk {
                 Some(disk_path) => with_shares!(base.disk(DiskImage::new(disk_path))),
                 None => with_shares!(base),
             };
 
-            if use_stdio {
-                run_stdio_console(&vm).await?;
-            } else {
+            if no_console {
                 eprintln!("VM started, waiting for exit...");
                 let status = vm.wait().await?;
                 eprintln!("VM exited with status: {:?}", status);
+            } else {
+                run_stdio_console(&vm).await?;
             }
         }
 
