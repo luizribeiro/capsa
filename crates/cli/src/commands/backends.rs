@@ -1,6 +1,6 @@
 //! The `backends` command - shows available backends and their capabilities.
 
-use capsa::{HostPlatform, HypervisorBackend, available_backends};
+use capsa::capabilities::{HostPlatform, HypervisorBackend, available_backends};
 use clap::Args;
 
 #[derive(Args)]

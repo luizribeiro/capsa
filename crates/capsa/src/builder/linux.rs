@@ -12,30 +12,96 @@ use std::time::Duration;
 /// Builder for configuring and creating Linux virtual machines.
 ///
 /// Use [`Capsa::linux`](crate::Capsa::linux) to create a builder instance.
-/// The builder follows a fluent API pattern for configuration.
+/// The builder uses a fluent API—chain methods to configure, then call
+/// [`build`](Self::build) or [`build_pool`](Self::build_pool).
 ///
-/// # Type Parameter
-///
-/// The `P` parameter tracks whether the VM can be pooled. Adding a disk
-/// makes the VM non-poolable since disk state would be shared across instances.
-///
-/// # Example
+/// # Resources
 ///
 /// ```rust,no_run
-/// use capsa::{Capsa, LinuxDirectBootConfig, DiskImage};
-///
+/// # use capsa::{Capsa, LinuxDirectBootConfig};
 /// # async fn example() -> capsa::Result<()> {
-/// let config = LinuxDirectBootConfig::new("./bzImage", "./initrd")
-///     .with_root_disk(DiskImage::new("./rootfs.raw"));
-///
+/// # let config = LinuxDirectBootConfig::new("k", "i");
 /// let vm = Capsa::linux(config)
-///     .cpus(4)
-///     .memory_mb(2048)
-///     .build()
-///     .await?;
+///     .cpus(4)           // Default: 1
+///     .memory_mb(2048)   // Default: 512
+///     .build().await?;
 /// # Ok(())
 /// # }
 /// ```
+///
+/// # Storage
+///
+/// The root disk is set via [`LinuxDirectBootConfig::with_root_disk`]. Additional
+/// disks can be added with [`disk`](Self::disk) (appears as `/dev/vdb`, `/dev/vdc`, etc.):
+///
+/// ```rust,no_run
+/// # use capsa::{Capsa, LinuxDirectBootConfig, DiskImage};
+/// # async fn example() -> capsa::Result<()> {
+/// let config = LinuxDirectBootConfig::new("./kernel", "./initrd")
+///     .with_root_disk(DiskImage::new("./rootfs.raw"));
+///
+/// let vm = Capsa::linux(config)
+///     .disk(DiskImage::new("./data.raw"))  // /dev/vdb
+///     .build().await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Shared Directories
+///
+/// Share host directories with the guest using [`share`](Self::share):
+///
+/// ```rust,no_run
+/// # use capsa::{Capsa, LinuxDirectBootConfig, MountMode};
+/// # async fn example() -> capsa::Result<()> {
+/// # let config = LinuxDirectBootConfig::new("k", "i");
+/// let vm = Capsa::linux(config)
+///     .share("./src", "/mnt/src", MountMode::ReadOnly)
+///     .share("./output", "/mnt/output", MountMode::ReadWrite)
+///     .build().await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Networking
+///
+/// ```rust,no_run
+/// # use capsa::{Capsa, LinuxDirectBootConfig, NetworkMode};
+/// # async fn example() -> capsa::Result<()> {
+/// # let config = LinuxDirectBootConfig::new("k", "i");
+/// // NAT networking (default)
+/// let vm = Capsa::linux(config).network(NetworkMode::Nat).build().await?;
+///
+/// // No networking
+/// # let config = LinuxDirectBootConfig::new("k", "i");
+/// let vm = Capsa::linux(config).no_network().build().await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Console Access
+///
+/// Enable console access for programmatic interaction:
+///
+/// ```rust,no_run
+/// # use capsa::{Capsa, LinuxDirectBootConfig};
+/// # async fn example() -> capsa::Result<()> {
+/// # let config = LinuxDirectBootConfig::new("k", "i");
+/// let vm = Capsa::linux(config)
+///     .console_enabled()  // Required for vm.console()
+///     .build().await?;
+///
+/// let console = vm.console().await?;
+/// # Ok(())
+/// # }
+/// ```
+///
+/// # Poolability
+///
+/// The type parameter `P` tracks whether the VM can be pooled. Adding a disk
+/// via [`disk`](Self::disk) changes the type to `LinuxVmBuilder<No>`, which
+/// removes the [`build_pool`](Self::build_pool) method at compile time.
+/// This prevents sharing mutable disk state across pool instances.
 pub struct LinuxVmBuilder<P = Yes> {
     config: LinuxDirectBootConfig,
     resources: ResourceConfig,

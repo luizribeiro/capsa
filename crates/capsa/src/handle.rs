@@ -1,4 +1,18 @@
 //! VM handle for managing running virtual machines.
+//!
+//! The [`VmHandle`] is your primary interface for controlling a running VM's
+//! lifecycle. Use it to:
+//!
+//! - Monitor VM status via [`VmHandle::status`]
+//! - Gracefully stop or forcefully kill the VM
+//! - Wait for the VM to exit
+//! - Access the serial console via [`VmHandle::console`]
+//!
+//! # Lifecycle
+//!
+//! VMs created via [`Capsa::linux`](crate::Capsa::linux) start in the `Running`
+//! state. Use [`stop`](VmHandle::stop) for graceful shutdown or
+//! [`kill`](VmHandle::kill) for immediate termination.
 
 use crate::console::VmConsole;
 use capsa_core::{BackendVmHandle, Error, GuestOs, ResourceConfig, Result};
