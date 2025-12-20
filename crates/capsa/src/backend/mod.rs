@@ -16,33 +16,86 @@ pub use capsa_core::{
     KernelCmdline, Result, VmConfig,
 };
 
+/// Information about a hypervisor backend.
+#[derive(Debug, Clone)]
+pub struct BackendInfo {
+    /// Backend name (e.g., "vfkit", "native-virtualization")
+    pub name: &'static str,
+    /// Target platform (e.g., "macos", "linux")
+    pub platform: &'static str,
+    /// Whether the backend is available on this system
+    pub available: bool,
+    /// Backend capabilities
+    pub capabilities: BackendCapabilities,
+}
+
+/// Returns information about all compiled-in backends.
+pub fn available_backends() -> Vec<BackendInfo> {
+    available_backends_with_constructors()
+        .into_iter()
+        .map(|(info, _)| info)
+        .collect()
+}
+
 pub(crate) fn select_backend() -> Result<Box<dyn HypervisorBackend>> {
+    // Find the first available backend (priority order is determined by available_backends_with_constructors)
+    for (info, constructor) in available_backends_with_constructors() {
+        if info.available {
+            return Ok(constructor());
+        }
+    }
+    Err(capsa_core::Error::NoBackendAvailable)
+}
+
+type BackendConstructor = fn() -> Box<dyn HypervisorBackend>;
+
+fn available_backends_with_constructors() -> Vec<(BackendInfo, BackendConstructor)> {
+    let mut backends: Vec<(BackendInfo, BackendConstructor)> = Vec::new();
+
     #[cfg(target_os = "macos")]
     {
         #[cfg(feature = "macos-subprocess")]
         {
             let backend = MacOsBackend::subprocess();
-            if backend.is_available() {
-                return Ok(Box::new(backend));
-            }
+            backends.push((
+                BackendInfo {
+                    name: backend.name(),
+                    platform: "macos",
+                    available: backend.is_available(),
+                    capabilities: backend.capabilities().clone(),
+                },
+                || Box::new(MacOsBackend::subprocess()),
+            ));
         }
 
         #[cfg(feature = "macos-native")]
         {
             let backend = MacOsBackend::native();
-            if backend.is_available() {
-                return Ok(Box::new(backend));
-            }
+            backends.push((
+                BackendInfo {
+                    name: backend.name(),
+                    platform: "macos",
+                    available: backend.is_available(),
+                    capabilities: backend.capabilities().clone(),
+                },
+                || Box::new(MacOsBackend::native()),
+            ));
         }
 
         #[cfg(feature = "vfkit")]
         {
             let backend = MacOsBackend::vfkit();
-            if backend.is_available() {
-                return Ok(Box::new(backend));
-            }
+            backends.push((
+                BackendInfo {
+                    name: backend.name(),
+                    platform: "macos",
+                    available: backend.is_available(),
+                    capabilities: backend.capabilities().clone(),
+                },
+                || Box::new(MacOsBackend::vfkit()),
+            ));
         }
     }
 
-    Err(capsa_core::Error::NoBackendAvailable)
+    backends
 }
