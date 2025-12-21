@@ -2,7 +2,7 @@
 
 use crate::delegate::{StopSender, VmStateDelegate};
 use block2::RcBlock;
-use capsa_core::{DiskImage, Error, NetworkMode, Result};
+use capsa_core::{DiskImage, Error, NetworkMode, Result, VsockConfig};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{AnyThread, MainThreadMarker};
@@ -12,7 +12,7 @@ use objc2_virtualization::{
     VZEFIVariableStoreInitializationOptions, VZLinuxBootLoader, VZNATNetworkDeviceAttachment,
     VZStorageDeviceConfiguration, VZVirtioBlockDeviceConfiguration,
     VZVirtioConsoleDeviceSerialPortConfiguration, VZVirtioNetworkDeviceConfiguration,
-    VZVirtualMachine, VZVirtualMachineConfiguration,
+    VZVirtioSocketDeviceConfiguration, VZVirtualMachine, VZVirtualMachineConfiguration,
 };
 use std::os::fd::OwnedFd;
 use std::os::unix::io::RawFd;
@@ -37,6 +37,7 @@ pub struct CreateVmConfig {
     pub root_disk: Option<DiskImage>,
     pub disks: Vec<DiskImage>,
     pub network: NetworkMode,
+    pub vsock: VsockConfig,
     pub console_input_read_fd: Option<RawFd>,
     pub console_output_write_fd: Option<RawFd>,
     pub stop_sender: StopSender,
@@ -191,6 +192,16 @@ pub fn create_vm(config: CreateVmConfig) -> Result<(usize, usize)> {
             vm_config.setSerialPorts(&serial_configs);
         }
 
+        if !config.vsock.ports.is_empty() {
+            let vsock_config = VZVirtioSocketDeviceConfiguration::new();
+            let socket_configs: Retained<
+                objc2_foundation::NSArray<objc2_virtualization::VZSocketDeviceConfiguration>,
+            > = objc2_foundation::NSArray::from_retained_slice(&[objc2::rc::Retained::into_super(
+                vsock_config,
+            )]);
+            vm_config.setSocketDevices(&socket_configs);
+        }
+
         vm_config
             .validateWithError()
             .map_err(|e| Error::StartFailed(format!("VM config validation failed: {}", e)))?;
@@ -204,6 +215,26 @@ pub fn create_vm(config: CreateVmConfig) -> Result<(usize, usize)> {
         let vm_ptr = Retained::into_raw(vm);
         let delegate_ptr = Retained::into_raw(delegate);
         Ok((vm_ptr as usize, delegate_ptr as usize))
+    }
+}
+
+/// Returns the socket device address from a VM, if vsock is configured.
+///
+/// # Safety
+/// `vm_addr` must be a valid pointer to a VZVirtualMachine.
+pub fn get_socket_device_addr(vm_addr: usize) -> usize {
+    unsafe {
+        let ptr = vm_addr as *const VZVirtualMachine;
+        let vm = &*ptr;
+        let socket_devices = vm.socketDevices();
+
+        if socket_devices.count() == 0 {
+            return 0;
+        }
+
+        // Get the first socket device (we only configure one)
+        let device = socket_devices.objectAtIndex(0);
+        Retained::as_ptr(&device) as usize
     }
 }
 

@@ -31,9 +31,14 @@ pub struct ShareMechanismSupport {
     pub virtio_9p: bool,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct DeviceSupport {
+    /// Virtio-vsock for host-guest socket communication.
+    pub vsock: bool,
+}
+
 /// Capabilities advertised by a hypervisor backend.
 //
-// TODO: virtio-vsock - socket-based host-to-guest communication
 // TODO: virtio-rng - entropy source for guest randomness
 // TODO: virtio-balloon - dynamic memory adjustment
 // TODO: rosetta - run x86_64 binaries in ARM Linux VMs (Apple-only)
@@ -50,6 +55,7 @@ pub struct BackendCapabilities {
     pub image_formats: ImageFormatSupport,
     pub network_modes: NetworkModeSupport,
     pub share_mechanisms: ShareMechanismSupport,
+    pub devices: DeviceSupport,
     /// Maximum vCPUs the backend supports. None means no known limit.
     pub max_cpus: Option<u32>,
     /// Maximum guest memory in MB. None means no known limit.

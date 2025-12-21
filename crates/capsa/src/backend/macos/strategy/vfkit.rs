@@ -114,6 +114,27 @@ impl VfkitStrategy {
             args.push("virtio-serial,stdio".to_string());
         }
 
+        // TODO: Investigate vfkit vsock issue. With vfkit v0.6.1, vsock connections
+        // fail with "operation not supported on socket" and the Unix socket file is
+        // never created. The error occurs during device initialization. This may be:
+        // 1. A bug in vfkit's vsock implementation
+        // 2. An issue with our argument formatting (though it matches vfkit docs)
+        // 3. A macOS version compatibility issue
+        // 4. A missing entitlement or capability
+        // For now, vsock only works reliably with the macos-native backend.
+        for vsock_port in &config.vsock.ports {
+            args.push("--device".to_string());
+            let mut device_arg = format!(
+                "virtio-vsock,port={},socketURL={}",
+                vsock_port.port(),
+                vsock_port.socket_path().display()
+            );
+            if vsock_port.is_connect() {
+                device_arg.push_str(",connect");
+            }
+            args.push(device_arg);
+        }
+
         args
     }
 }
@@ -242,5 +263,76 @@ impl BackendVmHandle for VfkitVmHandle {
             .map_err(|e| Error::StartFailed(format!("Failed to create async PTY master: {}", e)))?;
 
         Ok(Some(Box::new(async_master)))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use capsa_core::{ResourceConfig, VsockConfig, VsockPortConfig};
+    use std::path::PathBuf;
+
+    fn minimal_config() -> VmConfig {
+        VmConfig {
+            boot: BootMethod::LinuxDirect {
+                kernel: PathBuf::from("/kernel"),
+                initrd: PathBuf::from("/initrd"),
+                cmdline: "console=hvc0".to_string(),
+            },
+            root_disk: None,
+            disks: vec![],
+            resources: ResourceConfig::default(),
+            shares: vec![],
+            network: NetworkMode::None,
+            console_enabled: false,
+            vsock: VsockConfig::default(),
+        }
+    }
+
+    #[test]
+    fn build_args_includes_vsock_device() {
+        let mut config = minimal_config();
+        config
+            .vsock
+            .add_port(VsockPortConfig::listen(1024, "/tmp/test.sock"));
+
+        let strategy = VfkitStrategy {
+            vfkit_path: Some(PathBuf::from("/usr/bin/vfkit")),
+        };
+        let args = strategy.build_args(&config);
+
+        assert!(args.contains(&"--device".to_string()));
+        assert!(args.contains(&"virtio-vsock,port=1024,socketURL=/tmp/test.sock".to_string()));
+    }
+
+    #[test]
+    fn build_args_includes_vsock_connect_mode() {
+        let mut config = minimal_config();
+        config
+            .vsock
+            .add_port(VsockPortConfig::connect(2048, "/tmp/connect.sock"));
+
+        let strategy = VfkitStrategy {
+            vfkit_path: Some(PathBuf::from("/usr/bin/vfkit")),
+        };
+        let args = strategy.build_args(&config);
+
+        assert!(
+            args.contains(
+                &"virtio-vsock,port=2048,socketURL=/tmp/connect.sock,connect".to_string()
+            )
+        );
+    }
+
+    #[test]
+    fn build_args_no_vsock_when_empty() {
+        let config = minimal_config();
+
+        let strategy = VfkitStrategy {
+            vfkit_path: Some(PathBuf::from("/usr/bin/vfkit")),
+        };
+        let args = strategy.build_args(&config);
+
+        assert!(!args.iter().any(|arg| arg.contains("vsock")));
     }
 }

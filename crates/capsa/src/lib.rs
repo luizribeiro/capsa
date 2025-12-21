@@ -49,6 +49,7 @@ mod console;
 pub mod guides;
 mod handle;
 mod pool;
+mod vsock;
 
 // TODO: stop exporting test-utils externally as all it does is expose VMs from test-vms.nix
 // there probably is some useful test utilities for capsa that could be helpful
@@ -77,6 +78,10 @@ pub use capsa_core::{MountMode, SharedDir};
 
 // Networking
 pub use capsa_core::NetworkMode;
+
+// Vsock (VM sockets for host-guest communication)
+pub use capsa_core::{VsockConfig, VsockPortConfig};
+pub use vsock::VsockSocket;
 
 // Errors
 pub use capsa_core::{Error, Result};

@@ -3,7 +3,7 @@ use crate::pool::No;
 use capsa_core::{
     BackendCapabilities, BootMethod, DiskImage, Error, HypervisorBackend, KernelCmdline,
     LinuxDirectBootConfig, NetworkMode, ResourceConfig, Result, SharedDir, UefiBootConfig,
-    VmConfig,
+    VmConfig, VsockConfig,
 };
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -40,6 +40,7 @@ impl BootConfigBuilder for LinuxDirectBootConfig {
         shares: Vec<SharedDir>,
         network: NetworkMode,
         console_enabled: bool,
+        vsock: VsockConfig,
         backend: &dyn HypervisorBackend,
     ) -> (VmConfig, Option<PathBuf>) {
         let cmdline = generate_cmdline(&self.cmdline, self.root_disk.is_some(), backend);
@@ -56,6 +57,7 @@ impl BootConfigBuilder for LinuxDirectBootConfig {
             shares,
             network,
             console_enabled,
+            vsock,
         };
         (config, None)
     }
@@ -144,6 +146,7 @@ impl BootConfigBuilder for UefiBootConfig {
         shares: Vec<SharedDir>,
         network: NetworkMode,
         console_enabled: bool,
+        vsock: VsockConfig,
         _backend: &dyn HypervisorBackend,
     ) -> (VmConfig, Option<PathBuf>) {
         let (efi_store, temp_file) = resolve_efi_variable_store(&self.efi_variable_store);
@@ -164,6 +167,7 @@ impl BootConfigBuilder for UefiBootConfig {
             shares,
             network,
             console_enabled,
+            vsock,
         };
         (config, temp_file)
     }

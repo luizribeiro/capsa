@@ -2,6 +2,7 @@ use crate::boot::KernelCmdline;
 use crate::capabilities::BackendCapabilities;
 use crate::error::Result;
 use crate::types::{DiskImage, HostPlatform, NetworkMode, ResourceConfig, SharedDir};
+use crate::vsock::VsockConfig;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -33,6 +34,8 @@ pub struct VmConfig {
     pub shares: Vec<SharedDir>,
     pub network: NetworkMode,
     pub console_enabled: bool,
+    #[serde(default)]
+    pub vsock: VsockConfig,
 }
 
 pub type ConsoleStream = Box<dyn ConsoleIo + Send>;

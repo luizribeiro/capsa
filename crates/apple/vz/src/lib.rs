@@ -12,6 +12,7 @@
 mod delegate;
 mod handle;
 mod vm;
+mod vsock;
 
 use async_trait::async_trait;
 use capsa_core::{
@@ -21,7 +22,10 @@ use capsa_core::{
 };
 use handle::NativeVmHandle;
 use std::os::fd::AsRawFd;
-use vm::{BootMethodConfig, CreateVmConfig, create_pipe, create_vm, start_vm};
+use vm::{
+    BootMethodConfig, CreateVmConfig, create_pipe, create_vm, get_socket_device_addr, start_vm,
+};
+use vsock::VsockBridge;
 
 pub struct NativeVirtualizationBackend {
     capabilities: BackendCapabilities,
@@ -120,14 +124,45 @@ impl HypervisorBackend for NativeVirtualizationBackend {
             root_disk: config.root_disk.clone(),
             disks: config.disks.clone(),
             network: config.network.clone(),
+            vsock: config.vsock.clone(),
             console_input_read_fd: console_input_read.as_ref().map(|fd| fd.as_raw_fd()),
             console_output_write_fd: console_output_write.as_ref().map(|fd| fd.as_raw_fd()),
             stop_sender: stop_tx,
         };
 
+        let vsock_ports = config.vsock.ports.clone();
+
         let (vm_addr, delegate_addr) = apple_main::on_main(move || create_vm(vm_config))
             .await
             .map_err(|e| Error::StartFailed(format!("VM creation failed: {}", e)))?;
+
+        // Set up vsock bridging if ports are configured
+        // Step 1: Set up listeners on main thread (ObjC requirement)
+        // Step 2: Set up vsock listeners on main thread
+        let vsock_setup_result = if !vsock_ports.is_empty() {
+            let socket_device_addr =
+                apple_main::on_main(move || get_socket_device_addr(vm_addr)).await;
+
+            if socket_device_addr != 0 {
+                Some(
+                    apple_main::on_main(move || unsafe {
+                        let mtm = objc2::MainThreadMarker::new()
+                            .expect("vsock bridge must be created on main thread");
+                        VsockBridge::setup_listeners(socket_device_addr, vsock_ports, mtm)
+                    })
+                    .await,
+                )
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        // Step 3: Create VsockBridge and spawn bridging tasks (in tokio context)
+        let vsock_bridge = vsock_setup_result
+            .filter(|r| !r.tasks.is_empty())
+            .map(VsockBridge::from_setup_result);
 
         let (start_tx, start_rx) = tokio::sync::oneshot::channel();
         apple_main::on_main(move || {
@@ -151,6 +186,7 @@ impl HypervisorBackend for NativeVirtualizationBackend {
             console_output_read,
             console_input_write,
             stop_rx,
+            vsock_bridge,
         )))
     }
 

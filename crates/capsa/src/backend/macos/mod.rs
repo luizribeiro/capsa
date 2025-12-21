@@ -2,6 +2,7 @@
 
 mod capabilities;
 mod cmdline;
+#[cfg(any(feature = "vfkit", feature = "macos-subprocess"))]
 pub(crate) mod pty;
 mod strategy;
 

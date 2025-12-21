@@ -119,6 +119,75 @@ let
   minimalKernel = mkMinimalKernel { networking = false; };
   minimalNetKernel = mkMinimalKernel { networking = true; };
 
+  # Kernel with vsock support for host-guest communication testing
+  vsockKernel = linuxPkgs.stdenv.mkDerivation {
+    name = "linux-vsock";
+    src = linuxPkgs.linux.src;
+
+    nativeBuildInputs = with linuxPkgs; [
+      flex bison bc perl openssl elfutils
+    ];
+
+    dontConfigure = true;
+
+    buildPhase = ''
+      make ARCH=arm64 tinyconfig
+
+      cat >> .config << 'EOF'
+      # 64-bit kernel
+      CONFIG_64BIT=y
+
+      # Basic requirements
+      CONFIG_PRINTK=y
+      CONFIG_BUG=y
+      CONFIG_BINFMT_ELF=y
+      CONFIG_BINFMT_SCRIPT=y
+      CONFIG_TTY=y
+      CONFIG_UNIX98_PTYS=y
+      CONFIG_PROC_FS=y
+      CONFIG_SYSFS=y
+      CONFIG_DEVTMPFS=y
+      CONFIG_DEVTMPFS_MOUNT=y
+      CONFIG_TMPFS=y
+      CONFIG_BLOCK=y
+
+      # PCI support (vfkit uses virtio-PCI)
+      CONFIG_PCI=y
+      CONFIG_PCI_HOST_COMMON=y
+      CONFIG_PCI_HOST_GENERIC=y
+
+      # VIRTIO support
+      CONFIG_VIRTIO_MENU=y
+      CONFIG_VIRTIO=y
+      CONFIG_VIRTIO_PCI=y
+      CONFIG_VIRTIO_PCI_LIB=y
+
+      # virtio-console for serial (hvc0)
+      CONFIG_HVC_DRIVER=y
+      CONFIG_VIRTIO_CONSOLE=y
+
+      # vsock support for host-guest communication
+      CONFIG_NET=y
+      CONFIG_VSOCKETS=y
+      CONFIG_VIRTIO_VSOCKETS=y
+
+      # initramfs support
+      CONFIG_BLK_DEV=y
+      CONFIG_BLK_DEV_INITRD=y
+      CONFIG_RD_GZIP=y
+      EOF
+
+      make ARCH=arm64 olddefconfig
+      make ARCH=arm64 -j$NIX_BUILD_CORES Image
+    '';
+
+    installPhase = ''
+      mkdir -p $out
+      cp arch/arm64/boot/Image $out/Image
+      cp .config $out/config
+    '';
+  };
+
   # Ultra-minimal kernel: absolute fastest boot possible
   # - No SMP (single CPU)
   # - No kernel printk during boot
@@ -605,6 +674,88 @@ exec sh
     mkfs.ext4 -L rootfs $out/disk.raw
   '';
 
+  # vsock-pong C program for vsock integration testing
+  vsockPongSrc = ./test-programs/vsock-pong.c;
+
+  vsockPong = linuxPkgs.stdenv.mkDerivation {
+    name = "vsock-pong";
+    src = vsockPongSrc;
+    dontUnpack = true;
+    buildPhase = ''
+      ${linuxPkgs.pkgsStatic.stdenv.cc}/bin/aarch64-unknown-linux-musl-cc \
+        -static -O2 -o vsock-pong $src
+    '';
+    installPhase = ''
+      mkdir -p $out/bin
+      cp vsock-pong $out/bin/
+    '';
+  };
+
+  # Init script for vsock test VM - starts vsock-pong automatically
+  mkVsockInitScript = { port }: ''
+#!/bin/sh
+export PATH=/bin
+
+mount -t proc proc /proc
+mount -t sysfs sys /sys
+mount -t devtmpfs dev /dev
+
+exec < /dev/console > /dev/console 2>&1
+
+echo ""
+echo "======================================"
+echo "  Capsa vsock Test VM"
+echo "======================================"
+echo ""
+echo "Starting vsock-pong on port ${toString port}..."
+/bin/vsock-pong ${toString port} &
+echo "vsock-pong started in background"
+echo ""
+exec sh
+  '';
+
+  # Build a test VM with vsock support and vsock-pong program
+  mkVsockTestVm = { name, port ? 1024 }: linuxPkgs.runCommand "capsa-test-vm-${name}" {
+    nativeBuildInputs = [ linuxPkgs.cpio linuxPkgs.gzip ];
+  } ''
+    mkdir -p $out
+
+    # Copy vsock-enabled kernel
+    cp ${vsockKernel}/Image $out/kernel
+
+    # Build initrd
+    mkdir -p initrd-root/{bin,dev,proc,sys,etc,tmp}
+
+    # Add busybox and symlinks
+    cp ${linuxPkgs.pkgsStatic.busybox}/bin/busybox initrd-root/bin/
+    for cmd in \
+      sh ash \
+      ls cat echo pwd mkdir ln rm cp mv touch head tail tee \
+      mount umount \
+      ps kill sleep \
+      grep sed awk cut sort uniq wc tr \
+      df du free top uptime uname dmesg \
+      vi less more \
+      chmod chown id whoami \
+      date env printenv export \
+      true false test expr \
+    ; do
+      ln -s busybox initrd-root/bin/$cmd
+    done
+
+    # Add vsock-pong program
+    cp ${vsockPong}/bin/vsock-pong initrd-root/bin/
+
+    # Add init script that starts vsock-pong
+    cat > initrd-root/init << 'INIT'
+    ${mkVsockInitScript { inherit port; }}
+    INIT
+    chmod +x initrd-root/init
+
+    # Create initrd
+    (cd initrd-root && find . | cpio -o -H newc | gzip) > $out/initrd
+  '';
+
   # Define our test VMs
   vms = {
     default = mkTestVm { name = "default"; networking = true; };
@@ -614,6 +765,7 @@ exec sh
     ultra-minimal = mkUltraMinimalVm { name = "ultra-minimal"; };
     with-disk = mkTestVmWithDisk { name = "with-disk"; };
     uefi = mkUefiVm { name = "uefi"; };
+    vsock = mkVsockTestVm { name = "vsock"; port = 1024; };
   };
 
   # VMs that have disk images
@@ -643,4 +795,4 @@ exec sh
     EOF
   '';
 
-in vms // { inherit combined minimalKernel minimalNetKernel ultraMinimalKernel uefiKernel; }
+in vms // { inherit combined minimalKernel minimalNetKernel ultraMinimalKernel uefiKernel vsockKernel; }

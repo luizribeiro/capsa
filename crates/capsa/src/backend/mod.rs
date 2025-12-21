@@ -17,10 +17,11 @@ mod macos;
 ))]
 pub use macos::MacOsBackend;
 
-pub use capsa_core::{HostPlatform, HypervisorBackend, Result};
+pub use capsa_core::{HypervisorBackend, Result};
 
 /// Returns all compiled-in backends.
 pub fn available_backends() -> Vec<Box<dyn HypervisorBackend>> {
+    #[allow(unused_mut)]
     let mut backends: Vec<Box<dyn HypervisorBackend>> = Vec::new();
 
     #[cfg(target_os = "macos")]

@@ -1,8 +1,11 @@
-use capsa_core::{AsyncOwnedFd, Error, Result};
+use capsa_core::AsyncOwnedFd;
+#[cfg(feature = "vfkit")]
+use capsa_core::{Error, Result};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::pty::{OpenptyResult, openpty};
 use nix::sys::termios::{self, ControlFlags, InputFlags, LocalFlags, OutputFlags, SetArg};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
+#[cfg(feature = "vfkit")]
 use std::process::Stdio;
 
 pub struct Pty {
@@ -48,6 +51,7 @@ impl Pty {
         Ok(Self { master, slave })
     }
 
+    #[cfg(feature = "vfkit")]
     pub fn slave_stdio(&self) -> Result<(Stdio, Stdio, Stdio)> {
         let dup_fd = |fd: &OwnedFd| -> Result<Stdio> {
             let new_fd = fd

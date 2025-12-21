@@ -15,7 +15,9 @@
 //! [`kill`](VmHandle::kill) for immediate termination.
 
 use crate::console::VmConsole;
-use capsa_core::{BackendVmHandle, Error, GuestOs, ResourceConfig, Result};
+use crate::vsock::VsockSocket;
+use capsa_core::{BackendVmHandle, Error, GuestOs, ResourceConfig, Result, VsockConfig};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
@@ -81,8 +83,10 @@ pub struct VmHandle {
     error_message: std::sync::Mutex<Option<String>>,
     guest_os: GuestOs,
     resources: ResourceConfig,
-    /// Auto-generated temp file to clean up when VM stops (e.g., EFI variable store)
-    temp_file: Option<PathBuf>,
+    /// Auto-generated temp files to clean up when VM stops (e.g., EFI variable store, vsock sockets)
+    temp_files: Vec<PathBuf>,
+    /// Vsock port to socket mappings for easy access
+    vsock_sockets: HashMap<u32, VsockSocket>,
 }
 
 impl VmHandle {
@@ -98,12 +102,28 @@ impl VmHandle {
             error_message: std::sync::Mutex::new(None),
             guest_os,
             resources,
-            temp_file: None,
+            temp_files: Vec::new(),
+            vsock_sockets: HashMap::new(),
         }
     }
 
     pub(crate) fn with_temp_file(mut self, path: PathBuf) -> Self {
-        self.temp_file = Some(path);
+        self.temp_files.push(path);
+        self
+    }
+
+    pub(crate) fn with_temp_files(mut self, paths: impl IntoIterator<Item = PathBuf>) -> Self {
+        self.temp_files.extend(paths);
+        self
+    }
+
+    pub(crate) fn with_vsock_config(mut self, config: &VsockConfig) -> Self {
+        for port_config in &config.ports {
+            self.vsock_sockets.insert(
+                port_config.port(),
+                VsockSocket::new(port_config.port(), port_config.socket_path().to_path_buf()),
+            );
+        }
         self
     }
 
@@ -169,7 +189,7 @@ impl VmHandle {
     }
 
     fn cleanup_temp_files(&self) {
-        if let Some(path) = &self.temp_file {
+        for path in &self.temp_files {
             if let Err(e) = std::fs::remove_file(path) {
                 if e.kind() != std::io::ErrorKind::NotFound {
                     tracing::warn!("Failed to clean up temp file {:?}: {}", path, e);
@@ -231,6 +251,39 @@ impl VmHandle {
     pub fn resources(&self) -> &ResourceConfig {
         &self.resources
     }
+
+    /// Returns the vsock socket for a port, if configured.
+    ///
+    /// Use [`VsockSocket::connect`] to establish a connection to a
+    /// service running in the guest.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use capsa::{Capsa, LinuxDirectBootConfig};
+    /// # use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    /// # async fn example() -> capsa::Result<()> {
+    /// let config = LinuxDirectBootConfig::new("./kernel", "./initrd");
+    /// let vm = Capsa::vm(config)
+    ///     .vsock_listen(1024)
+    ///     .build().await?;
+    ///
+    /// // Connect to the guest service
+    /// if let Some(socket) = vm.vsock_socket(1024) {
+    ///     let mut stream = socket.connect().await?;
+    ///     stream.write_all(b"hello").await?;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn vsock_socket(&self, port: u32) -> Option<&VsockSocket> {
+        self.vsock_sockets.get(&port)
+    }
+
+    /// Returns all configured vsock sockets.
+    pub fn vsock_sockets(&self) -> &HashMap<u32, VsockSocket> {
+        &self.vsock_sockets
+    }
 }
 
 #[cfg(test)]
@@ -270,10 +323,28 @@ mod tests {
     }
 
     #[test]
-    fn with_temp_file_sets_path() {
+    fn with_temp_file_adds_path() {
         let path = PathBuf::from("/test/path.efivarstore");
         let handle = create_test_handle().with_temp_file(path.clone());
-        assert_eq!(handle.temp_file, Some(path));
+        assert_eq!(handle.temp_files, vec![path]);
+    }
+
+    #[test]
+    fn with_temp_files_adds_multiple_paths() {
+        let path1 = PathBuf::from("/test/path1.sock");
+        let path2 = PathBuf::from("/test/path2.sock");
+        let handle = create_test_handle().with_temp_files([path1.clone(), path2.clone()]);
+        assert_eq!(handle.temp_files, vec![path1, path2]);
+    }
+
+    #[test]
+    fn with_temp_file_accumulates() {
+        let path1 = PathBuf::from("/test/path1.efivarstore");
+        let path2 = PathBuf::from("/test/path2.sock");
+        let handle = create_test_handle()
+            .with_temp_file(path1.clone())
+            .with_temp_file(path2.clone());
+        assert_eq!(handle.temp_files, vec![path1, path2]);
     }
 
     fn create_test_handle() -> VmHandle {
@@ -284,8 +355,50 @@ mod tests {
             error_message: std::sync::Mutex::new(None),
             guest_os: GuestOs::Linux,
             resources: ResourceConfig::default(),
-            temp_file: None,
+            temp_files: Vec::new(),
+            vsock_sockets: HashMap::new(),
         }
+    }
+
+    #[test]
+    fn vsock_socket_returns_socket_for_configured_port() {
+        let mut config = VsockConfig::default();
+        config.add_port(capsa_core::VsockPortConfig::listen(1024, "/tmp/test.sock"));
+        let handle = create_test_handle().with_vsock_config(&config);
+
+        let socket = handle.vsock_socket(1024).expect("socket should exist");
+        assert_eq!(socket.port(), 1024);
+        assert_eq!(socket.path(), std::path::Path::new("/tmp/test.sock"));
+    }
+
+    #[test]
+    fn vsock_socket_returns_none_for_unconfigured_port() {
+        let handle = create_test_handle();
+        assert!(handle.vsock_socket(1024).is_none());
+    }
+
+    #[test]
+    fn vsock_sockets_returns_all_mappings() {
+        let mut config = VsockConfig::default();
+        config.add_port(capsa_core::VsockPortConfig::listen(1024, "/tmp/a.sock"));
+        config.add_port(capsa_core::VsockPortConfig::connect(2048, "/tmp/b.sock"));
+        let handle = create_test_handle().with_vsock_config(&config);
+
+        assert_eq!(handle.vsock_sockets().len(), 2);
+
+        let socket_a = handle
+            .vsock_sockets()
+            .get(&1024)
+            .expect("socket should exist");
+        assert_eq!(socket_a.port(), 1024);
+        assert_eq!(socket_a.path(), std::path::Path::new("/tmp/a.sock"));
+
+        let socket_b = handle
+            .vsock_sockets()
+            .get(&2048)
+            .expect("socket should exist");
+        assert_eq!(socket_b.port(), 2048);
+        assert_eq!(socket_b.path(), std::path::Path::new("/tmp/b.sock"));
     }
 
     struct MockBackendHandle;

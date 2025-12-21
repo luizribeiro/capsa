@@ -1,6 +1,7 @@
 //! VM handle for managing a running virtual machine.
 
 use crate::delegate::{StopReceiver, VmStateDelegate, VmStopReason};
+use crate::vsock::VsockBridge;
 use async_trait::async_trait;
 use block2::RcBlock;
 use capsa_core::{AsyncPipe, BackendVmHandle, ConsoleStream, Error, Result};
@@ -19,6 +20,8 @@ pub struct NativeVmHandle {
     console_read_fd: Option<Mutex<Option<OwnedFd>>>,
     console_write_fd: Option<Mutex<Option<OwnedFd>>>,
     stop_receiver: Mutex<Option<StopReceiver>>,
+    #[allow(dead_code)]
+    vsock_bridge: Option<VsockBridge>,
 }
 
 impl NativeVmHandle {
@@ -28,6 +31,7 @@ impl NativeVmHandle {
         console_read_fd: Option<OwnedFd>,
         console_write_fd: Option<OwnedFd>,
         stop_receiver: StopReceiver,
+        vsock_bridge: Option<VsockBridge>,
     ) -> Self {
         Self {
             vm_addr: AtomicUsize::new(vm_addr),
@@ -36,6 +40,7 @@ impl NativeVmHandle {
             console_read_fd: console_read_fd.map(|fd| Mutex::new(Some(fd))),
             console_write_fd: console_write_fd.map(|fd| Mutex::new(Some(fd))),
             stop_receiver: Mutex::new(Some(stop_receiver)),
+            vsock_bridge,
         }
     }
 

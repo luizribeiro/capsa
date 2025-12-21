@@ -1,6 +1,6 @@
 use crate::{
-    BackendCapabilities, BootMethodSupport, GuestOsSupport, ImageFormatSupport, KernelCmdline,
-    NetworkModeSupport, ShareMechanismSupport,
+    BackendCapabilities, BootMethodSupport, DeviceSupport, GuestOsSupport, ImageFormatSupport,
+    KernelCmdline, NetworkModeSupport, ShareMechanismSupport,
 };
 
 pub fn macos_virtualization_capabilities() -> BackendCapabilities {
@@ -22,6 +22,7 @@ pub fn macos_virtualization_capabilities() -> BackendCapabilities {
             virtio_fs: true,
             virtio_9p: false,
         },
+        devices: DeviceSupport { vsock: true },
         max_cpus: None,
         max_memory_mb: None,
     }
@@ -88,6 +89,12 @@ mod tests {
             let caps = macos_virtualization_capabilities();
             assert!(caps.max_cpus.is_none());
             assert!(caps.max_memory_mb.is_none());
+        }
+
+        #[test]
+        fn supports_vsock() {
+            let caps = macos_virtualization_capabilities();
+            assert!(caps.devices.vsock);
         }
     }
 
