@@ -27,7 +27,7 @@ pub enum BootMethod {
 pub struct VmConfig {
     pub boot: BootMethod,
     pub root_disk: Option<DiskImage>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub disks: Vec<DiskImage>,
     pub resources: ResourceConfig,
     pub shares: Vec<SharedDir>,

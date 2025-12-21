@@ -11,7 +11,7 @@ use std::path::PathBuf;
 pub struct LinuxDirectBootConfig {
     pub kernel: PathBuf,
     pub initrd: PathBuf,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub root_disk: Option<DiskImage>,
     #[serde(skip)]
     pub cmdline: KernelCmdline,
@@ -49,7 +49,7 @@ pub struct EfiVariableStore {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UefiBootConfig {
     pub disk: DiskImage,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default)]
     pub efi_variable_store: Option<EfiVariableStore>,
 }
 
@@ -111,10 +111,10 @@ mod tests {
     }
 
     #[test]
-    fn serialization_without_root_disk_omits_field() {
+    fn serialization_without_root_disk_includes_null() {
         let config = LinuxDirectBootConfig::new("/path/to/kernel", "/path/to/initrd");
         let json = serde_json::to_string(&config).unwrap();
-        assert!(!json.contains("root_disk"));
+        assert!(json.contains("root_disk"));
     }
 
     #[test]
@@ -159,10 +159,10 @@ mod tests {
     }
 
     #[test]
-    fn uefi_serialization_without_efi_store_omits_field() {
+    fn uefi_serialization_without_efi_store_includes_null() {
         let config = UefiBootConfig::new("/path/to/disk.raw");
         let json = serde_json::to_string(&config).unwrap();
-        assert!(!json.contains("efi_variable_store"));
+        assert!(json.contains("efi_variable_store"));
     }
 
     #[test]

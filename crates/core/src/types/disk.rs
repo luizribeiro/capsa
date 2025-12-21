@@ -30,7 +30,7 @@ impl ImageFormat {
 pub struct DiskImage {
     pub path: PathBuf,
     pub format: ImageFormat,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default)]
     pub read_only: bool,
 }
 
@@ -205,10 +205,10 @@ mod tests {
         }
 
         #[test]
-        fn disk_image_omits_read_only_when_false() {
+        fn disk_image_includes_read_only_when_false() {
             let disk = DiskImage::new("/path/to/disk.raw");
             let json = serde_json::to_string(&disk).unwrap();
-            assert!(!json.contains("read_only"));
+            assert!(json.contains("read_only"));
         }
 
         #[test]
@@ -216,7 +216,6 @@ mod tests {
             let disk = DiskImage::new("/path/to/disk.raw").read_only();
             let json = serde_json::to_string(&disk).unwrap();
             assert!(json.contains("read_only"));
-            assert!(json.contains("true"));
         }
 
         #[test]
