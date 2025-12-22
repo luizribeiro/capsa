@@ -24,6 +24,7 @@ pub struct KvmVmHandle {
 }
 
 impl KvmVmHandle {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         running: Arc<AtomicBool>,
         exit_rx: mpsc::Receiver<i32>,
