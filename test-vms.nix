@@ -289,9 +289,6 @@ let
       ln -s busybox $out/bin/$cmd
     done
 
-    # Add vsock-pong for host-guest communication testing
-    cp ${vsockPong}/bin/vsock-pong $out/bin/
-
     cat > $out/init << 'INIT'
     ${mkUefiInitScript}
     INIT
@@ -366,12 +363,6 @@ let
 
       # virtio-blk for disk support
       CONFIG_VIRTIO_BLK=y
-
-      # vsock support for host-guest communication
-      # Used for boot verification since console doesn't work reliably with UEFI
-      CONFIG_NET=y
-      CONFIG_VSOCKETS=y
-      CONFIG_VIRTIO_VSOCKETS=y
 
       # FAT filesystem for ESP
       CONFIG_VFAT_FS=y
@@ -543,9 +534,6 @@ DHCP
     (cd initrd-root && find . | cpio -o -H newc | gzip) > $out/initrd
   '';
 
-  # Init script for UEFI VMs - uses vsock for boot verification
-  # Console doesn't work reliably with UEFI boot on Apple Virtualization.framework,
-  # so we use vsock ping-pong as the primary boot verification mechanism.
   mkUefiInitScript = ''
 #!/bin/sh
 export PATH=/bin
@@ -554,16 +542,11 @@ mount -t proc proc /proc
 mount -t sysfs sys /sys
 mount -t devtmpfs dev /dev
 
-# Set up console for output - required for Linux direct boot test
 exec < /dev/console > /dev/console 2>&1
 
 echo "======================================"
-echo "  UEFI Boot - starting vsock-pong"
+echo "  UEFI Boot successful!"
 echo "======================================"
-
-# Start vsock-pong for boot verification
-/bin/vsock-pong 1024 &
-echo "vsock-pong started"
 
 exec sh
   '';
