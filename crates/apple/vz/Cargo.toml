@@ -10,8 +10,6 @@ capsa-core = { path = "../../core" }
 tokio = { workspace = true }
 async-trait = { workspace = true }
 nix = { version = "0.29", features = ["process", "signal", "fs"] }
-
-[target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 objc2-virtualization = "0.3"
 objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSURL", "NSError", "NSArray", "NSFileHandle"] }

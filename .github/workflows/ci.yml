@@ -20,8 +20,12 @@ jobs:
         include:
           - os: linux
             runner: ubuntu-latest
+            features: linux-kvm
+            excludes: --exclude capsa-apple-vz --exclude capsa-apple-vzd --exclude capsa-apple-vzd-ipc
           - os: macos
             runner: macos-latest
+            features: macos-native,macos-subprocess,vfkit
+            excludes: --exclude capsa-linux-kvm
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
@@ -30,7 +34,7 @@ jobs:
           name: devenv
       - run: nix profile install nixpkgs#devenv
       - run: devenv shell cargo fmt --all -- --check
-      - run: devenv shell cargo clippy --all-features -- -D warnings
+      - run: devenv shell cargo clippy --workspace --features ${{ matrix.features }} ${{ matrix.excludes }} -- -D warnings
 
   build-vms:
     name: Build VMs (${{ matrix.arch }})

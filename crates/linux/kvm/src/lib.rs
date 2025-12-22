@@ -54,23 +54,21 @@ impl KvmBackend {
                 guest_os: GuestOsSupport { linux: true },
                 boot_methods: BootMethodSupport {
                     linux_direct: true,
-                    uefi: false, // TODO: UEFI boot support
+                    uefi: false,
                 },
                 image_formats: ImageFormatSupport {
                     raw: true,
-                    qcow2: false, // TODO: qcow2 support
+                    qcow2: false,
                 },
                 network_modes: NetworkModeSupport {
                     none: true,
-                    nat: false, // TODO: virtio-net networking
+                    nat: false,
                 },
                 share_mechanisms: ShareMechanismSupport {
-                    virtio_fs: false, // TODO: virtio-fs shares
-                    virtio_9p: false, // TODO: virtio-9p shares
+                    virtio_fs: false,
+                    virtio_9p: false,
                 },
-                devices: DeviceSupport {
-                    vsock: false, // TODO: vsock support
-                },
+                devices: DeviceSupport { vsock: false },
                 max_cpus: None,
                 max_memory_mb: None,
             },
@@ -119,6 +117,6 @@ impl HypervisorBackend for KvmBackend {
     }
 
     fn default_root_device(&self) -> &str {
-        "/dev/vda" // TODO: virtio-blk disk support
+        "/dev/vda"
     }
 }

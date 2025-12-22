@@ -11,7 +11,10 @@
   git-hooks.hooks = {
     rustfmt.enable = true;
     clippy.enable = true;
-    clippy.settings.allFeatures = true;
+    clippy.settings.extraArgs =
+      if pkgs.stdenv.isDarwin
+      then "--workspace --features macos-native,macos-subprocess,vfkit --exclude capsa-linux-kvm"
+      else "--workspace --features linux-kvm --exclude capsa-apple-vz --exclude capsa-apple-vzd --exclude capsa-apple-vzd-ipc";
   };
 
   # codesign-run wraps binary execution with ad-hoc codesigning using virtualization
