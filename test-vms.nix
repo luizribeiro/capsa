@@ -323,14 +323,8 @@ let
       CONFIG_ACPI=y
 
       # Built-in kernel command line - required for UEFI boot without bootloader
-      # Try multiple console options to see if any work
       CONFIG_CMDLINE_FORCE=y
-      CONFIG_CMDLINE="rdinit=/init earlyprintk earlycon console=hvc0 console=ttyAMA0 loglevel=8"
-
-      # Enable early console for debugging
-      CONFIG_SERIAL_EARLYCON=y
-      CONFIG_SERIAL_AMBA_PL011=y
-      CONFIG_SERIAL_AMBA_PL011_CONSOLE=y
+      CONFIG_CMDLINE="rdinit=/init console=hvc0"
 
       # Basic requirements
       CONFIG_PRINTK=y
