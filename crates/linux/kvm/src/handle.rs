@@ -6,16 +6,16 @@ use nix::sys::signal::Signal;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::thread::JoinHandle;
 use tokio::sync::{Mutex, mpsc};
+use tokio::task::JoinHandle as TokioJoinHandle;
 use vm_memory::GuestMemoryMmap;
 
 pub struct KvmVmHandle {
     running: Arc<AtomicBool>,
     exit_rx: Mutex<Option<mpsc::Receiver<i32>>>,
-    vcpu_handles: Mutex<Vec<JoinHandle<()>>>,
+    vcpu_handles: Mutex<Vec<std::thread::JoinHandle<()>>>,
     vcpu_thread_ids: Mutex<Vec<Pthread>>,
-    console_input_thread: Mutex<Option<JoinHandle<()>>>,
+    console_input_task: Mutex<Option<TokioJoinHandle<()>>>,
     console_read_fd: Mutex<Option<OwnedFd>>,
     console_write_fd: Mutex<Option<OwnedFd>>,
     console_enabled: bool,
@@ -27,9 +27,9 @@ impl KvmVmHandle {
     pub fn new(
         running: Arc<AtomicBool>,
         exit_rx: mpsc::Receiver<i32>,
-        vcpu_handles: Vec<JoinHandle<()>>,
+        vcpu_handles: Vec<std::thread::JoinHandle<()>>,
         vcpu_thread_ids: Vec<Pthread>,
-        console_input_thread: Option<JoinHandle<()>>,
+        console_input_task: Option<TokioJoinHandle<()>>,
         console_read_fd: Option<OwnedFd>,
         console_write_fd: Option<OwnedFd>,
         console_enabled: bool,
@@ -40,7 +40,7 @@ impl KvmVmHandle {
             exit_rx: Mutex::new(Some(exit_rx)),
             vcpu_handles: Mutex::new(vcpu_handles),
             vcpu_thread_ids: Mutex::new(vcpu_thread_ids),
-            console_input_thread: Mutex::new(console_input_thread),
+            console_input_task: Mutex::new(console_input_task),
             console_read_fd: Mutex::new(console_read_fd),
             console_write_fd: Mutex::new(console_write_fd),
             console_enabled,
@@ -90,15 +90,20 @@ impl BackendVmHandle for KvmVmHandle {
             let _ = handle.join();
         }
 
-        // Close the console write pipe to unblock the console input thread
-        // (it's blocked on read() waiting for host input)
+        // Close the console write pipe to signal EOF to the console input task
         tracing::debug!("kill: closing console write pipe");
         drop(self.console_write_fd.lock().await.take());
 
-        // Join the console input thread if present
-        tracing::debug!("kill: joining console input thread");
-        if let Some(handle) = self.console_input_thread.lock().await.take() {
-            let _ = handle.join();
+        // Abort and await the console input task if present
+        tracing::debug!("kill: aborting console input task");
+        if let Some(handle) = self.console_input_task.lock().await.take() {
+            handle.abort();
+            match handle.await {
+                Err(e) if e.is_panic() => {
+                    tracing::warn!("console input task panicked during shutdown");
+                }
+                _ => {}
+            }
         }
         tracing::debug!("kill: done");
 

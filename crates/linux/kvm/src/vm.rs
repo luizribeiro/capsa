@@ -1,6 +1,7 @@
 use crate::arch::{
-    BOOT_PARAMS_ADDR, KERNEL_LOAD_ADDR, create_guest_memory, initrd_load_addr, run_vcpu,
-    setup_boot_params, setup_regs, setup_sregs,
+    BOOT_PARAMS_ADDR, KERNEL_LOAD_ADDR, RTC_INDEX_PORT, RtcDevice, SERIAL_PORT_BASE,
+    SERIAL_PORT_END, create_guest_memory, initrd_load_addr, run_vcpu, setup_boot_params,
+    setup_regs, setup_sregs,
 };
 use crate::handle::KvmVmHandle;
 use crate::serial::{SerialDevice, create_console_pipes};
@@ -9,14 +10,17 @@ use kvm_bindings::kvm_pit_config;
 use kvm_ioctls::{Kvm, VmFd};
 use linux_loader::loader::KernelLoader;
 use linux_loader::loader::bzimage::BzImage;
-use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 use std::fs::File;
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use tokio::io::Interest;
+use tokio::io::unix::AsyncFd;
 use tokio::sync::mpsc;
+use vm_device::bus::{PioAddress, PioRange};
+use vm_device::device_manager::{IoManager, PioManager};
 use vm_memory::{Address, Bytes, GuestAddress, GuestMemory, GuestMemoryMmap, GuestMemoryRegion};
 
 static SIGNAL_HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -70,7 +74,8 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
 
         tracing::debug!("Console pipes created");
         let writer = ConsolePipeWriter(guest_write);
-        let serial = Arc::new(SerialDevice::new(Box::new(writer)));
+        // Wrap in Arc<Mutex> for IoManager registration and sharing with console input task
+        let serial = Arc::new(Mutex::new(SerialDevice::new(Box::new(writer))));
         (
             Some(host_read),
             Some(host_write),
@@ -131,6 +136,32 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
     let running = Arc::new(AtomicBool::new(true));
     let (exit_tx, exit_rx) = mpsc::channel(1);
 
+    // Create I/O manager and register devices
+    let mut io_manager = IoManager::new();
+
+    // Register serial device (shared with console input task)
+    let serial_for_io = serial
+        .clone()
+        .unwrap_or_else(|| Arc::new(Mutex::new(SerialDevice::new(Box::new(std::io::sink())))));
+    register_pio_device(
+        &mut io_manager,
+        SERIAL_PORT_BASE,
+        SERIAL_PORT_END - SERIAL_PORT_BASE + 1,
+        serial_for_io,
+        "serial device",
+    )?;
+
+    // Register RTC device
+    register_pio_device(
+        &mut io_manager,
+        RTC_INDEX_PORT,
+        2,
+        Arc::new(Mutex::new(RtcDevice::new())),
+        "RTC device",
+    )?;
+
+    let io_manager = Arc::new(io_manager);
+
     let mut vcpu_handles = Vec::new();
     let mut vcpu_thread_ids = Vec::new();
 
@@ -151,16 +182,14 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
             })?;
         }
 
-        let serial_clone = serial
-            .clone()
-            .unwrap_or_else(|| Arc::new(SerialDevice::new(Box::new(std::io::sink()))));
+        let io_manager_clone = io_manager.clone();
         let running_clone = running.clone();
         let exit_tx_clone = exit_tx.clone();
 
         let (tid_tx, tid_rx) = std::sync::mpsc::channel();
         let handle = std::thread::spawn(move || {
             let _ = tid_tx.send(nix::sys::pthread::pthread_self());
-            run_vcpu(vcpu, serial_clone, running_clone, exit_tx_clone);
+            run_vcpu(vcpu, io_manager_clone, running_clone, exit_tx_clone);
         });
         if let Ok(tid) = tid_rx.recv() {
             vcpu_thread_ids.push(tid);
@@ -168,28 +197,45 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         vcpu_handles.push(handle);
     }
 
-    let console_input_thread = if let (Some(serial), Some(guest_read)) = (&serial, guest_read) {
+    let console_input_task = if let (Some(serial), Some(guest_read)) = (&serial, guest_read) {
         let serial_clone = serial.clone();
         let running_clone = running.clone();
 
-        // Set the pipe to non-blocking so we can check the running flag
-        if let Err(e) = set_nonblocking(&guest_read) {
-            tracing::warn!("failed to set console input pipe to non-blocking: {}", e);
-        }
+        let reader = std::fs::File::from(guest_read);
+        let async_fd = AsyncFd::with_interest(reader, Interest::READABLE)
+            .map_err(|e| Error::StartFailed(format!("failed to create AsyncFd: {}", e)))?;
 
-        Some(std::thread::spawn(move || {
-            let mut reader = std::fs::File::from(guest_read);
+        Some(tokio::spawn(async move {
+            // Buffer sized for typical terminal input bursts. 256 bytes handles
+            // paste operations and escape sequences without excessive syscalls.
             let mut buf = [0u8; 256];
             while running_clone.load(Ordering::Relaxed) {
-                match reader.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        serial_clone.enqueue_input(&buf[..n]);
+                let mut guard = match async_fd.readable().await {
+                    Ok(guard) => guard,
+                    Err(e) => {
+                        tracing::debug!("console input: AsyncFd readable error: {}", e);
+                        break;
                     }
-                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
-                        std::thread::sleep(std::time::Duration::from_millis(10));
+                };
+
+                match guard.try_io(|inner| {
+                    nix::unistd::read(inner.get_ref().as_raw_fd(), &mut buf)
+                        .map_err(|e| std::io::Error::from_raw_os_error(e as i32))
+                }) {
+                    Ok(Ok(0)) => {
+                        tracing::debug!("console input: EOF received");
+                        break;
                     }
-                    Err(_) => break,
+                    Ok(Ok(n)) => {
+                        if let Ok(serial) = serial_clone.lock() {
+                            serial.enqueue_input(&buf[..n]);
+                        }
+                    }
+                    Ok(Err(e)) => {
+                        tracing::debug!("console input: read error: {}", e);
+                        break;
+                    }
+                    Err(_would_block) => continue,
                 }
             }
         }))
@@ -202,7 +248,7 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         exit_rx,
         vcpu_handles,
         vcpu_thread_ids,
-        console_input_thread,
+        console_input_task,
         host_read,
         host_write,
         console_enabled,
@@ -243,6 +289,21 @@ fn load_kernel(
     Ok((entry_64, result.setup_header))
 }
 
+fn register_pio_device<D: vm_device::MutDevicePio + Send + 'static>(
+    io_manager: &mut IoManager,
+    base: u16,
+    size: u16,
+    device: Arc<Mutex<D>>,
+    name: &str,
+) -> Result<()> {
+    let range = PioRange::new(PioAddress(base), size)
+        .map_err(|e| Error::StartFailed(format!("failed to create {} PIO range: {:?}", name, e)))?;
+    io_manager
+        .register_pio(range, device)
+        .map_err(|e| Error::StartFailed(format!("failed to register {}: {:?}", name, e)))?;
+    Ok(())
+}
+
 fn load_initrd(
     memory: &GuestMemoryMmap,
     initrd_path: &std::path::Path,
@@ -274,13 +335,4 @@ impl Write for ConsolePipeWriter {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
-}
-
-fn set_nonblocking(fd: &OwnedFd) -> Result<()> {
-    let flags = fcntl(fd.as_raw_fd(), FcntlArg::F_GETFL)
-        .map_err(|e| Error::Io(std::io::Error::from_raw_os_error(e as i32)))?;
-    let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
-    fcntl(fd.as_raw_fd(), FcntlArg::F_SETFL(flags))
-        .map_err(|e| Error::Io(std::io::Error::from_raw_os_error(e as i32)))?;
-    Ok(())
 }

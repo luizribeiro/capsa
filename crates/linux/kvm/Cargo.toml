@@ -11,12 +11,13 @@ async-trait = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-nix = { workspace = true, features = ["pthread", "signal"] }
+nix = { workspace = true, features = ["pthread", "signal", "poll", "fs"] }
 
 kvm-ioctls = "0.19"
 kvm-bindings = { version = "0.10", features = ["fam-wrappers"] }
 vm-memory = { version = "0.17", features = ["backend-mmap"] }
 linux-loader = { version = "0.13", features = ["bzimage", "elf"] }
 vm-superio = "0.8"
+vm-device = "0.1"
 vmm-sys-util = "0.12"
 vm-fdt = "0.3"

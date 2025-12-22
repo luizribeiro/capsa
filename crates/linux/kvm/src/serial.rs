@@ -1,8 +1,9 @@
-use crate::arch::{SERIAL_PORT_BASE, SERIAL_PORT_END};
 use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::os::fd::OwnedFd;
 use std::sync::Mutex;
+use vm_device::MutDevicePio;
+use vm_device::bus::{PioAddress, PioAddressOffset};
 use vm_superio::serial::NoEvents;
 use vm_superio::{Serial, Trigger};
 
@@ -41,16 +42,16 @@ impl SerialDevice {
         }
     }
 
-    pub fn handles_io(&self, port: u16) -> bool {
-        (SERIAL_PORT_BASE..=SERIAL_PORT_END).contains(&port)
+    pub fn enqueue_input(&self, data: &[u8]) {
+        let mut input = self.input_buffer.lock().unwrap();
+        input.extend(data);
     }
+}
 
-    pub fn io_read(&self, port: u16, data: &mut [u8]) {
-        let offset = (port - SERIAL_PORT_BASE) as u8;
+impl MutDevicePio for SerialDevice {
+    fn pio_read(&mut self, _base: PioAddress, offset: PioAddressOffset, data: &mut [u8]) {
         let mut serial = self.serial.lock().unwrap();
 
-        // Before any read, try to enqueue pending input to the UART
-        // TODO: Proper interrupt injection is needed for interactive console input
         let mut input = self.input_buffer.lock().unwrap();
         if !input.is_empty() {
             let bytes: Vec<u8> = input.drain(..).collect();
@@ -61,31 +62,20 @@ impl SerialDevice {
         }
 
         if !data.is_empty() {
-            data[0] = serial.read(offset);
+            data[0] = serial.read(offset as u8);
         }
     }
 
-    pub fn io_write(&self, port: u16, data: &[u8]) {
-        let offset = (port - SERIAL_PORT_BASE) as u8;
+    fn pio_write(&mut self, _base: PioAddress, offset: PioAddressOffset, data: &[u8]) {
         if !data.is_empty() {
             let mut serial = self.serial.lock().unwrap();
-            serial.write(offset, data[0]).ok();
+            serial.write(offset as u8, data[0]).ok();
         }
-    }
-
-    pub fn enqueue_input(&self, data: &[u8]) {
-        let mut input = self.input_buffer.lock().unwrap();
-        input.extend(data);
     }
 }
 
 pub fn create_console_pipes() -> io::Result<(OwnedFd, OwnedFd, OwnedFd, OwnedFd)> {
     let (guest_read, host_write) = nix::unistd::pipe()?;
     let (host_read, guest_write) = nix::unistd::pipe()?;
-    Ok((
-        guest_read,
-        host_write,
-        host_read,
-        guest_write,
-    ))
+    Ok((guest_read, host_write, host_read, guest_write))
 }
