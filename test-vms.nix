@@ -550,8 +550,7 @@ exec sh
   mkUefiVm = { name, sizeMB ? 64 }: linuxPkgs.runCommand "capsa-test-vm-${name}" {
     nativeBuildInputs = with linuxPkgs; [
       cpio gzip
-      parted dosfstools mtools gptfdisk
-      util-linux
+      parted dosfstools mtools
     ];
   } ''
     mkdir -p $out
@@ -559,10 +558,14 @@ exec sh
     # Create initrd for the bootloader to load
     (cd ${uefiInitramfs} && find . | cpio -o -H newc | gzip) > initrd.gz
 
-    # Create the ESP filesystem first
-    # Leave space: 1MB at start for GPT, 1MB at end for backup GPT
-    ESP_SIZE=$(((${toString sizeMB} - 2) * 1024 * 1024))
+    # Create GPT disk image with ESP partition
+    dd if=/dev/zero of=$out/disk.raw bs=1M count=${toString sizeMB}
+    parted -s $out/disk.raw mklabel gpt
+    parted -s $out/disk.raw mkpart ESP fat32 1MiB 100%
+    parted -s $out/disk.raw set 1 esp on
 
+    # Create the ESP filesystem
+    ESP_SIZE=$(((${toString sizeMB} - 1) * 1024 * 1024))
     dd if=/dev/zero of=esp.img bs=1 count=$ESP_SIZE
     mkfs.vfat -F 32 -n EFI esp.img
 
@@ -575,13 +578,6 @@ exec sh
 
     # Also copy initrd separately (for reference/debugging)
     mcopy -i esp.img initrd.gz ::/initrd.gz
-
-    # Now create the disk image with proper GPT
-    dd if=/dev/zero of=$out/disk.raw bs=1M count=${toString sizeMB}
-
-    # Use sgdisk to create a proper GPT with backup header
-    # Create ESP partition from 1MB to (size-1)MB
-    sgdisk -n 1:2048:$((${toString sizeMB} * 2048 - 2048 - 34)) -t 1:EF00 -c 1:ESP $out/disk.raw
 
     # Write the ESP filesystem content to the partition
     dd if=esp.img of=$out/disk.raw bs=512 seek=2048 conv=notrunc
