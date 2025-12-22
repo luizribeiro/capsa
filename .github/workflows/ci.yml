@@ -53,35 +53,33 @@ jobs:
           name: devenv
 
       - name: Build ${{ matrix.arch }} test VMs
-        run: nix-build ${{ matrix.nix-file }} -A combined -o result-vms -I nixpkgs=channel:nixos-unstable
-
-      - name: Prepare portable VM artifact
         run: |
-          mkdir -p portable-vms
-          # Copy VM files, dereferencing symlinks
+          nix-build ${{ matrix.nix-file }} -A combined -o nix-vms -I nixpkgs=channel:nixos-unstable
+          # Copy files (dereferencing symlinks) and generate manifest with correct paths
+          mkdir -p result-vms
+          for vm in nix-vms/*/; do
+            vmname=$(basename "$vm")
+            mkdir -p "result-vms/$vmname"
+            cp -L "$vm"/* "result-vms/$vmname/"
+          done
+          # Generate manifest with paths relative to project root
+          echo '{' > result-vms/manifest.json
+          first=true
           for vm in result-vms/*/; do
             vmname=$(basename "$vm")
-            mkdir -p "portable-vms/$vmname"
-            cp -L "$vm"/* "portable-vms/$vmname/"
-          done
-          # Generate manifest with relative paths
-          echo '{' > portable-vms/manifest.json
-          first=true
-          for vm in portable-vms/*/; do
-            vmname=$(basename "$vm")
-            $first || echo ',' >> portable-vms/manifest.json
+            $first || echo ',' >> result-vms/manifest.json
             first=false
-            printf '"%s":{"kernel":"%s/%s/kernel","initrd":"%s/%s/initrd"}' \
-              "$vmname" "result-vms" "$vmname" "result-vms" "$vmname" >> portable-vms/manifest.json
+            printf '"%s":{"kernel":"result-vms/%s/kernel","initrd":"result-vms/%s/initrd"}' \
+              "$vmname" "$vmname" "$vmname" >> result-vms/manifest.json
           done
-          echo '}' >> portable-vms/manifest.json
-          cat portable-vms/manifest.json
+          echo '}' >> result-vms/manifest.json
+          cat result-vms/manifest.json
 
       - name: Upload VMs artifact
         uses: actions/upload-artifact@v4
         with:
           name: test-vms-${{ matrix.arch }}
-          path: portable-vms/
+          path: result-vms/
           retention-days: 1
 
   test-linux:
