@@ -29,6 +29,7 @@ jobs:
         with:
           name: devenv
       - run: nix profile install nixpkgs#devenv
+      - uses: Swatinem/rust-cache@v2
       - run: devenv shell cargo fmt --all -- --check
       - run: devenv shell cargo clippy --all-features -- -D warnings
 
@@ -45,9 +46,12 @@ jobs:
         with:
           name: devenv
       - run: nix profile install nixpkgs#devenv
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: linux-kvm
 
       - name: Build x86_64 test VMs
-        run: devenv shell nix-build test-vms-x86_64.nix -A combined -o result-vms
+        run: nix-build test-vms-x86_64.nix -A combined -o result-vms -I nixpkgs=channel:nixos-unstable
 
       - name: Run unit tests
         run: devenv shell cargo test --lib --features linux-kvm
@@ -86,9 +90,12 @@ jobs:
         with:
           name: devenv
       - run: nix profile install nixpkgs#devenv
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.backend }}
 
       - name: Build aarch64 test VMs
-        run: devenv shell nix-build test-vms.nix -A combined -o result-vms
+        run: nix-build test-vms.nix -A combined -o result-vms -I nixpkgs=channel:nixos-unstable
 
       - name: Run unit tests
         run: devenv shell cargo test --lib --features ${{ matrix.backend }}
