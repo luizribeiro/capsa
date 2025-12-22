@@ -42,7 +42,7 @@ impl SerialDevice {
     }
 
     pub fn handles_io(&self, port: u16) -> bool {
-        port >= SERIAL_PORT_BASE && port <= SERIAL_PORT_END
+        (SERIAL_PORT_BASE..=SERIAL_PORT_END).contains(&port)
     }
 
     pub fn io_read(&self, port: u16, data: &mut [u8]) {
@@ -83,9 +83,9 @@ pub fn create_console_pipes() -> io::Result<(OwnedFd, OwnedFd, OwnedFd, OwnedFd)
     let (guest_read, host_write) = nix::unistd::pipe()?;
     let (host_read, guest_write) = nix::unistd::pipe()?;
     Ok((
-        OwnedFd::from(guest_read),
-        OwnedFd::from(host_write),
-        OwnedFd::from(host_read),
-        OwnedFd::from(guest_write),
+        guest_read,
+        host_write,
+        host_read,
+        guest_write,
     ))
 }

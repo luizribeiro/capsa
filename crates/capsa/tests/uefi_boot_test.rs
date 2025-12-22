@@ -16,7 +16,9 @@ async fn test_uefi_vm_boots_successfully() {
     // TODO: KVM backend doesn't support UEFI boot yet
     #[cfg(feature = "linux-kvm")]
     {
-        eprintln!("Skipping test_uefi_vm_boots_successfully on KVM backend (UEFI boot not yet implemented)");
+        eprintln!(
+            "Skipping test_uefi_vm_boots_successfully on KVM backend (UEFI boot not yet implemented)"
+        );
         return;
     }
 

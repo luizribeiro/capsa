@@ -1,13 +1,13 @@
 use async_trait::async_trait;
 use capsa_core::{AsyncPipe, BackendVmHandle, ConsoleStream, Error, Result};
-use nix::fcntl::{fcntl, FcntlArg, OFlag};
-use nix::sys::pthread::{pthread_kill, Pthread};
+use nix::fcntl::{FcntlArg, OFlag, fcntl};
+use nix::sys::pthread::{Pthread, pthread_kill};
 use nix::sys::signal::Signal;
 use std::os::fd::{AsRawFd, OwnedFd};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
-use tokio::sync::{mpsc, Mutex};
+use tokio::sync::{Mutex, mpsc};
 use vm_memory::GuestMemoryMmap;
 
 pub struct KvmVmHandle {
@@ -15,6 +15,7 @@ pub struct KvmVmHandle {
     exit_rx: Mutex<Option<mpsc::Receiver<i32>>>,
     vcpu_handles: Mutex<Vec<JoinHandle<()>>>,
     vcpu_thread_ids: Mutex<Vec<Pthread>>,
+    console_input_thread: Mutex<Option<JoinHandle<()>>>,
     console_read_fd: Mutex<Option<OwnedFd>>,
     console_write_fd: Mutex<Option<OwnedFd>>,
     console_enabled: bool,
@@ -28,6 +29,7 @@ impl KvmVmHandle {
         exit_rx: mpsc::Receiver<i32>,
         vcpu_handles: Vec<JoinHandle<()>>,
         vcpu_thread_ids: Vec<Pthread>,
+        console_input_thread: Option<JoinHandle<()>>,
         console_read_fd: Option<OwnedFd>,
         console_write_fd: Option<OwnedFd>,
         console_enabled: bool,
@@ -38,6 +40,7 @@ impl KvmVmHandle {
             exit_rx: Mutex::new(Some(exit_rx)),
             vcpu_handles: Mutex::new(vcpu_handles),
             vcpu_thread_ids: Mutex::new(vcpu_thread_ids),
+            console_input_thread: Mutex::new(console_input_thread),
             console_read_fd: Mutex::new(console_read_fd),
             console_write_fd: Mutex::new(console_write_fd),
             console_enabled,
@@ -76,7 +79,9 @@ impl BackendVmHandle for KvmVmHandle {
         // Send SIGUSR1 to each vCPU thread to interrupt vcpu.run()
         let thread_ids = self.vcpu_thread_ids.lock().await;
         for &tid in thread_ids.iter() {
-            let _ = pthread_kill(tid, Signal::SIGUSR1);
+            if let Err(e) = pthread_kill(tid, Signal::SIGUSR1) {
+                tracing::warn!("failed to send SIGUSR1 to vCPU thread: {}", e);
+            }
         }
         drop(thread_ids);
 
@@ -85,9 +90,29 @@ impl BackendVmHandle for KvmVmHandle {
             let _ = handle.join();
         }
 
+        // Close the console write pipe to unblock the console input thread
+        // (it's blocked on read() waiting for host input)
+        tracing::debug!("kill: closing console write pipe");
+        drop(self.console_write_fd.lock().await.take());
+
+        // Join the console input thread if present
+        tracing::debug!("kill: joining console input thread");
+        if let Some(handle) = self.console_input_thread.lock().await.take() {
+            let _ = handle.join();
+        }
+        tracing::debug!("kill: done");
+
         Ok(())
     }
 
+    /// Returns the console stream for this VM.
+    ///
+    /// This method can only be called once per VM instance. The console stream
+    /// takes ownership of the underlying file descriptors, so subsequent calls
+    /// will return `Error::ConsoleNotEnabled`.
+    ///
+    /// The returned stream provides bidirectional communication with the VM's
+    /// serial console (ttyS0).
     async fn console_stream(&self) -> Result<Option<ConsoleStream>> {
         if !self.console_enabled {
             return Err(Error::ConsoleNotEnabled);
@@ -103,6 +128,7 @@ impl BackendVmHandle for KvmVmHandle {
                 let pipe = AsyncPipe::new(read, write)?;
                 Ok(Some(Box::new(pipe)))
             }
+            // Already claimed by a previous call
             _ => Err(Error::ConsoleNotEnabled),
         }
     }

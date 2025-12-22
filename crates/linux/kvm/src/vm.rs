@@ -1,37 +1,48 @@
 use crate::arch::{
-    create_guest_memory, initrd_load_addr, run_vcpu, setup_boot_params, setup_regs, setup_sregs,
-    BOOT_PARAMS_ADDR, KERNEL_LOAD_ADDR,
+    BOOT_PARAMS_ADDR, KERNEL_LOAD_ADDR, create_guest_memory, initrd_load_addr, run_vcpu,
+    setup_boot_params, setup_regs, setup_sregs,
 };
 use crate::handle::KvmVmHandle;
-use crate::serial::{create_console_pipes, SerialDevice};
+use crate::serial::{SerialDevice, create_console_pipes};
 use capsa_core::{BackendVmHandle, BootMethod, Error, Result, VmConfig};
 use kvm_bindings::kvm_pit_config;
 use kvm_ioctls::{Kvm, VmFd};
-use linux_loader::loader::bzimage::BzImage;
 use linux_loader::loader::KernelLoader;
-use nix::sys::signal::{sigaction, SaFlags, SigAction, SigHandler, SigSet, Signal};
+use linux_loader::loader::bzimage::BzImage;
+use nix::fcntl::{FcntlArg, OFlag, fcntl};
+use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 use std::fs::File;
 use std::io::{Read, Write};
-use std::os::fd::OwnedFd;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::mpsc;
 use vm_memory::{Address, Bytes, GuestAddress, GuestMemory, GuestMemoryMmap, GuestMemoryRegion};
 
 static SIGNAL_HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
 
-fn install_signal_handler() {
+/// Installs a no-op SIGUSR1 handler to interrupt blocking vcpu.run() calls.
+///
+/// When we need to stop a VM, we send SIGUSR1 to each vCPU thread. This causes
+/// vcpu.run() to return with EINTR, allowing the thread to check the `running`
+/// flag and exit gracefully.
+///
+/// This function is idempotent - calling it multiple times is safe and only
+/// the first call actually installs the handler.
+fn install_signal_handler() -> Result<()> {
     if SIGNAL_HANDLER_INSTALLED.swap(true, Ordering::SeqCst) {
-        return;
+        return Ok(());
     }
 
-    extern "C" fn nop_handler(_: nix::libc::c_int) {}
+    extern "C" fn interrupt_handler(_: nix::libc::c_int) {}
 
-    let handler = SigHandler::Handler(nop_handler);
+    let handler = SigHandler::Handler(interrupt_handler);
     let action = SigAction::new(handler, SaFlags::empty(), SigSet::empty());
     unsafe {
-        let _ = sigaction(Signal::SIGUSR1, &action);
+        sigaction(Signal::SIGUSR1, &action)
+            .map_err(|e| Error::StartFailed(format!("failed to install signal handler: {}", e)))?;
     }
+    Ok(())
 }
 
 pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
@@ -58,7 +69,7 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
             .map_err(|e| Error::StartFailed(format!("failed to create console pipes: {}", e)))?;
 
         tracing::debug!("Console pipes created");
-        let writer = PipeFdWriter(guest_write);
+        let writer = ConsolePipeWriter(guest_write);
         let serial = Arc::new(SerialDevice::new(Box::new(writer)));
         (
             Some(host_read),
@@ -71,8 +82,8 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         (None, None, None, None)
     };
 
-    let kvm = Kvm::new()
-        .map_err(|e| Error::StartFailed(format!("failed to open /dev/kvm: {}", e)))?;
+    let kvm =
+        Kvm::new().map_err(|e| Error::StartFailed(format!("failed to open /dev/kvm: {}", e)))?;
     let vm_fd = kvm
         .create_vm()
         .map_err(|e| Error::StartFailed(format!("failed to create VM: {}", e)))?;
@@ -98,13 +109,24 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
 
     let initrd_addr = initrd_load_addr(kernel_entry);
     let initrd_size = load_initrd(&memory, &initrd_path, initrd_addr)?;
-    tracing::debug!("Initrd loaded at 0x{:x}, size: {} bytes", initrd_addr, initrd_size);
+    tracing::debug!(
+        "Initrd loaded at 0x{:x}, size: {} bytes",
+        initrd_addr,
+        initrd_size
+    );
 
     tracing::debug!("Kernel cmdline: {}", cmdline);
-    setup_boot_params(&memory, &cmdline, kernel_header, initrd_addr, initrd_size, memory_mb * 1024 * 1024)
-        .map_err(|e| Error::StartFailed(format!("failed to setup boot params: {}", e)))?;
+    setup_boot_params(
+        &memory,
+        &cmdline,
+        kernel_header,
+        initrd_addr,
+        initrd_size,
+        memory_mb * 1024 * 1024,
+    )
+    .map_err(|e| Error::StartFailed(format!("failed to setup boot params: {}", e)))?;
 
-    install_signal_handler();
+    install_signal_handler()?;
 
     let running = Arc::new(AtomicBool::new(true));
     let (exit_tx, exit_rx) = mpsc::channel(1);
@@ -124,8 +146,9 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
             .map_err(|e| Error::StartFailed(format!("failed to setup vCPU sregs: {}", e)))?;
 
         if vcpu_id == 0 {
-            setup_regs(&vcpu, kernel_entry, BOOT_PARAMS_ADDR)
-                .map_err(|e| Error::StartFailed(format!("failed to setup vCPU registers: {}", e)))?;
+            setup_regs(&vcpu, kernel_entry, BOOT_PARAMS_ADDR).map_err(|e| {
+                Error::StartFailed(format!("failed to setup vCPU registers: {}", e))
+            })?;
         }
 
         let serial_clone = serial
@@ -145,28 +168,41 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         vcpu_handles.push(handle);
     }
 
-    if let (Some(serial), Some(guest_read)) = (&serial, guest_read) {
+    let console_input_thread = if let (Some(serial), Some(guest_read)) = (&serial, guest_read) {
         let serial_clone = serial.clone();
-        std::thread::spawn(move || {
+        let running_clone = running.clone();
+
+        // Set the pipe to non-blocking so we can check the running flag
+        if let Err(e) = set_nonblocking(&guest_read) {
+            tracing::warn!("failed to set console input pipe to non-blocking: {}", e);
+        }
+
+        Some(std::thread::spawn(move || {
             let mut reader = std::fs::File::from(guest_read);
             let mut buf = [0u8; 256];
-            loop {
+            while running_clone.load(Ordering::Relaxed) {
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
                         serial_clone.enqueue_input(&buf[..n]);
                     }
+                    Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
                     Err(_) => break,
                 }
             }
-        });
-    }
+        }))
+    } else {
+        None
+    };
 
     Ok(Box::new(KvmVmHandle::new(
         running,
         exit_rx,
         vcpu_handles,
         vcpu_thread_ids,
+        console_input_thread,
         host_read,
         host_write,
         console_enabled,
@@ -189,7 +225,10 @@ fn setup_memory_regions(vm_fd: &VmFd, memory: &GuestMemoryMmap) -> Result<()> {
     Ok(())
 }
 
-fn load_kernel(memory: &GuestMemoryMmap, kernel_path: &std::path::Path) -> Result<(u64, Option<linux_loader::bootparam::setup_header>)> {
+fn load_kernel(
+    memory: &GuestMemoryMmap,
+    kernel_path: &std::path::Path,
+) -> Result<(u64, Option<linux_loader::bootparam::setup_header>)> {
     let mut kernel_file = File::open(kernel_path)
         .map_err(|e| Error::StartFailed(format!("failed to open kernel: {}", e)))?;
 
@@ -224,9 +263,10 @@ fn load_initrd(
     Ok(initrd_data.len() as u64)
 }
 
-struct PipeFdWriter(OwnedFd);
+/// Adapter to write console output to a pipe file descriptor.
+struct ConsolePipeWriter(OwnedFd);
 
-impl Write for PipeFdWriter {
+impl Write for ConsolePipeWriter {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         nix::unistd::write(&self.0, buf).map_err(|e| std::io::Error::from_raw_os_error(e as i32))
     }
@@ -234,4 +274,13 @@ impl Write for PipeFdWriter {
     fn flush(&mut self) -> std::io::Result<()> {
         Ok(())
     }
+}
+
+fn set_nonblocking(fd: &OwnedFd) -> Result<()> {
+    let flags = fcntl(fd.as_raw_fd(), FcntlArg::F_GETFL)
+        .map_err(|e| Error::Io(std::io::Error::from_raw_os_error(e as i32)))?;
+    let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
+    fcntl(fd.as_raw_fd(), FcntlArg::F_SETFL(flags))
+        .map_err(|e| Error::Io(std::io::Error::from_raw_os_error(e as i32)))?;
+    Ok(())
 }

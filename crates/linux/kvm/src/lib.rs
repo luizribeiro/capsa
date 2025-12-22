@@ -1,3 +1,31 @@
+//! KVM hypervisor backend for capsa.
+//!
+//! This crate provides a Linux KVM-based hypervisor backend that can boot and run
+//! Linux guest VMs using the kernel's KVM virtualization infrastructure.
+//!
+//! # Features
+//!
+//! - **Linux Direct Boot**: Boots Linux kernels directly using bzImage format
+//! - **Serial Console**: Provides bidirectional console access via emulated 8250 UART
+//! - **Multi-CPU Support**: Configurable vCPU count
+//!
+//! # Requirements
+//!
+//! - Linux host with KVM support (`/dev/kvm` must be accessible)
+//! - x86_64 architecture (currently the only supported architecture)
+//!
+//! # Example
+//!
+//! ```no_run
+//! use capsa_linux_kvm::KvmBackend;
+//! use capsa_core::HypervisorBackend;
+//!
+//! let backend = KvmBackend::new();
+//! if backend.is_available() {
+//!     println!("KVM is available");
+//! }
+//! ```
+
 mod arch;
 mod handle;
 mod serial;
@@ -6,11 +34,15 @@ mod vm;
 use async_trait::async_trait;
 use capsa_core::{
     BackendCapabilities, BackendVmHandle, BootMethodSupport, DeviceSupport, GuestOsSupport,
-    HostPlatform, HypervisorBackend, ImageFormatSupport, KernelCmdline, NetworkModeSupport,
-    Result, ShareMechanismSupport, VmConfig,
+    HostPlatform, HypervisorBackend, ImageFormatSupport, KernelCmdline, NetworkModeSupport, Result,
+    ShareMechanismSupport, VmConfig,
 };
 use std::path::Path;
 
+/// KVM hypervisor backend implementation.
+///
+/// This backend uses Linux's KVM (Kernel-based Virtual Machine) to run guest VMs.
+/// It requires `/dev/kvm` to be accessible and currently only supports x86_64.
 pub struct KvmBackend {
     capabilities: BackendCapabilities,
 }

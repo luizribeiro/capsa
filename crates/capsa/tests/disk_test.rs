@@ -15,7 +15,9 @@ async fn test_vm_with_readonly_disk_mounts() {
     // TODO: KVM backend doesn't support disk images yet
     #[cfg(feature = "linux-kvm")]
     {
-        eprintln!("Skipping test_vm_with_readonly_disk_mounts on KVM backend (disk support not yet implemented)");
+        eprintln!(
+            "Skipping test_vm_with_readonly_disk_mounts on KVM backend (disk support not yet implemented)"
+        );
         return;
     }
 
@@ -49,7 +51,9 @@ async fn test_disk_read_write() {
     // TODO: KVM backend doesn't support disk images yet
     #[cfg(feature = "linux-kvm")]
     {
-        eprintln!("Skipping test_disk_read_write on KVM backend (disk support not yet implemented)");
+        eprintln!(
+            "Skipping test_disk_read_write on KVM backend (disk support not yet implemented)"
+        );
         return;
     }
 

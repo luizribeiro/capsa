@@ -1,4 +1,6 @@
-use super::memory::{BOOT_PARAMS_ADDR, CMDLINE_OFFSET, PDE_START, PDPTE_START, PML4_START, BOOT_GDT_OFFSET};
+use super::memory::{
+    BOOT_GDT_OFFSET, BOOT_PARAMS_ADDR, CMDLINE_OFFSET, PDE_START, PDPTE_START, PML4_START,
+};
 use linux_loader::bootparam::{boot_params, setup_header};
 use vm_memory::{Bytes, GuestAddress, GuestMemoryMmap};
 
@@ -67,7 +69,10 @@ pub fn setup_boot_params(
     Ok(())
 }
 
-fn write_cmdline(memory: &GuestMemoryMmap, cmdline: &str) -> Result<(), vm_memory::GuestMemoryError> {
+fn write_cmdline(
+    memory: &GuestMemoryMmap,
+    cmdline: &str,
+) -> Result<(), vm_memory::GuestMemoryError> {
     let mut cmdline_bytes = cmdline.as_bytes().to_vec();
     cmdline_bytes.push(0);
     memory.write_slice(&cmdline_bytes, GuestAddress(CMDLINE_OFFSET))
@@ -87,8 +92,8 @@ fn setup_page_tables(memory: &GuestMemoryMmap) -> Result<(), vm_memory::GuestMem
 
 fn setup_gdt(memory: &GuestMemoryMmap) -> Result<(), vm_memory::GuestMemoryError> {
     let gdt: [u64; 4] = [
-        0,                  // NULL
-        0,                  // Unused
+        0,                     // NULL
+        0,                     // Unused
         0x00af_9a00_0000_ffff, // 64-bit code segment
         0x00cf_9200_0000_ffff, // 64-bit data segment
     ];
