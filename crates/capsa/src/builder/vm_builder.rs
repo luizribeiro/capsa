@@ -27,6 +27,7 @@ pub trait BootConfigBuilder: Clone {
     ///
     /// Returns the VmConfig and an optional path to a temp file that should be
     /// cleaned up when the VM stops (e.g., auto-generated EFI variable store).
+    #[allow(clippy::too_many_arguments)]
     fn into_vm_config(
         self,
         disks: Vec<DiskImage>,
@@ -355,22 +356,22 @@ impl<B: BootConfigBuilder, P> VmBuilder<B, P> {
     fn validate(&self, capabilities: &BackendCapabilities) -> Result<()> {
         self.boot_config.validate_boot(capabilities)?;
 
-        if let Some(max) = capabilities.max_cpus {
-            if self.resources.cpus > max {
-                return Err(Error::InvalidConfig(format!(
-                    "requested {} CPUs but backend supports at most {}",
-                    self.resources.cpus, max
-                )));
-            }
+        if let Some(max) = capabilities.max_cpus
+            && self.resources.cpus > max
+        {
+            return Err(Error::InvalidConfig(format!(
+                "requested {} CPUs but backend supports at most {}",
+                self.resources.cpus, max
+            )));
         }
 
-        if let Some(max) = capabilities.max_memory_mb {
-            if self.resources.memory_mb > max {
-                return Err(Error::InvalidConfig(format!(
-                    "requested {} MB memory but backend supports at most {} MB",
-                    self.resources.memory_mb, max
-                )));
-            }
+        if let Some(max) = capabilities.max_memory_mb
+            && self.resources.memory_mb > max
+        {
+            return Err(Error::InvalidConfig(format!(
+                "requested {} MB memory but backend supports at most {} MB",
+                self.resources.memory_mb, max
+            )));
         }
 
         match self.network {

@@ -190,10 +190,10 @@ impl VmHandle {
 
     fn cleanup_temp_files(&self) {
         for path in &self.temp_files {
-            if let Err(e) = std::fs::remove_file(path) {
-                if e.kind() != std::io::ErrorKind::NotFound {
-                    tracing::warn!("Failed to clean up temp file {:?}: {}", path, e);
-                }
+            if let Err(e) = std::fs::remove_file(path)
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                tracing::warn!("Failed to clean up temp file {:?}: {}", path, e);
             }
         }
     }

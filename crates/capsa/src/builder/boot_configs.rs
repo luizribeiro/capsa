@@ -123,13 +123,14 @@ impl BootConfigBuilder for UefiBootConfig {
         validate_disk_file(&self.disk)?;
 
         // Validate EFI variable store if specified and not creating
-        if let Some(store) = &self.efi_variable_store {
-            if !store.create_if_missing && !store.path.exists() {
-                return Err(Error::InvalidConfig(format!(
-                    "EFI variable store not found: {}",
-                    store.path.display()
-                )));
-            }
+        if let Some(store) = &self.efi_variable_store
+            && !store.create_if_missing
+            && !store.path.exists()
+        {
+            return Err(Error::InvalidConfig(format!(
+                "EFI variable store not found: {}",
+                store.path.display()
+            )));
         }
 
         Ok(())
