@@ -27,6 +27,9 @@ nix = { version = "0.29", features = ["process", "signal", "fs", "term"] }
 [target.'cfg(target_os = "macos")'.dependencies]
 capsa-apple-vz = { path = "../apple/vz", optional = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+capsa-linux-kvm = { path = "../linux/kvm", optional = true }
+
 [target.'cfg(target_os = "macos")'.build-dependencies]
 capsa-apple-vzd = { path = "../apple/vzd", artifact = "bin", optional = true }
 
@@ -37,6 +40,7 @@ test-utils = ["dep:serde_json", "dep:apple-main"]
 vfkit = []
 macos-native = ["dep:capsa-apple-vz"]
 macos-subprocess = ["dep:capsa-apple-vzd-ipc", "dep:tarpc", "dep:tokio-util", "dep:tokio-serde", "dep:capsa-apple-vzd"]
+linux-kvm = ["dep:capsa-linux-kvm"]
 
 [dev-dependencies]
 tempfile = { workspace = true }

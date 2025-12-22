@@ -1,0 +1,22 @@
+[package]
+name = "capsa-linux-kvm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "KVM backend for capsa VM runtime"
+
+[dependencies]
+capsa-core = { path = "../../core" }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+nix = { workspace = true, features = ["pthread", "signal"] }
+
+kvm-ioctls = "0.19"
+kvm-bindings = { version = "0.10", features = ["fam-wrappers"] }
+vm-memory = { version = "0.17", features = ["backend-mmap"] }
+linux-loader = { version = "0.13", features = ["bzimage", "elf"] }
+vm-superio = "0.8"
+vmm-sys-util = "0.12"
+vm-fdt = "0.3"

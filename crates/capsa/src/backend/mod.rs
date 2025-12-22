@@ -7,6 +7,9 @@
 #[cfg(target_os = "macos")]
 mod macos;
 
+#[cfg(target_os = "linux")]
+mod linux;
+
 #[cfg(all(
     target_os = "macos",
     any(
@@ -16,6 +19,9 @@ mod macos;
     )
 ))]
 pub use macos::MacOsBackend;
+
+#[cfg(all(target_os = "linux", feature = "linux-kvm"))]
+pub use linux::LinuxKvmBackend;
 
 pub use capsa_core::{HypervisorBackend, Result};
 
@@ -34,6 +40,12 @@ pub fn available_backends() -> Vec<Box<dyn HypervisorBackend>> {
 
         #[cfg(feature = "vfkit")]
         backends.push(Box::new(MacOsBackend::vfkit()));
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        #[cfg(feature = "linux-kvm")]
+        backends.push(Box::new(LinuxKvmBackend::new()));
     }
 
     backends
