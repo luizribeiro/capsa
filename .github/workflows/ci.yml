@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  lint:
+    name: Lint (${{ matrix.os }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner: ubuntu-latest
+          - os: macos
+            runner: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+      - run: nix profile install nixpkgs#devenv
+      - run: devenv shell cargo fmt --all -- --check
+      - run: devenv shell cargo clippy --all-features -- -D warnings
+
+  test-linux:
+    name: Test Linux (KVM)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            extra-platforms = x86_64-linux
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+      - run: nix profile install nixpkgs#devenv
+
+      - name: Build x86_64 test VMs
+        run: nix-build test-vms-x86_64.nix -A combined -o result-vms
+
+      - name: Run unit tests
+        run: devenv shell cargo test --lib --features linux-kvm
+
+      - name: Run doc tests
+        run: devenv shell cargo test --doc --features linux-kvm
+
+      - name: Check KVM availability
+        id: kvm
+        run: |
+          if [ -e /dev/kvm ] && [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+            echo "available=true" >> $GITHUB_OUTPUT
+          else
+            echo "available=false" >> $GITHUB_OUTPUT
+            echo "::warning::KVM not available, skipping integration tests"
+          fi
+
+      - name: Run KVM integration tests
+        if: steps.kvm.outputs.available == 'true'
+        run: devenv shell cargo test --features linux-kvm -- --test-threads=1
+
+  test-macos:
+    name: Test macOS (${{ matrix.backend }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [macos-native, macos-subprocess, vfkit]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            extra-platforms = aarch64-linux
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+      - run: nix profile install nixpkgs#devenv
+
+      - name: Build aarch64 test VMs
+        run: nix-build test-vms.nix -A combined -o result-vms
+
+      - name: Run unit tests
+        run: devenv shell cargo test --lib --features ${{ matrix.backend }}
+
+      - name: Run doc tests
+        run: devenv shell cargo test --doc --features ${{ matrix.backend }}
+
+      - name: Run integration tests
+        run: devenv shell cargo test --features ${{ matrix.backend }} -- --test-threads=1
