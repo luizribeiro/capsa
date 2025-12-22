@@ -268,8 +268,38 @@ let
     '';
   };
 
-  # UEFI-capable kernel with EFI stub support
-  # This kernel can boot directly as an EFI application
+  # Build the UEFI initramfs directory structure first
+  # This will be embedded into the kernel
+  uefiInitramfs = linuxPkgs.runCommand "uefi-initramfs" {} ''
+    mkdir -p $out/{bin,dev,proc,sys,etc,tmp,mnt}
+
+    cp ${linuxPkgs.pkgsStatic.busybox}/bin/busybox $out/bin/
+    for cmd in \
+      sh ash \
+      ls cat echo pwd mkdir ln rm cp mv touch head tail tee \
+      mount umount \
+      ps kill sleep \
+      grep sed awk cut sort uniq wc tr \
+      df du free top uptime uname dmesg \
+      vi less more \
+      chmod chown id whoami \
+      date env printenv export \
+      true false test expr \
+    ; do
+      ln -s busybox $out/bin/$cmd
+    done
+
+    # Add vsock-pong for host-guest communication testing
+    cp ${vsockPong}/bin/vsock-pong $out/bin/
+
+    cat > $out/init << 'INIT'
+    ${mkUefiInitScript}
+    INIT
+    chmod +x $out/init
+  '';
+
+  # UEFI-capable kernel with EFI stub support and embedded initramfs
+  # This kernel can boot directly as an EFI application with the initramfs built-in
   uefiKernel = linuxPkgs.stdenv.mkDerivation {
     name = "linux-uefi";
     src = linuxPkgs.linux.src;
@@ -283,14 +313,27 @@ let
     buildPhase = ''
       make ARCH=arm64 tinyconfig
 
-      cat >> .config << 'EOF'
+      cat >> .config << EOF
       # 64-bit kernel
       CONFIG_64BIT=y
 
       # EFI support - required for UEFI boot
       CONFIG_EFI=y
       CONFIG_EFI_STUB=y
-      CONFIG_CMDLINE_EXTEND=y
+
+      # ACPI support - required for UEFI boot on ARM64
+      # UEFI provides ACPI tables for device discovery instead of device tree
+      CONFIG_ACPI=y
+
+      # Built-in kernel command line - required for UEFI boot without bootloader
+      # Try multiple console options to see if any work
+      CONFIG_CMDLINE_FORCE=y
+      CONFIG_CMDLINE="rdinit=/init earlyprintk earlycon console=hvc0 console=ttyAMA0 loglevel=8"
+
+      # Enable early console for debugging
+      CONFIG_SERIAL_EARLYCON=y
+      CONFIG_SERIAL_AMBA_PL011=y
+      CONFIG_SERIAL_AMBA_PL011_CONSOLE=y
 
       # Basic requirements
       CONFIG_PRINTK=y
@@ -324,6 +367,12 @@ let
       # virtio-blk for disk support
       CONFIG_VIRTIO_BLK=y
 
+      # vsock support for host-guest communication
+      # Used for boot verification since console doesn't work reliably with UEFI
+      CONFIG_NET=y
+      CONFIG_VSOCKETS=y
+      CONFIG_VIRTIO_VSOCKETS=y
+
       # FAT filesystem for ESP
       CONFIG_VFAT_FS=y
       CONFIG_FAT_FS=y
@@ -336,9 +385,13 @@ let
       # ext4 filesystem support
       CONFIG_EXT4_FS=y
 
-      # initramfs support
+      # Embed initramfs directly into kernel - bypasses need for separate initrd loading
       CONFIG_BLK_DEV=y
       CONFIG_BLK_DEV_INITRD=y
+      CONFIG_INITRAMFS_SOURCE="${uefiInitramfs}"
+      CONFIG_INITRAMFS_ROOT_UID=0
+      CONFIG_INITRAMFS_ROOT_GID=0
+      CONFIG_INITRAMFS_FORCE=y
       CONFIG_RD_GZIP=y
       EOF
 
@@ -490,7 +543,9 @@ DHCP
     (cd initrd-root && find . | cpio -o -H newc | gzip) > $out/initrd
   '';
 
-  # Init script for UEFI VMs - similar to disk init but for UEFI boot
+  # Init script for UEFI VMs - uses vsock for boot verification
+  # Console doesn't work reliably with UEFI boot on Apple Virtualization.framework,
+  # so we use vsock ping-pong as the primary boot verification mechanism.
   mkUefiInitScript = ''
 #!/bin/sh
 export PATH=/bin
@@ -499,94 +554,62 @@ mount -t proc proc /proc
 mount -t sysfs sys /sys
 mount -t devtmpfs dev /dev
 
+# Set up console for output - required for Linux direct boot test
 exec < /dev/console > /dev/console 2>&1
 
-echo ""
 echo "======================================"
-echo "  UEFI Boot successful!"
+echo "  UEFI Boot - starting vsock-pong"
 echo "======================================"
-echo ""
 
-# Check EFI variables if available
-if [ -d /sys/firmware/efi ]; then
-  echo "EFI runtime services available"
-else
-  echo "EFI runtime services not available (normal in VM)"
-fi
+# Start vsock-pong for boot verification
+/bin/vsock-pong 1024 &
+echo "vsock-pong started"
 
-echo ""
 exec sh
   '';
 
   # Build a UEFI-bootable VM with ESP partition
-  # The kernel with EFI_STUB can boot directly as an EFI application
+  # Uses the kernel's EFI stub to boot directly as an EFI application
   mkUefiVm = { name, sizeMB ? 64 }: linuxPkgs.runCommand "capsa-test-vm-${name}" {
     nativeBuildInputs = with linuxPkgs; [
       cpio gzip
-      parted dosfstools mtools
-      util-linux  # for sfdisk
+      parted dosfstools mtools gptfdisk
+      util-linux
     ];
   } ''
     mkdir -p $out
 
-    # Build initrd with UEFI init script
-    mkdir -p initrd-root/{bin,dev,proc,sys,etc,tmp,mnt}
+    # Create initrd for the bootloader to load
+    (cd ${uefiInitramfs} && find . | cpio -o -H newc | gzip) > initrd.gz
 
-    cp ${linuxPkgs.pkgsStatic.busybox}/bin/busybox initrd-root/bin/
-    for cmd in \
-      sh ash \
-      ls cat echo pwd mkdir ln rm cp mv touch head tail tee \
-      mount umount \
-      ps kill sleep \
-      grep sed awk cut sort uniq wc tr \
-      df du free top uptime uname dmesg \
-      vi less more \
-      chmod chown id whoami \
-      date env printenv export \
-      true false test expr \
-    ; do
-      ln -s busybox initrd-root/bin/$cmd
-    done
+    # Create the ESP filesystem first
+    # Leave space: 1MB at start for GPT, 1MB at end for backup GPT
+    ESP_SIZE=$(((${toString sizeMB} - 2) * 1024 * 1024))
 
-    cat > initrd-root/init << 'INIT'
-    ${mkUefiInitScript}
-    INIT
-    chmod +x initrd-root/init
-
-    (cd initrd-root && find . | cpio -o -H newc | gzip) > initrd.gz
-
-    # Create GPT disk image with ESP partition
-    dd if=/dev/zero of=$out/disk.raw bs=1M count=${toString sizeMB}
-
-    # Create GPT partition table with a single ESP partition
-    # ESP starts at sector 2048 (1MB offset) and uses most of the disk
-    parted -s $out/disk.raw mklabel gpt
-    parted -s $out/disk.raw mkpart ESP fat32 1MiB 100%
-    parted -s $out/disk.raw set 1 esp on
-
-    # Create FAT32 filesystem in the ESP partition
-    # We need to extract just the partition, format it, then put it back
-    ESP_OFFSET=$((1 * 1024 * 1024))  # 1MiB offset
-    ESP_SIZE=$(((${toString sizeMB} - 1) * 1024 * 1024))  # Rest of disk
-
-    # Create a separate ESP image
     dd if=/dev/zero of=esp.img bs=1 count=$ESP_SIZE
-
-    # Format as FAT32
     mkfs.vfat -F 32 -n EFI esp.img
 
-    # Create EFI boot directory structure and copy kernel
+    # Create EFI boot directory structure
     mmd -i esp.img ::/EFI
     mmd -i esp.img ::/EFI/BOOT
+
+    # Copy kernel with embedded initramfs as the default EFI bootloader
     mcopy -i esp.img ${uefiKernel}/Image ::/EFI/BOOT/BOOTAA64.EFI
 
-    # Copy initrd to ESP as well (we'll use it via kernel command line)
+    # Also copy initrd separately (for reference/debugging)
     mcopy -i esp.img initrd.gz ::/initrd.gz
 
-    # Write ESP image back to the disk at the correct offset
-    dd if=esp.img of=$out/disk.raw bs=1 seek=$ESP_OFFSET conv=notrunc
+    # Now create the disk image with proper GPT
+    dd if=/dev/zero of=$out/disk.raw bs=1M count=${toString sizeMB}
 
-    # Also output the kernel separately for reference
+    # Use sgdisk to create a proper GPT with backup header
+    # Create ESP partition from 1MB to (size-1)MB
+    sgdisk -n 1:2048:$((${toString sizeMB} * 2048 - 2048 - 34)) -t 1:EF00 -c 1:ESP $out/disk.raw
+
+    # Write the ESP filesystem content to the partition
+    dd if=esp.img of=$out/disk.raw bs=512 seek=2048 conv=notrunc
+
+    # Also output the kernel separately for reference (used by Linux direct boot tests)
     cp ${uefiKernel}/Image $out/kernel
     cp initrd.gz $out/initrd
   '';
