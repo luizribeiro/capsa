@@ -319,7 +319,6 @@ let
       CONFIG_EFI_STUB=y
 
       # ACPI support - required for UEFI boot on ARM64
-      # UEFI provides ACPI tables for device discovery instead of device tree
       CONFIG_ACPI=y
 
       # Built-in kernel command line - required for UEFI boot without bootloader
@@ -555,9 +554,6 @@ exec sh
   } ''
     mkdir -p $out
 
-    # Create initrd for the bootloader to load
-    (cd ${uefiInitramfs} && find . | cpio -o -H newc | gzip) > initrd.gz
-
     # Create GPT disk image with ESP partition
     dd if=/dev/zero of=$out/disk.raw bs=1M count=${toString sizeMB}
     parted -s $out/disk.raw mklabel gpt
@@ -569,22 +565,17 @@ exec sh
     dd if=/dev/zero of=esp.img bs=1 count=$ESP_SIZE
     mkfs.vfat -F 32 -n EFI esp.img
 
-    # Create EFI boot directory structure
+    # Copy kernel (with embedded initramfs) as the default EFI bootloader
     mmd -i esp.img ::/EFI
     mmd -i esp.img ::/EFI/BOOT
-
-    # Copy kernel with embedded initramfs as the default EFI bootloader
     mcopy -i esp.img ${uefiKernel}/Image ::/EFI/BOOT/BOOTAA64.EFI
-
-    # Also copy initrd separately (for reference/debugging)
-    mcopy -i esp.img initrd.gz ::/initrd.gz
 
     # Write the ESP filesystem content to the partition
     dd if=esp.img of=$out/disk.raw bs=512 seek=2048 conv=notrunc
 
-    # Also output the kernel separately for reference (used by Linux direct boot tests)
+    # Output kernel and initrd for Linux direct boot tests
     cp ${uefiKernel}/Image $out/kernel
-    cp initrd.gz $out/initrd
+    (cd ${uefiInitramfs} && find . | cpio -o -H newc | gzip) > $out/initrd
   '';
 
   # Init script for disk-enabled VMs
