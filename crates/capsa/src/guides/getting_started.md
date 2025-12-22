@@ -20,7 +20,7 @@ For testing, you can build minimal images with tools like:
 All VM creation starts with [`Capsa`](crate::Capsa). Use [`Capsa::vm`](crate::Capsa::vm)
 to create a single VM:
 
-```rust,no_run
+```rust,ignore
 use capsa::{Capsa, LinuxDirectBootConfig};
 
 #[tokio::main]

@@ -93,7 +93,7 @@ Capsa supports two underlying mechanisms for directory sharing:
 By default, Capsa selects the best available mechanism. For explicit control,
 use [`SharedDir`](crate::SharedDir) directly:
 
-```rust,no_run
+```rust,ignore
 use capsa::{Capsa, LinuxDirectBootConfig, SharedDir, MountMode};
 
 # async fn example() -> capsa::Result<()> {

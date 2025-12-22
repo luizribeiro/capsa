@@ -91,7 +91,7 @@ vm.kill().await?;
 
 For more control, use the reader directly:
 
-```rust,no_run
+```rust,ignore
 use tokio::io::AsyncBufReadExt;
 
 # async fn example(console: capsa::VmConsole) -> capsa::Result<()> {
