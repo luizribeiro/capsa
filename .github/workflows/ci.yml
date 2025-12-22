@@ -29,29 +29,56 @@ jobs:
         with:
           name: devenv
       - run: nix profile install nixpkgs#devenv
-      - uses: Swatinem/rust-cache@v2
       - run: devenv shell cargo fmt --all -- --check
       - run: devenv shell cargo clippy --all-features -- -D warnings
+
+  build-vms:
+    name: Build VMs (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+            nix-file: test-vms-x86_64.nix
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            nix-file: test-vms.nix
+    steps:
+      - uses: actions/checkout@v5
+      - uses: cachix/install-nix-action@v31
+      - uses: cachix/cachix-action@v16
+        with:
+          name: devenv
+
+      - name: Build ${{ matrix.arch }} test VMs
+        run: nix-build ${{ matrix.nix-file }} -A combined -o result-vms -I nixpkgs=channel:nixos-unstable
+
+      - name: Upload VMs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-vms-${{ matrix.arch }}
+          path: result-vms/
+          retention-days: 1
 
   test-linux:
     name: Test Linux (KVM)
     runs-on: ubuntu-latest
+    needs: build-vms
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
-        with:
-          extra_nix_config: |
-            extra-platforms = x86_64-linux
       - uses: cachix/cachix-action@v16
         with:
           name: devenv
       - run: nix profile install nixpkgs#devenv
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: linux-kvm
 
-      - name: Build x86_64 test VMs
-        run: nix-build test-vms-x86_64.nix -A combined -o result-vms -I nixpkgs=channel:nixos-unstable
+      - name: Download test VMs artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: test-vms-x86_64
+          path: result-vms
 
       - name: Run unit tests
         run: devenv shell cargo test --lib --features linux-kvm
@@ -76,6 +103,7 @@ jobs:
   test-macos:
     name: Test macOS (${{ matrix.backend }})
     runs-on: macos-latest
+    needs: build-vms
     strategy:
       fail-fast: false
       matrix:
@@ -83,19 +111,16 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
-        with:
-          extra_nix_config: |
-            extra-platforms = aarch64-linux
       - uses: cachix/cachix-action@v16
         with:
           name: devenv
       - run: nix profile install nixpkgs#devenv
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: ${{ matrix.backend }}
 
-      - name: Build aarch64 test VMs
-        run: nix-build test-vms.nix -A combined -o result-vms -I nixpkgs=channel:nixos-unstable
+      - name: Download test VMs artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: test-vms-aarch64
+          path: result-vms
 
       - name: Run unit tests
         run: devenv shell cargo test --lib --features ${{ matrix.backend }}
