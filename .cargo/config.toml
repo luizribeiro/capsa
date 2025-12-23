@@ -8,7 +8,7 @@ test-linux = "test --workspace --features linux-kvm --exclude capsa-apple-vz --e
 test-macos = "test --workspace --features vfkit --exclude capsa-linux-kvm"
 
 [target.aarch64-apple-darwin]
-runner = ["codesign-run", "--entitlements", "/Users/luiz/capsa/entitlements.plist"]
+runner = ["codesign-run", "--entitlements", "entitlements.plist"]
 
 [target.x86_64-apple-darwin]
-runner = ["codesign-run", "--entitlements", "/Users/luiz/capsa/entitlements.plist"]
+runner = ["codesign-run", "--entitlements", "entitlements.plist"]
