@@ -661,21 +661,11 @@ exec sh
     mkfs.ext4 -L rootfs $out/disk.raw
   '';
 
-  # vsock-pong C program for vsock integration testing
-  vsockPongSrc = ./test-programs/vsock-pong.c;
-
-  vsockPong = linuxPkgs.stdenv.mkDerivation {
+  # vsock-pong Rust program for vsock integration testing
+  vsockPong = linuxPkgs.pkgsStatic.rustPlatform.buildRustPackage {
     name = "vsock-pong";
-    src = vsockPongSrc;
-    dontUnpack = true;
-    buildPhase = ''
-      ${linuxPkgs.pkgsStatic.stdenv.cc}/bin/aarch64-unknown-linux-musl-cc \
-        -static -O2 -o vsock-pong $src
-    '';
-    installPhase = ''
-      mkdir -p $out/bin
-      cp vsock-pong $out/bin/
-    '';
+    src = ./crates/test-utils/vsock-pong;
+    cargoLock.lockFile = ./crates/test-utils/vsock-pong/Cargo.lock;
   };
 
   # Init script for vsock test VM - starts vsock-pong automatically
