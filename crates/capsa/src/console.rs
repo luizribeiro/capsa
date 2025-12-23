@@ -25,14 +25,20 @@ use tokio::time::timeout;
 /// See the [Console Automation guide](crate::guides::console_automation) for
 /// integration testing patterns.
 pub struct VmConsole {
-    stream: Mutex<Option<ConsoleStream>>,
+    reader: Mutex<BufReader<tokio::io::ReadHalf<ConsoleStream>>>,
+    writer: Mutex<tokio::io::WriteHalf<ConsoleStream>>,
+    // TODO: this buffer can grow unboundedly if wait_for() is called without a
+    // timeout and the pattern never matches. Consider adding a max size limit
+    // or rethinking the buffering strategy.
     buffer: Mutex<String>,
 }
 
 impl VmConsole {
     pub(crate) fn new(stream: ConsoleStream) -> Self {
+        let (read_half, write_half) = tokio::io::split(stream);
         Self {
-            stream: Mutex::new(Some(stream)),
+            reader: Mutex::new(BufReader::new(read_half)),
+            writer: Mutex::new(write_half),
             buffer: Mutex::new(String::new()),
         }
     }
@@ -41,19 +47,20 @@ impl VmConsole {
     ///
     /// This consumes the console and allows concurrent reading and writing.
     pub async fn split(self) -> Result<(ConsoleReader, ConsoleWriter)> {
-        let stream = self.stream.into_inner().ok_or(Error::ConsoleNotEnabled)?;
-        let (reader, writer) = tokio::io::split(stream);
+        let reader = self.reader.into_inner();
+        let writer = self.writer.into_inner();
         Ok((
-            ConsoleReader { inner: reader },
+            ConsoleReader {
+                inner: reader.into_inner(),
+            },
             ConsoleWriter { inner: writer },
         ))
     }
 
     /// Reads bytes from the console into the provided buffer.
     pub async fn read(&self, buf: &mut [u8]) -> Result<usize> {
-        let mut stream_guard = self.stream.lock().await;
-        let stream = stream_guard.as_mut().ok_or(Error::ConsoleNotEnabled)?;
-        let n = stream.read(buf).await?;
+        let mut reader = self.reader.lock().await;
+        let n = reader.read(buf).await?;
         Ok(n)
     }
 
@@ -61,11 +68,8 @@ impl VmConsole {
     ///
     /// Returns all output up to and including the pattern.
     pub async fn wait_for(&self, pattern: &str) -> Result<String> {
-        let mut stream_guard = self.stream.lock().await;
-        let stream = stream_guard.as_mut().ok_or(Error::ConsoleNotEnabled)?;
-
+        let mut reader = self.reader.lock().await;
         let mut buffer_guard = self.buffer.lock().await;
-        let mut reader = BufReader::new(stream);
         let mut line = String::new();
 
         loop {
@@ -101,11 +105,8 @@ impl VmConsole {
     ///
     /// Returns the index of the matched pattern and the output up to it.
     pub async fn wait_for_any(&self, patterns: &[&str]) -> Result<(usize, String)> {
-        let mut stream_guard = self.stream.lock().await;
-        let stream = stream_guard.as_mut().ok_or(Error::ConsoleNotEnabled)?;
-
+        let mut reader = self.reader.lock().await;
         let mut buffer_guard = self.buffer.lock().await;
-        let mut reader = BufReader::new(stream);
         let mut line = String::new();
 
         loop {
@@ -131,14 +132,12 @@ impl VmConsole {
 
     /// Reads all currently available output without blocking.
     pub async fn read_available(&self) -> Result<String> {
-        let mut stream_guard = self.stream.lock().await;
-        let stream = stream_guard.as_mut().ok_or(Error::ConsoleNotEnabled)?;
-
+        let mut reader = self.reader.lock().await;
         let mut buf = [0u8; 4096];
         let mut output = String::new();
 
         loop {
-            match timeout(Duration::from_millis(10), stream.read(&mut buf)).await {
+            match timeout(Duration::from_millis(10), reader.read(&mut buf)).await {
                 Ok(Ok(0)) => break,
                 Ok(Ok(n)) => {
                     output.push_str(&String::from_utf8_lossy(&buf[..n]));
@@ -153,10 +152,9 @@ impl VmConsole {
 
     /// Writes raw bytes to the console.
     pub async fn write(&self, data: &[u8]) -> Result<()> {
-        let mut stream_guard = self.stream.lock().await;
-        let stream = stream_guard.as_mut().ok_or(Error::ConsoleNotEnabled)?;
-        stream.write_all(data).await?;
-        stream.flush().await?;
+        let mut writer = self.writer.lock().await;
+        writer.write_all(data).await?;
+        writer.flush().await?;
         Ok(())
     }
 
