@@ -153,4 +153,4 @@ jobs:
         run: devenv shell cargo test-macos-${{ matrix.backend }} --doc
 
       - name: Run integration tests
-        run: devenv shell cargo test-macos-${{ matrix.backend }} -- --test-threads=1
+        run: devenv shell cargo test-macos-${{ matrix.backend }}
