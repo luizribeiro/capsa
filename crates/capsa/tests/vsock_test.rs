@@ -35,7 +35,7 @@ async fn test_vsock_ping_pong() {
     #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
     {
         // Start VM with vsock configured on port 1024
-        let vm = test_vm("vsock")
+        let vm = test_vm("default")
             .vsock_listen(1024)
             .build()
             .await
@@ -99,7 +99,7 @@ async fn test_vsock_socket_info() {
     #[cfg(not(feature = "linux-kvm"))]
     {
         // Test that VsockSocket provides correct port and path info
-        let vm = test_vm("vsock")
+        let vm = test_vm("default")
             .vsock_listen(2048)
             .build()
             .await
@@ -132,7 +132,7 @@ async fn test_vsock_multiple_ports() {
     #[cfg(not(feature = "linux-kvm"))]
     {
         // Test configuring multiple vsock ports
-        let vm = test_vm("vsock")
+        let vm = test_vm("default")
             .vsock_listen(1024)
             .vsock_listen(1025)
             .build()

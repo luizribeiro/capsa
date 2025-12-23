@@ -45,10 +45,8 @@ jobs:
         include:
           - arch: x86_64
             runner: ubuntu-latest
-            nix-file: test-vms-x86_64.nix
           - arch: aarch64
             runner: ubuntu-24.04-arm
-            nix-file: test-vms.nix
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
@@ -59,25 +57,9 @@ jobs:
 
       - name: Build ${{ matrix.arch }} test VMs
         run: |
-          nix-build ${{ matrix.nix-file }} -A combined -o nix-vms -I nixpkgs=channel:nixos-unstable
-          # Copy files (dereferencing symlinks) and generate manifest with correct paths
-          mkdir -p result-vms
-          for vm in nix-vms/*/; do
-            vmname=$(basename "$vm")
-            mkdir -p "result-vms/$vmname"
-            cp -L "$vm"/* "result-vms/$vmname/"
-          done
-          # Generate manifest with relative paths (resolved by test_utils at runtime)
-          echo '{' > result-vms/manifest.json
-          first=true
-          for vm in result-vms/*/; do
-            vmname=$(basename "$vm")
-            $first || echo ',' >> result-vms/manifest.json
-            first=false
-            printf '"%s":{"kernel":"%s/kernel","initrd":"%s/initrd"}' \
-              "$vmname" "$vmname" "$vmname" >> result-vms/manifest.json
-          done
-          echo '}' >> result-vms/manifest.json
+          nix-build nix/test-vms -A ${{ matrix.arch }} -o nix-vms -I nixpkgs=channel:nixos-unstable
+          # Copy files (dereferencing symlinks) for artifact upload
+          cp -rL nix-vms result-vms
           cat result-vms/manifest.json
 
       - name: Upload VMs artifact

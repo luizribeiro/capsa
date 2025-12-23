@@ -4,12 +4,9 @@
 //! Integration tests for UEFI boot functionality.
 
 #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
-use capsa::test_utils::test_uefi_vm;
+use capsa::test_utils::{BOOT_SUCCESS_MESSAGE, test_uefi_vm};
 #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
 use std::time::Duration;
-
-#[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
-const BOOT_SUCCESS_MESSAGE: &str = "UEFI Boot";
 
 #[apple_main::harness_test]
 async fn test_uefi_vm_boots_successfully() {

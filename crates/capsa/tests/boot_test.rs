@@ -22,7 +22,7 @@ async fn test_vm_boots_successfully() {
 #[apple_main::harness_test]
 async fn test_sequential_vms() {
     for i in 0..2 {
-        let vm = test_vm("minimal")
+        let vm = test_vm("default")
             .build()
             .await
             .unwrap_or_else(|e| panic!("Failed to build VM {}: {}", i, e));

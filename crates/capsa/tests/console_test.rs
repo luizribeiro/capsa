@@ -19,7 +19,7 @@ async fn test_console_echo() {
 
     #[cfg(not(feature = "linux-kvm"))]
     {
-        let vm = test_vm("no-network")
+        let vm = test_vm("default")
             .build()
             .await
             .expect("Failed to build VM");
@@ -59,7 +59,7 @@ async fn test_console_ctrl_c() {
 
     #[cfg(not(feature = "linux-kvm"))]
     {
-        let vm = test_vm("no-network")
+        let vm = test_vm("default")
             .build()
             .await
             .expect("Failed to build VM");
