@@ -7,8 +7,11 @@ clippy-macos = "clippy --workspace --features macos-native,macos-subprocess,vfki
 test-linux = "test --workspace --features linux-kvm --exclude capsa-apple-vz --exclude capsa-apple-vzd --exclude capsa-apple-vzd-ipc"
 test-macos = "test --workspace --features vfkit --exclude capsa-linux-kvm"
 
+[env]
+CAPSA_ENTITLEMENTS = { value = "entitlements.plist", relative = true }
+
 [target.aarch64-apple-darwin]
-runner = ["codesign-run", "--entitlements", "entitlements.plist"]
+runner = ["sh", "-c", "exec codesign-run --entitlements \"$CAPSA_ENTITLEMENTS\" \"$@\"", "sh"]
 
 [target.x86_64-apple-darwin]
-runner = ["codesign-run", "--entitlements", "entitlements.plist"]
+runner = ["sh", "-c", "exec codesign-run --entitlements \"$CAPSA_ENTITLEMENTS\" \"$@\"", "sh"]
