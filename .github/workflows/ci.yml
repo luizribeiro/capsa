@@ -124,9 +124,13 @@ jobs:
         run: devenv shell cargo test-linux -- --test-threads=1
 
   test-macos:
-    name: Test macOS
+    name: Test macOS (${{ matrix.backend }})
     runs-on: macos-latest
     needs: build-vms
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [vfkit, native, subprocess]
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
@@ -143,10 +147,10 @@ jobs:
           path: result-vms
 
       - name: Run unit tests
-        run: devenv shell cargo test-macos --lib
+        run: devenv shell cargo test-macos-${{ matrix.backend }} --lib
 
       - name: Run doc tests
-        run: devenv shell cargo test-macos --doc
+        run: devenv shell cargo test-macos-${{ matrix.backend }} --doc
 
       - name: Run integration tests
-        run: devenv shell cargo test-macos -- --test-threads=1
+        run: devenv shell cargo test-macos-${{ matrix.backend }} -- --test-threads=1
