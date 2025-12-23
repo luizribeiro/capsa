@@ -12,22 +12,27 @@
 
 #[cfg(not(feature = "linux-kvm"))]
 use capsa::test_utils::test_vm;
-#[cfg(not(feature = "linux-kvm"))]
+#[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
 use std::time::Duration;
-#[cfg(not(feature = "linux-kvm"))]
+#[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Tests vsock ping-pong communication between host and guest.
 #[apple_main::harness_test]
 async fn test_vsock_ping_pong() {
-    // TODO: KVM backend doesn't support vsock yet
     #[cfg(feature = "linux-kvm")]
     {
-        eprintln!("Skipping test_vsock_ping_pong on KVM backend (vsock not yet implemented)");
+        eprintln!("Skipping: KVM backend doesn't support vsock yet");
         return;
     }
 
-    #[cfg(not(feature = "linux-kvm"))]
+    #[cfg(feature = "vfkit")]
+    {
+        eprintln!("Skipping: vfkit v0.6.1 has a bug where vsock Unix socket is never created");
+        return;
+    }
+
+    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
     {
         // Start VM with vsock configured on port 1024
         let vm = test_vm("vsock")

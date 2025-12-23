@@ -30,21 +30,43 @@ type VmManifest = HashMap<String, VmPaths>;
 
 static VM_MANIFEST: OnceLock<Option<VmManifest>> = OnceLock::new();
 
+fn result_vms_dir() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("Failed to get parent directory")
+        .parent()
+        .expect("Failed to get project root")
+        .join("result-vms")
+}
+
 fn load_manifest() -> &'static VmManifest {
     VM_MANIFEST
         .get_or_init(|| {
-            let manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .parent()
-                .expect("Failed to get parent directory")
-                .parent()
-                .expect("Failed to get project root")
-                .join("result-vms")
-                .join("manifest.json");
+            let result_vms = result_vms_dir();
+            let manifest_path = result_vms.join("manifest.json");
 
             let content = std::fs::read_to_string(&manifest_path).expect(
                 "Failed to read test VM manifest. Run 'nix-build test-vms.nix -o result-vms'",
             );
-            Some(serde_json::from_str(&content).expect("Failed to parse test VM manifest"))
+            let mut manifest: VmManifest =
+                serde_json::from_str(&content).expect("Failed to parse test VM manifest");
+
+            // Resolve relative paths in manifest to absolute paths
+            for paths in manifest.values_mut() {
+                if paths.kernel.is_relative() {
+                    paths.kernel = result_vms.join(&paths.kernel);
+                }
+                if paths.initrd.is_relative() {
+                    paths.initrd = result_vms.join(&paths.initrd);
+                }
+                if let Some(disk) = &paths.disk {
+                    if disk.is_relative() {
+                        paths.disk = Some(result_vms.join(disk));
+                    }
+                }
+            }
+
+            Some(manifest)
         })
         .as_ref()
         .expect("Manifest should be loaded")

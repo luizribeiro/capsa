@@ -3,8 +3,10 @@
 
 //! Integration tests for VM disk functionality.
 
+#[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+use capsa::test_utils::test_vm;
 #[cfg(not(feature = "linux-kvm"))]
-use capsa::test_utils::{test_vm, vm_paths};
+use capsa::test_utils::vm_paths;
 #[cfg(not(feature = "linux-kvm"))]
 use capsa::{Capsa, DiskImage, LinuxDirectBootConfig};
 #[cfg(not(feature = "linux-kvm"))]
@@ -12,16 +14,19 @@ use std::time::Duration;
 
 #[apple_main::harness_test]
 async fn test_vm_with_readonly_disk_mounts() {
-    // TODO: KVM backend doesn't support disk images yet
     #[cfg(feature = "linux-kvm")]
     {
-        eprintln!(
-            "Skipping test_vm_with_readonly_disk_mounts on KVM backend (disk support not yet implemented)"
-        );
+        eprintln!("Skipping: KVM backend doesn't support disk images yet");
         return;
     }
 
-    #[cfg(not(feature = "linux-kvm"))]
+    #[cfg(feature = "vfkit")]
+    {
+        eprintln!("Skipping: vfkit doesn't support read-only virtio-blk disks");
+        return;
+    }
+
+    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
     {
         // Uses read-only disk (default for test VMs since disk is in Nix store)
         let vm = test_vm("with-disk")

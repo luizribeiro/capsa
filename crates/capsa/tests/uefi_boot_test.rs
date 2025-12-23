@@ -3,26 +3,29 @@
 
 //! Integration tests for UEFI boot functionality.
 
-#[cfg(not(feature = "linux-kvm"))]
+#[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
 use capsa::test_utils::test_uefi_vm;
-#[cfg(not(feature = "linux-kvm"))]
+#[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
 use std::time::Duration;
 
-#[cfg(not(feature = "linux-kvm"))]
+#[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
 const BOOT_SUCCESS_MESSAGE: &str = "UEFI Boot";
 
 #[apple_main::harness_test]
 async fn test_uefi_vm_boots_successfully() {
-    // TODO: KVM backend doesn't support UEFI boot yet
     #[cfg(feature = "linux-kvm")]
     {
-        eprintln!(
-            "Skipping test_uefi_vm_boots_successfully on KVM backend (UEFI boot not yet implemented)"
-        );
+        eprintln!("Skipping: KVM backend doesn't support UEFI boot yet");
         return;
     }
 
-    #[cfg(not(feature = "linux-kvm"))]
+    #[cfg(feature = "vfkit")]
+    {
+        eprintln!("Skipping: vfkit UEFI boot not working (use native backend)");
+        return;
+    }
+
+    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
     {
         let vm = test_uefi_vm("uefi")
             .build()
