@@ -62,15 +62,15 @@ jobs:
             mkdir -p "result-vms/$vmname"
             cp -L "$vm"/* "result-vms/$vmname/"
           done
-          # Generate manifest with paths relative to project root
+          # Generate manifest with absolute paths (GITHUB_WORKSPACE is consistent across jobs)
           echo '{' > result-vms/manifest.json
           first=true
           for vm in result-vms/*/; do
             vmname=$(basename "$vm")
             $first || echo ',' >> result-vms/manifest.json
             first=false
-            printf '"%s":{"kernel":"result-vms/%s/kernel","initrd":"result-vms/%s/initrd"}' \
-              "$vmname" "$vmname" "$vmname" >> result-vms/manifest.json
+            printf '"%s":{"kernel":"%s/result-vms/%s/kernel","initrd":"%s/result-vms/%s/initrd"}' \
+              "$vmname" "$GITHUB_WORKSPACE" "$vmname" "$GITHUB_WORKSPACE" "$vmname" >> result-vms/manifest.json
           done
           echo '}' >> result-vms/manifest.json
           cat result-vms/manifest.json
