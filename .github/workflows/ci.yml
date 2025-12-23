@@ -20,12 +20,8 @@ jobs:
         include:
           - os: linux
             runner: ubuntu-latest
-            features: linux-kvm
-            excludes: --exclude capsa-apple-vz --exclude capsa-apple-vzd --exclude capsa-apple-vzd-ipc
           - os: macos
             runner: macos-latest
-            features: macos-native,macos-subprocess,vfkit
-            excludes: --exclude capsa-linux-kvm
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
@@ -34,7 +30,7 @@ jobs:
           name: devenv
       - run: nix profile install nixpkgs#devenv
       - run: devenv shell cargo fmt --all -- --check
-      - run: devenv shell cargo clippy --workspace --features ${{ matrix.features }} ${{ matrix.excludes }} -- -D warnings
+      - run: devenv shell cargo clippy-${{ matrix.os }} -- -D warnings
 
   build-vms:
     name: Build VMs (${{ matrix.arch }})
@@ -105,10 +101,10 @@ jobs:
           path: result-vms
 
       - name: Run unit tests
-        run: devenv shell cargo test --lib --features linux-kvm
+        run: devenv shell cargo test-linux --lib
 
       - name: Run doc tests
-        run: devenv shell cargo test --doc --features linux-kvm
+        run: devenv shell cargo test-linux --doc
 
       - name: Check KVM availability
         id: kvm
@@ -122,16 +118,12 @@ jobs:
 
       - name: Run KVM integration tests
         if: steps.kvm.outputs.available == 'true'
-        run: devenv shell cargo test --features linux-kvm -- --test-threads=1
+        run: devenv shell cargo test-linux -- --test-threads=1
 
   test-macos:
-    name: Test macOS (${{ matrix.backend }})
+    name: Test macOS
     runs-on: macos-latest
     needs: build-vms
-    strategy:
-      fail-fast: false
-      matrix:
-        backend: [macos-native, macos-subprocess, vfkit]
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
@@ -147,10 +139,10 @@ jobs:
           path: result-vms
 
       - name: Run unit tests
-        run: devenv shell cargo test --lib --features ${{ matrix.backend }}
+        run: devenv shell cargo test-macos --lib
 
       - name: Run doc tests
-        run: devenv shell cargo test --doc --features ${{ matrix.backend }}
+        run: devenv shell cargo test-macos --doc
 
       - name: Run integration tests
-        run: devenv shell cargo test --features ${{ matrix.backend }} -- --test-threads=1
+        run: devenv shell cargo test-macos -- --test-threads=1

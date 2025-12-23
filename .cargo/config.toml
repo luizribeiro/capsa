@@ -1,6 +1,12 @@
 [unstable]
 bindeps = true
 
+[alias]
+clippy-linux = "clippy --workspace --features linux-kvm --exclude capsa-apple-vz --exclude capsa-apple-vzd --exclude capsa-apple-vzd-ipc"
+clippy-macos = "clippy --workspace --features macos-native,macos-subprocess,vfkit --exclude capsa-linux-kvm"
+test-linux = "test --workspace --features linux-kvm --exclude capsa-apple-vz --exclude capsa-apple-vzd --exclude capsa-apple-vzd-ipc"
+test-macos = "test --workspace --features vfkit --exclude capsa-linux-kvm"
+
 [target.aarch64-apple-darwin]
 runner = ["codesign-run", "--entitlements", "/Users/luiz/capsa/entitlements.plist"]
 
