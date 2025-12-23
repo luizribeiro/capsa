@@ -162,5 +162,8 @@ jobs:
       - name: Run doc tests
         run: devenv shell cargo test-macos-${{ matrix.backend }} --doc
 
-      - name: Run integration tests
-        run: devenv shell cargo test-macos-${{ matrix.backend }}
+      # Integration tests require Virtualization.framework which isn't available
+      # on GitHub's macOS runners (no nested virtualization support on M1/M2).
+      # See: https://github.com/orgs/community/discussions/69211
+      # - name: Run integration tests
+      #   run: devenv shell cargo test-macos-${{ matrix.backend }}
