@@ -1,6 +1,8 @@
 { pkgs, lib, ... }:
 
 {
+  cachix.pull = [ "capsa" ];
+
   languages.rust.enable = true;
   languages.rust.channel = "nightly";
 
