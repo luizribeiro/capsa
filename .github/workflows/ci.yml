@@ -27,7 +27,8 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - uses: cachix/cachix-action@v16
         with:
-          name: devenv
+          name: capsa
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
       - run: nix profile install nixpkgs#devenv
       - run: devenv shell cargo fmt --all -- --check
       - run: devenv shell cargo clippy-${{ matrix.os }} -- -D warnings
@@ -50,7 +51,8 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - uses: cachix/cachix-action@v16
         with:
-          name: devenv
+          name: capsa
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
 
       - name: Build ${{ matrix.arch }} test VMs
         run: |
@@ -91,7 +93,8 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - uses: cachix/cachix-action@v16
         with:
-          name: devenv
+          name: capsa
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
       - run: nix profile install nixpkgs#devenv
 
       - name: Download test VMs artifact
@@ -129,7 +132,8 @@ jobs:
       - uses: cachix/install-nix-action@v31
       - uses: cachix/cachix-action@v16
         with:
-          name: devenv
+          name: capsa
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
       - run: nix profile install nixpkgs#devenv
 
       - name: Download test VMs artifact
