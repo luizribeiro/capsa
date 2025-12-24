@@ -1,0 +1,26 @@
+[package]
+name = "capsa-net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Userspace networking stack for capsa VM runtime"
+
+[dependencies]
+tokio = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+libc = "0.2"
+
+smoltcp = { version = "0.12", default-features = false, features = [
+    "medium-ethernet",
+    "proto-ipv4",
+    "socket-tcp",
+    "socket-udp",
+    "socket-dhcpv4",
+] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+nix = { workspace = true, features = ["ioctl", "net"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["test-util", "macros"] }

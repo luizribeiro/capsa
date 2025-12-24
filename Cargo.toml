@@ -4,6 +4,7 @@ members = [
     "crates/capsa",
     "crates/core",
     "crates/cli",
+    "crates/net",
     "crates/apple/vz",
     "crates/apple/vzd",
     "crates/apple/vzd-ipc",
