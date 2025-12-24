@@ -318,6 +318,7 @@ dependencies = [
 name = "capsa-net"
 version = "0.1.0"
 dependencies = [
+ "capsa-core",
  "futures",
  "heapless",
  "libc",
