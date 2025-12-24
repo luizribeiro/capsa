@@ -1,3 +1,4 @@
+mod device;
 mod error;
 mod frame_io;
 
@@ -7,6 +8,7 @@ mod socketpair;
 #[cfg(target_os = "linux")]
 mod tap;
 
+pub use device::SmoltcpDevice;
 pub use error::NetError;
 pub use frame_io::FrameIO;
 
