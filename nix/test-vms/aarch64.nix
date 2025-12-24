@@ -8,36 +8,9 @@ let
   pkgs = import nixpkgs { system = "aarch64-linux"; };
   vmLib = import ./lib.nix { inherit pkgs; };
 
-  linuxArch = "arm64";
   kernelImage = "Image";
   kernelTarget = "Image";
   console = "hvc0";
-
-  kernelConfig = {
-    PCI = true;
-    PCI_HOST_COMMON = true;
-    PCI_HOST_GENERIC = true;
-    VIRTIO_MENU = true;
-    VIRTIO_PCI_LIB = true;
-    HVC_DRIVER = true;
-    VIRTIO_CONSOLE = true;
-    IPV6 = false;
-  };
-
-  uefiKernelConfig = kernelConfig // {
-    EFI = true;
-    EFI_STUB = true;
-    ACPI = true;
-    CMDLINE_FORCE = true;
-    CMDLINE = "rdinit=/init console=${console}";
-    VFAT_FS = true;
-    FAT_FS = true;
-    FAT_DEFAULT_CODEPAGE = 437;
-    FAT_DEFAULT_IOCHARSET = "iso8859-1";
-    NLS = true;
-    NLS_CODEPAGE_437 = true;
-    NLS_ISO8859_1 = true;
-  };
 
   vsockPong = pkgs.pkgsStatic.rustPlatform.buildRustPackage {
     name = "vsock-pong";
@@ -47,36 +20,69 @@ let
 
   extraBinaries = [ "${vsockPong}/bin/vsock-pong" ];
 
-  universalKernel = vmLib.mkKernel {
+  kernel = vmLib.mkKernel {
     name = "universal";
-    inherit linuxArch kernelImage kernelTarget;
-    config = kernelConfig;
+    linuxArch = "arm64";
+    inherit kernelImage kernelTarget;
+    config = {
+      PCI = true;
+      PCI_HOST_COMMON = true;
+      PCI_HOST_GENERIC = true;
+      VIRTIO_MENU = true;
+      VIRTIO_PCI_LIB = true;
+      HVC_DRIVER = true;
+      VIRTIO_CONSOLE = true;
+      IPV6 = false;
+    };
   };
 
-  uefiInitramfsDir = vmLib.mkInitramfsDir { inherit console extraBinaries; };
+  initrd = vmLib.mkInitrd {
+    inherit console extraBinaries;
+  };
+
+  uefiInitramfsDir = vmLib.mkInitramfsDir {
+    inherit console extraBinaries;
+  };
+
   uefiKernel = vmLib.mkKernel {
     name = "uefi";
-    inherit linuxArch kernelImage kernelTarget;
-    config = uefiKernelConfig;
+    linuxArch = "arm64";
+    inherit kernelImage kernelTarget;
     initramfsDir = uefiInitramfsDir;
+    config = {
+      PCI = true;
+      PCI_HOST_COMMON = true;
+      PCI_HOST_GENERIC = true;
+      VIRTIO_MENU = true;
+      VIRTIO_PCI_LIB = true;
+      HVC_DRIVER = true;
+      VIRTIO_CONSOLE = true;
+      IPV6 = false;
+      EFI = true;
+      EFI_STUB = true;
+      ACPI = true;
+      CMDLINE_FORCE = true;
+      CMDLINE = "rdinit=/init console=${console}";
+      VFAT_FS = true;
+      FAT_FS = true;
+      FAT_DEFAULT_CODEPAGE = 437;
+      FAT_DEFAULT_IOCHARSET = "iso8859-1";
+      NLS = true;
+      NLS_CODEPAGE_437 = true;
+      NLS_ISO8859_1 = true;
+    };
   };
-
-  # Build initrd
-  universalInitrd = vmLib.mkInitrd { inherit console extraBinaries; };
-
-  # Build VMs
+in
+vmLib.mkCombined {
+  name = "aarch64";
   vms = {
     default = vmLib.mkDirectBootVm {
       name = "default";
-      kernel = universalKernel;
-      inherit kernelImage;
-      initrd = universalInitrd;
+      inherit kernel kernelImage initrd;
     };
     with-disk = vmLib.mkDirectBootVm {
       name = "with-disk";
-      kernel = universalKernel;
-      inherit kernelImage;
-      initrd = universalInitrd;
+      inherit kernel kernelImage initrd;
       disk = { sizeMB = 32; };
     };
     uefi = vmLib.mkUefiVm {
@@ -87,8 +93,4 @@ let
       initramfsDir = uefiInitramfsDir;
     };
   };
-in
-vmLib.mkCombined {
-  name = "aarch64";
-  inherit vms;
 }
