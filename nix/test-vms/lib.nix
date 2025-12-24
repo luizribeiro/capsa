@@ -146,7 +146,7 @@ esac
     in pkgs.stdenv.mkDerivation {
       name = "linux-${name}";
       src = pkgs.linux.src;
-      nativeBuildInputs = with pkgs; [ flex bison bc perl openssl elfutils ];
+      nativeBuildInputs = with pkgs; [ flex bison bc perl openssl elfutils lz4 ];
       dontConfigure = true;
 
       buildPhase = ''

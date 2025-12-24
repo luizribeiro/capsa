@@ -19,6 +19,9 @@ let
       # Architecture
       X86_64 = true;
 
+      # LZ4 compression for faster decompression (XZ is default but slow)
+      KERNEL_LZ4 = true;
+
       # Virtio MMIO transport (used by KVM backend)
       VIRTIO_MMIO = true;
       VIRTIO_MMIO_CMDLINE_DEVICES = true;
