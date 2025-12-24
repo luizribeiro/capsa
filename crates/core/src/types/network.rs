@@ -1,6 +1,22 @@
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 
+/// Network protocol for port forwarding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Protocol {
+    Tcp,
+    Udp,
+}
+
+/// Port forwarding rule: host_port → guest_port.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PortForward {
+    pub protocol: Protocol,
+    pub host_port: u16,
+    pub guest_port: u16,
+}
+
 /// Network configuration for VMs.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -37,6 +53,9 @@ pub struct UserNatConfig {
     /// Last IP to assign via DHCP.
     /// Default: 10.0.2.254
     pub dhcp_end: Ipv4Addr,
+    /// Port forwarding rules (host → guest).
+    #[serde(default)]
+    pub port_forwards: Vec<PortForward>,
 }
 
 impl Default for UserNatConfig {
@@ -46,6 +65,7 @@ impl Default for UserNatConfig {
             gateway: Ipv4Addr::new(10, 0, 2, 2),
             dhcp_start: Ipv4Addr::new(10, 0, 2, 15),
             dhcp_end: Ipv4Addr::new(10, 0, 2, 254),
+            port_forwards: Vec::new(),
         }
     }
 }
@@ -69,6 +89,26 @@ impl UserNatConfigBuilder {
             self.config.dhcp_start = Ipv4Addr::new(octets[0], octets[1], octets[2], 15);
             self.config.dhcp_end = Ipv4Addr::new(octets[0], octets[1], octets[2], 254);
         }
+        self
+    }
+
+    /// Forward a TCP port from host to guest.
+    pub fn forward_tcp(mut self, host_port: u16, guest_port: u16) -> Self {
+        self.config.port_forwards.push(PortForward {
+            protocol: Protocol::Tcp,
+            host_port,
+            guest_port,
+        });
+        self
+    }
+
+    /// Forward a UDP port from host to guest.
+    pub fn forward_udp(mut self, host_port: u16, guest_port: u16) -> Self {
+        self.config.port_forwards.push(PortForward {
+            protocol: Protocol::Udp,
+            host_port,
+            guest_port,
+        });
         self
     }
 
@@ -139,5 +179,25 @@ mod tests {
     fn user_nat_into_network_mode() {
         let mode: NetworkMode = NetworkMode::user_nat().into();
         assert!(matches!(mode, NetworkMode::UserNat(_)));
+    }
+
+    #[test]
+    fn user_nat_port_forwards() {
+        let mode = NetworkMode::user_nat()
+            .forward_tcp(8080, 80)
+            .forward_udp(5353, 53)
+            .build();
+        match mode {
+            NetworkMode::UserNat(config) => {
+                assert_eq!(config.port_forwards.len(), 2);
+                assert_eq!(config.port_forwards[0].protocol, Protocol::Tcp);
+                assert_eq!(config.port_forwards[0].host_port, 8080);
+                assert_eq!(config.port_forwards[0].guest_port, 80);
+                assert_eq!(config.port_forwards[1].protocol, Protocol::Udp);
+                assert_eq!(config.port_forwards[1].host_port, 5353);
+                assert_eq!(config.port_forwards[1].guest_port, 53);
+            }
+            _ => panic!("Expected UserNat"),
+        }
     }
 }

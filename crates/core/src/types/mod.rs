@@ -3,7 +3,7 @@ mod network;
 mod share;
 
 pub use disk::{DiskImage, ImageFormat};
-pub use network::{NetworkMode, UserNatConfig, UserNatConfigBuilder};
+pub use network::{NetworkMode, PortForward, Protocol, UserNatConfig, UserNatConfigBuilder};
 pub use share::{MountMode, ShareMechanism, SharedDir, Virtio9pConfig, VirtioFsConfig};
 
 use serde::{Deserialize, Serialize};
