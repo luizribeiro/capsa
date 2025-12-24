@@ -106,32 +106,18 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         .create_irq_chip()
         .map_err(|e| Error::StartFailed(format!("failed to create IRQ chip: {}", e)))?;
 
-    // Get the serial interrupt eventfd and dup the vm_fd for the interrupt thread.
-    //
-    // TODO: Investigate why irqfd doesn't work for serial interrupts.
-    // We bypass irqfd and manually inject interrupts using KVM_IRQ_LINE because
-    // irqfd doesn't deliver interrupts reliably. We tried:
-    // - Basic irqfd registration (KVM_IRQFD)
-    // - irqfd with resample (KVM_IRQFD_FLAG_RESAMPLE) for level-triggered semantics
-    // - Non-blocking eventfd (EFD_NONBLOCK)
-    // All approaches register successfully and KVM reports irqfd capability, but
-    // interrupts never reach the guest. Possibly related to PIC vs IOAPIC routing
-    // after early boot (crosvm notes: "After very early boot, the PIC is switched
-    // off and legacy interrupts handled by IOAPIC").
-    let serial_interrupt_data = if let Some(ref serial) = serial {
+    // Register serial interrupt using irqfd - KVM will inject IRQ when eventfd is signaled
+    if let Some(ref serial) = serial {
         let evt = serial
             .lock()
             .unwrap()
             .interrupt_evt()
             .try_clone()
             .map_err(|e| Error::StartFailed(format!("failed to clone interrupt eventfd: {}", e)))?;
-        // Duplicate the VM fd so the interrupt thread can use it
-        let vm_fd_dup = nix::unistd::dup(vm_fd.as_raw_fd())
-            .map_err(|e| Error::StartFailed(format!("failed to dup vm_fd: {}", e)))?;
-        Some((evt, vm_fd_dup))
-    } else {
-        None
-    };
+        vm_fd
+            .register_irqfd(&evt, SERIAL_IRQ)
+            .map_err(|e| Error::StartFailed(format!("failed to register serial irqfd: {}", e)))?;
+    }
 
     // Set up PIT (Programmable Interval Timer)
     let pit_config = kvm_pit_config::default();
@@ -197,12 +183,12 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
     )?;
 
     // Register virtio-console device if console is enabled
-    let virtio_console_interrupt_data = if let Some(fd) = virtio_console_fd {
+    if let Some(fd) = virtio_console_fd {
         let writer = ConsolePipeWriter(fd);
         let console = Arc::new(Mutex::new(VirtioConsole::new(Box::new(writer))));
         console.lock().unwrap().set_memory(memory.clone());
 
-        // Get interrupt eventfd before registering
+        // Register irqfd for virtio-console interrupts
         let evt = console
             .lock()
             .unwrap()
@@ -214,11 +200,11 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
                     e
                 ))
             })?;
-
-        // Dup VM fd for interrupt thread
-        let vm_fd_dup = nix::unistd::dup(vm_fd.as_raw_fd()).map_err(|e| {
-            Error::StartFailed(format!("failed to dup vm_fd for virtio-console: {}", e))
-        })?;
+        vm_fd
+            .register_irqfd(&evt, VIRTIO_CONSOLE_IRQ)
+            .map_err(|e| {
+                Error::StartFailed(format!("failed to register virtio-console irqfd: {}", e))
+            })?;
 
         register_mmio_device(
             &mut io_manager,
@@ -227,10 +213,7 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
             console,
             "virtio-console",
         )?;
-        Some((evt, vm_fd_dup))
-    } else {
-        None
-    };
+    }
 
     let io_manager = Arc::new(io_manager);
 
@@ -268,91 +251,6 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         }
         vcpu_handles.push(handle);
     }
-
-    // Spawn the interrupt handling thread that watches the serial eventfd
-    // and injects interrupts using the duplicated VM fd
-    let _interrupt_thread = if let Some((evt, vm_fd_dup)) = serial_interrupt_data {
-        let running_clone = running.clone();
-        Some(std::thread::spawn(move || {
-            // KVM_IRQ_LINE ioctl structure
-            #[repr(C)]
-            struct KvmIrqLevel {
-                irq: u32,
-                level: u32,
-            }
-            // KVM_IRQ_LINE ioctl number: _IOW('k', 0x61, struct kvm_irq_level)
-            // 'k' = 0xAE, size of kvm_irq_level = 8 bytes
-            // _IOW = 0x40000000 | (size << 16) | (type << 8) | nr
-            const KVM_IRQ_LINE: nix::libc::c_ulong = 0x4008_AE61; // _IOW('k', 0x61, 8)
-
-            while running_clone.load(Ordering::Relaxed) {
-                match evt.read() {
-                    Ok(_) => {
-                        // For level-triggered interrupts, we need to pulse the line:
-                        // first deassert (level=0), then assert (level=1).
-                        // This ensures the PIC sees a transition and generates a new interrupt.
-                        let irq_low = KvmIrqLevel {
-                            irq: SERIAL_IRQ,
-                            level: 0,
-                        };
-                        unsafe { nix::libc::ioctl(vm_fd_dup, KVM_IRQ_LINE, &irq_low) };
-
-                        let irq_high = KvmIrqLevel {
-                            irq: SERIAL_IRQ,
-                            level: 1,
-                        };
-                        unsafe { nix::libc::ioctl(vm_fd_dup, KVM_IRQ_LINE, &irq_high) };
-                    }
-                    Err(_) => break,
-                }
-            }
-            // Close the duplicated fd
-            unsafe {
-                nix::libc::close(vm_fd_dup);
-            }
-        }))
-    } else {
-        None
-    };
-
-    // TODO: Use irqfd instead of manual interrupt injection (see serial TODO above).
-    let _virtio_console_interrupt_thread =
-        if let Some((evt, vm_fd_dup)) = virtio_console_interrupt_data {
-            let running_clone = running.clone();
-            Some(std::thread::spawn(move || {
-                #[repr(C)]
-                struct KvmIrqLevel {
-                    irq: u32,
-                    level: u32,
-                }
-                const KVM_IRQ_LINE: nix::libc::c_ulong = 0x4008_AE61;
-
-                while running_clone.load(Ordering::Relaxed) {
-                    match evt.read() {
-                        Ok(_) => {
-                            // Pulse IRQ line for level-triggered interrupt
-                            let irq_low = KvmIrqLevel {
-                                irq: VIRTIO_CONSOLE_IRQ,
-                                level: 0,
-                            };
-                            unsafe { nix::libc::ioctl(vm_fd_dup, KVM_IRQ_LINE, &irq_low) };
-
-                            let irq_high = KvmIrqLevel {
-                                irq: VIRTIO_CONSOLE_IRQ,
-                                level: 1,
-                            };
-                            unsafe { nix::libc::ioctl(vm_fd_dup, KVM_IRQ_LINE, &irq_high) };
-                        }
-                        Err(_) => break,
-                    }
-                }
-                unsafe {
-                    nix::libc::close(vm_fd_dup);
-                }
-            }))
-        } else {
-            None
-        };
 
     let console_input_task = if let (Some(serial), Some(guest_read)) = (&serial, guest_read) {
         let serial_clone = serial.clone();
