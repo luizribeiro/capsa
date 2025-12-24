@@ -1,4 +1,5 @@
 mod device;
+mod dhcp;
 mod error;
 mod frame_io;
 
@@ -9,6 +10,7 @@ mod socketpair;
 mod tap;
 
 pub use device::SmoltcpDevice;
+pub use dhcp::DhcpServer;
 pub use error::NetError;
 pub use frame_io::FrameIO;
 
