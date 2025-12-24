@@ -12,6 +12,7 @@ use objc2_virtualization::VZVirtualMachine;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 
 pub struct NativeVmHandle {
     vm_addr: AtomicUsize,
@@ -22,6 +23,7 @@ pub struct NativeVmHandle {
     stop_receiver: Mutex<Option<StopReceiver>>,
     #[allow(dead_code)]
     vsock_bridge: Option<VsockBridge>,
+    network_task: Option<JoinHandle<()>>,
 }
 
 impl NativeVmHandle {
@@ -32,6 +34,7 @@ impl NativeVmHandle {
         console_write_fd: Option<OwnedFd>,
         stop_receiver: StopReceiver,
         vsock_bridge: Option<VsockBridge>,
+        network_task: Option<JoinHandle<()>>,
     ) -> Self {
         Self {
             vm_addr: AtomicUsize::new(vm_addr),
@@ -41,6 +44,7 @@ impl NativeVmHandle {
             console_write_fd: console_write_fd.map(|fd| Mutex::new(Some(fd))),
             stop_receiver: Mutex::new(Some(stop_receiver)),
             vsock_bridge,
+            network_task,
         }
     }
 
@@ -51,6 +55,11 @@ impl NativeVmHandle {
 
 impl Drop for NativeVmHandle {
     fn drop(&mut self) {
+        // Abort the network task if it exists
+        if let Some(task) = self.network_task.take() {
+            task.abort();
+        }
+
         let vm_addr = self.vm_addr.load(Ordering::SeqCst);
         let delegate_addr = self.delegate_addr.load(Ordering::SeqCst);
 

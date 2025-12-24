@@ -1,10 +1,15 @@
+//! NAT connection tracking and packet forwarding.
+//!
+//! This module will be used in a future phase to implement TCP and UDP NAT
+//! for outbound connections from the guest to external hosts.
+
+#![allow(dead_code)]
+
 use smoltcp::wire::{
     EthernetFrame, EthernetProtocol, IpProtocol, Ipv4Packet, TcpPacket, UdpPacket,
 };
 use std::collections::HashMap;
-use std::io;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::mpsc;
 

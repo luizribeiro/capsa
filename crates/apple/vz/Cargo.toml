@@ -7,8 +7,10 @@ description = "Native Virtualization.framework backend for capsa"
 
 [dependencies]
 capsa-core = { path = "../../core" }
+capsa-net = { path = "../../net" }
 tokio = { workspace = true }
 async-trait = { workspace = true }
+tracing = { workspace = true }
 nix = { version = "0.29", features = ["process", "signal", "fs"] }
 objc2 = "0.6"
 objc2-virtualization = "0.3"

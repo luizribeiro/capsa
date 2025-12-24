@@ -9,10 +9,11 @@ use objc2::{AnyThread, MainThreadMarker};
 use objc2_foundation::{NSError, NSString, NSURL};
 use objc2_virtualization::{
     VZDiskImageStorageDeviceAttachment, VZEFIBootLoader, VZEFIVariableStore,
-    VZEFIVariableStoreInitializationOptions, VZLinuxBootLoader, VZNATNetworkDeviceAttachment,
-    VZStorageDeviceConfiguration, VZVirtioBlockDeviceConfiguration,
-    VZVirtioConsoleDeviceSerialPortConfiguration, VZVirtioNetworkDeviceConfiguration,
-    VZVirtioSocketDeviceConfiguration, VZVirtualMachine, VZVirtualMachineConfiguration,
+    VZEFIVariableStoreInitializationOptions, VZFileHandleNetworkDeviceAttachment,
+    VZLinuxBootLoader, VZNATNetworkDeviceAttachment, VZStorageDeviceConfiguration,
+    VZVirtioBlockDeviceConfiguration, VZVirtioConsoleDeviceSerialPortConfiguration,
+    VZVirtioNetworkDeviceConfiguration, VZVirtioSocketDeviceConfiguration, VZVirtualMachine,
+    VZVirtualMachineConfiguration,
 };
 use std::os::fd::OwnedFd;
 use std::os::unix::io::RawFd;
@@ -37,6 +38,14 @@ pub struct CreateVmConfig {
     pub root_disk: Option<DiskImage>,
     pub disks: Vec<DiskImage>,
     pub network: NetworkMode,
+    /// Guest-side file descriptor for UserNat networking (from socketpair).
+    ///
+    /// When NetworkMode::UserNat is configured, this must contain the guest-side
+    /// fd from SocketPairDevice::new().into_raw_fd(). The fd ownership is
+    /// transferred to NSFileHandle; the caller must not close it after passing.
+    ///
+    /// Must be None for other network modes.
+    pub network_guest_fd: Option<RawFd>,
     pub vsock: VsockConfig,
     pub console_input_read_fd: Option<RawFd>,
     pub console_output_write_fd: Option<RawFd>,
@@ -150,17 +159,45 @@ pub fn create_vm(config: CreateVmConfig) -> Result<(usize, usize)> {
             vm_config.setStorageDevices(&storage_configs);
         }
 
-        if let NetworkMode::Nat = config.network {
-            let net_attachment = VZNATNetworkDeviceAttachment::new();
-            let net_config = VZVirtioNetworkDeviceConfiguration::new();
-            net_config.setAttachment(Some(&net_attachment));
+        match &config.network {
+            NetworkMode::Nat => {
+                let net_attachment = VZNATNetworkDeviceAttachment::new();
+                let net_config = VZVirtioNetworkDeviceConfiguration::new();
+                net_config.setAttachment(Some(&net_attachment));
 
-            let net_configs: Retained<
-                objc2_foundation::NSArray<objc2_virtualization::VZNetworkDeviceConfiguration>,
-            > = objc2_foundation::NSArray::from_retained_slice(&[objc2::rc::Retained::into_super(
-                net_config,
-            )]);
-            vm_config.setNetworkDevices(&net_configs);
+                let net_configs: Retained<
+                    objc2_foundation::NSArray<objc2_virtualization::VZNetworkDeviceConfiguration>,
+                > = objc2_foundation::NSArray::from_retained_slice(&[
+                    objc2::rc::Retained::into_super(net_config),
+                ]);
+                vm_config.setNetworkDevices(&net_configs);
+            }
+            NetworkMode::UserNat(_) => {
+                let guest_fd = config.network_guest_fd.ok_or_else(|| {
+                    Error::StartFailed("UserNat network mode requires network_guest_fd".to_string())
+                })?;
+
+                // SAFETY: NSFileHandle::initWithFileDescriptor takes ownership of the fd.
+                // The caller must ensure the fd was created via into_raw_fd() and not close it.
+                let file_handle = objc2_foundation::NSFileHandle::initWithFileDescriptor(
+                    objc2_foundation::NSFileHandle::alloc(),
+                    guest_fd,
+                );
+                let net_attachment = VZFileHandleNetworkDeviceAttachment::initWithFileHandle(
+                    VZFileHandleNetworkDeviceAttachment::alloc(),
+                    &file_handle,
+                );
+                let net_config = VZVirtioNetworkDeviceConfiguration::new();
+                net_config.setAttachment(Some(&net_attachment));
+
+                let net_configs: Retained<
+                    objc2_foundation::NSArray<objc2_virtualization::VZNetworkDeviceConfiguration>,
+                > = objc2_foundation::NSArray::from_retained_slice(&[
+                    objc2::rc::Retained::into_super(net_config),
+                ]);
+                vm_config.setNetworkDevices(&net_configs);
+            }
+            NetworkMode::None => {}
         }
 
         if let (Some(read_fd), Some(write_fd)) =

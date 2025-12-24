@@ -12,7 +12,6 @@ use smoltcp::wire::{
 
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::task::Context;
 use std::time::Duration;
 
 use tokio::net::{TcpStream, UdpSocket};
@@ -162,25 +161,25 @@ impl<F: FrameIO> UserNatStack<F> {
         loop {
             interval.tick().await;
 
-            // Create a waker for polling
-            let waker = futures::task::noop_waker();
-            let mut cx = Context::from_waker(&waker);
+            // Synchronous processing block - no awaits allowed here
+            {
+                let waker = futures::task::noop_waker();
+                let mut cx = std::task::Context::from_waker(&waker);
 
-            // Poll for incoming frames
-            self.device.poll_recv(&mut cx);
+                // Poll for incoming frames
+                self.device.poll_recv(&mut cx);
 
-            // Process the smoltcp interface
-            let timestamp = smoltcp_now(self.start_time);
-            self.iface
-                .poll(timestamp, &mut self.device, &mut self.sockets);
+                // Process the smoltcp interface
+                let timestamp = smoltcp_now(self.start_time);
+                self.iface
+                    .poll(timestamp, &mut self.device, &mut self.sockets);
 
-            // Handle DHCP
-            self.process_dhcp();
+                // Handle DHCP
+                self.process_dhcp();
+            }
 
-            // Handle TCP connections
+            // Async processing - TCP and UDP NAT
             self.process_tcp().await;
-
-            // Handle UDP
             self.process_udp().await;
         }
     }

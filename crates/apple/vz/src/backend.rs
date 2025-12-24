@@ -10,10 +10,11 @@ use crate::vsock::VsockBridge;
 use async_trait::async_trait;
 use capsa_core::{
     BackendCapabilities, BackendVmHandle, BootMethod, DEFAULT_ROOT_DEVICE, Error, HostPlatform,
-    HypervisorBackend, KernelCmdline, Result, VmConfig, macos_cmdline_defaults,
+    HypervisorBackend, KernelCmdline, NetworkMode, Result, VmConfig, macos_cmdline_defaults,
     macos_virtualization_capabilities,
 };
-use std::os::fd::AsRawFd;
+use capsa_net::{SocketPairDevice, StackConfig, UserNatStack};
+use std::os::fd::{AsRawFd, IntoRawFd};
 
 pub struct NativeVirtualizationBackend {
     capabilities: BackendCapabilities,
@@ -105,6 +106,18 @@ impl HypervisorBackend for NativeVirtualizationBackend {
             },
         };
 
+        // Create socketpair for UserNat networking.
+        // We use into_raw_fd() to transfer ownership because NSFileHandle takes ownership.
+        let (host_net_device, network_guest_fd) = match &config.network {
+            NetworkMode::UserNat(_) => {
+                let (device, guest_fd) = SocketPairDevice::new().map_err(|e| {
+                    Error::StartFailed(format!("Failed to create socketpair: {}", e))
+                })?;
+                (Some(device), Some(guest_fd.into_raw_fd()))
+            }
+            _ => (None, None),
+        };
+
         let vm_config = CreateVmConfig {
             boot,
             cpus: config.resources.cpus,
@@ -112,6 +125,7 @@ impl HypervisorBackend for NativeVirtualizationBackend {
             root_disk: config.root_disk.clone(),
             disks: config.disks.clone(),
             network: config.network.clone(),
+            network_guest_fd,
             vsock: config.vsock.clone(),
             console_input_read_fd: console_input_read.as_ref().map(|fd| fd.as_raw_fd()),
             console_output_write_fd: console_output_write.as_ref().map(|fd| fd.as_raw_fd()),
@@ -165,6 +179,16 @@ impl HypervisorBackend for NativeVirtualizationBackend {
             Err(_) => return Err(Error::StartFailed("VM start timed out".to_string())),
         }
 
+        // Spawn the userspace NAT stack if configured
+        let network_task = host_net_device.map(|device| {
+            let stack = UserNatStack::new(device, StackConfig::default());
+            tokio::spawn(async move {
+                if let Err(e) = stack.run().await {
+                    tracing::error!("UserNat stack error: {:?}", e);
+                }
+            })
+        });
+
         drop(console_input_read);
         drop(console_output_write);
 
@@ -175,6 +199,7 @@ impl HypervisorBackend for NativeVirtualizationBackend {
             console_input_write,
             stop_rx,
             vsock_bridge,
+            network_task,
         )))
     }
 

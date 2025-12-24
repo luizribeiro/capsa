@@ -223,6 +223,7 @@ dependencies = [
  "async-trait",
  "block2",
  "capsa-core",
+ "capsa-net",
  "dispatch",
  "libc",
  "nix",
@@ -230,6 +231,7 @@ dependencies = [
  "objc2-foundation",
  "objc2-virtualization",
  "tokio",
+ "tracing",
 ]
 
 [[package]]

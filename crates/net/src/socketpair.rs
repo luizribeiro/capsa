@@ -97,3 +97,65 @@ fn set_nonblocking(fd: &OwnedFd) -> io::Result<()> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn socketpair_creation_returns_valid_fds() {
+        let (device, guest_fd) = SocketPairDevice::new().expect("Failed to create socketpair");
+        assert!(device.as_raw_fd() >= 0);
+        assert!(guest_fd.as_raw_fd() >= 0);
+        assert_ne!(device.as_raw_fd(), guest_fd.as_raw_fd());
+    }
+
+    #[tokio::test]
+    async fn send_and_receive_frame_via_socketpair() {
+        let (mut host_device, guest_fd) =
+            SocketPairDevice::new().expect("Failed to create socketpair");
+
+        // Send a frame from host to guest
+        let test_frame = b"test ethernet frame";
+        host_device.send(test_frame).expect("Failed to send frame");
+
+        // Receive on the guest side using raw recv
+        let mut buf = [0u8; 100];
+        let n = unsafe {
+            libc::recv(
+                guest_fd.as_raw_fd(),
+                buf.as_mut_ptr() as *mut _,
+                buf.len(),
+                0,
+            )
+        };
+        assert!(n > 0);
+        assert_eq!(&buf[..n as usize], test_frame);
+    }
+
+    #[tokio::test]
+    async fn receive_frame_from_guest_side() {
+        let (host_device, guest_fd) = SocketPairDevice::new().expect("Failed to create socketpair");
+
+        // Send from guest side using raw send
+        let test_frame = b"guest frame data";
+        let n = unsafe {
+            libc::send(
+                guest_fd.as_raw_fd(),
+                test_frame.as_ptr() as *const _,
+                test_frame.len(),
+                0,
+            )
+        };
+        assert_eq!(n as usize, test_frame.len());
+
+        // Receive on host side using poll_recv with proper async waiting
+        let mut buf = [0u8; 100];
+        let mut host_device = host_device;
+
+        let len = std::future::poll_fn(|cx| host_device.poll_recv(cx, &mut buf))
+            .await
+            .expect("Failed to receive frame");
+        assert_eq!(&buf[..len], test_frame);
+    }
+}
