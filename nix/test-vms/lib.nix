@@ -84,35 +84,56 @@ case "$1" in
 esac
   '';
 
+  # Kernel options shared across all architectures. Architecture-specific
+  # configs (console drivers, PCI, etc.) are defined in each arch file.
   sharedKernelConfig = {
-    "64BIT" = true;
-    PRINTK = true;
-    BUG = true;
-    BINFMT_ELF = true;
-    BINFMT_SCRIPT = true;
+    # Core kernel features
+    "64BIT" = true;           # 64-bit kernel
+    PRINTK = true;            # kernel logging
+    BUG = true;               # BUG()/WARN() support for debugging
+
+    # Binary execution
+    BINFMT_ELF = true;        # run ELF binaries (busybox, vsock-pong)
+    BINFMT_SCRIPT = true;     # run #! scripts (init, udhcpc-script)
+
+    # TTY subsystem (required for any console)
     TTY = true;
-    UNIX98_PTYS = true;
-    PROC_FS = true;
-    SYSFS = true;
-    DEVTMPFS = true;
-    DEVTMPFS_MOUNT = true;
-    TMPFS = true;
+    UNIX98_PTYS = true;       # pseudo-terminals
+
+    # Virtual filesystems
+    PROC_FS = true;           # /proc (process info, system stats)
+    SYSFS = true;             # /sys (device/driver info)
+    DEVTMPFS = true;          # /dev (auto-populated device nodes)
+    DEVTMPFS_MOUNT = true;    # mount devtmpfs at boot
+    TMPFS = true;             # tmpfs for /tmp, /run
+
+    # Block device and initrd support
     BLOCK = true;
+    BLK_DEV = true;
+    BLK_DEV_INITRD = true;    # boot from initramfs
+    RD_GZIP = true;           # gzip-compressed initrd
+
+    # Virtio (paravirtualized I/O for VMs)
     VIRTIO = true;
-    VIRTIO_PCI = true;
-    VIRTIO_BLK = true;
-    EXT4_FS = true;
+    VIRTIO_PCI = true;        # virtio over PCI bus
+    VIRTIO_BLK = true;        # virtio block devices (/dev/vda)
+
+    # Filesystems
+    EXT4_FS = true;           # ext4 for disk images
+
+    # Networking stack
     NET = true;
-    INET = true;
-    PACKET = true;
-    UNIX = true;
+    INET = true;              # IPv4
+    PACKET = true;            # raw packet access (for DHCP)
+    UNIX = true;              # unix domain sockets
+
+    # Network devices
     NETDEVICES = true;
-    VIRTIO_NET = true;
+    VIRTIO_NET = true;        # virtio network (eth0)
+
+    # VSock (VM sockets for host-guest communication)
     VSOCKETS = true;
     VIRTIO_VSOCKETS = true;
-    BLK_DEV = true;
-    BLK_DEV_INITRD = true;
-    RD_GZIP = true;
   };
 
   mkKernel = { name, linuxArch, kernelImage, kernelTarget, config ? {}, initramfsDir ? null }:

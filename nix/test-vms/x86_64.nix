@@ -16,7 +16,10 @@ let
     linuxArch = "x86";
     inherit kernelImage kernelTarget;
     config = {
+      # Architecture
       X86_64 = true;
+
+      # Serial console (ttyS0) - directly emulated by KVM
       SERIAL_8250 = true;
       SERIAL_8250_CONSOLE = true;
     };

@@ -25,13 +25,18 @@ let
     linuxArch = "arm64";
     inherit kernelImage kernelTarget;
     config = {
+      # PCI bus - required for virtio on ARM64 (no direct MMIO like x86)
       PCI = true;
       PCI_HOST_COMMON = true;
-      PCI_HOST_GENERIC = true;
+      PCI_HOST_GENERIC = true;    # generic PCIe host for VMs
+
+      # Virtio console (hvc0) - ARM64 uses virtio-console, not 8250 UART
       VIRTIO_MENU = true;
       VIRTIO_PCI_LIB = true;
-      HVC_DRIVER = true;
+      HVC_DRIVER = true;          # hypervisor console driver
       VIRTIO_CONSOLE = true;
+
+      # Disable unused features to reduce kernel size
       IPV6 = false;
     };
   };
@@ -50,26 +55,39 @@ let
     inherit kernelImage kernelTarget;
     initramfsDir = uefiInitramfsDir;
     config = {
+      # PCI bus - required for virtio on ARM64 (no direct MMIO like x86)
       PCI = true;
       PCI_HOST_COMMON = true;
-      PCI_HOST_GENERIC = true;
+      PCI_HOST_GENERIC = true;    # generic PCIe host for VMs
+
+      # Virtio console (hvc0) - ARM64 uses virtio-console, not 8250 UART
       VIRTIO_MENU = true;
       VIRTIO_PCI_LIB = true;
-      HVC_DRIVER = true;
+      HVC_DRIVER = true;          # hypervisor console driver
       VIRTIO_CONSOLE = true;
-      IPV6 = false;
+
+      # EFI stub boot - kernel boots directly from EFI without bootloader
       EFI = true;
       EFI_STUB = true;
-      ACPI = true;
+      ACPI = true;                # ACPI tables from firmware
+
+      # Baked-in cmdline (EFI stub doesn't pass cmdline from firmware)
       CMDLINE_FORCE = true;
       CMDLINE = "rdinit=/init console=${console}";
+
+      # FAT filesystem - required to read EFI System Partition
       VFAT_FS = true;
       FAT_FS = true;
       FAT_DEFAULT_CODEPAGE = 437;
       FAT_DEFAULT_IOCHARSET = "iso8859-1";
+
+      # Native Language Support - required by FAT for filenames
       NLS = true;
       NLS_CODEPAGE_437 = true;
       NLS_ISO8859_1 = true;
+
+      # Disable unused features to reduce kernel size
+      IPV6 = false;
     };
   };
 in
