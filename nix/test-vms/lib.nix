@@ -111,7 +111,7 @@ esac
     BLOCK = true;
     BLK_DEV = true;
     BLK_DEV_INITRD = true;    # boot from initramfs
-    RD_GZIP = true;           # gzip-compressed initrd
+    RD_LZ4 = true;            # LZ4-compressed initrd (faster decompression)
 
     # Virtio (paravirtualized I/O for VMs)
     VIRTIO = true;
@@ -176,7 +176,7 @@ esac
   mkInitrd = { console, extraBinaries ? [] }:
     let initScript = mkInitScript { inherit console; };
     in pkgs.runCommand "initrd" {
-      nativeBuildInputs = [ pkgs.cpio pkgs.gzip ];
+      nativeBuildInputs = [ pkgs.cpio pkgs.lz4 ];
     } ''
       mkdir -p initrd-root/{bin,dev,proc,sys,etc,tmp,mnt}
 
@@ -197,7 +197,7 @@ esac
       DHCP
       chmod +x initrd-root/bin/udhcpc-script
 
-      (cd initrd-root && find . | cpio -o -H newc | gzip) > $out
+      (cd initrd-root && find . | cpio -o -H newc | lz4 -l) > $out
     '';
 
   mkInitramfsDir = { console, extraBinaries ? [] }:
@@ -246,7 +246,7 @@ esac
     let
       manifest = { kernel = "kernel"; initrd = "initrd"; disk = "disk.raw"; is_uefi = true; };
     in pkgs.runCommand "capsa-test-vm-${name}" {
-      nativeBuildInputs = with pkgs; [ cpio gzip parted dosfstools mtools ];
+      nativeBuildInputs = with pkgs; [ cpio lz4 parted dosfstools mtools ];
     } ''
       mkdir -p $out
 
@@ -266,7 +266,7 @@ esac
       dd if=esp.img of=$out/disk.raw bs=512 seek=2048 conv=notrunc
 
       cp ${kernel}/${kernelImage} $out/kernel
-      (cd ${initramfsDir} && find . | cpio -o -H newc | gzip) > $out/initrd
+      (cd ${initramfsDir} && find . | cpio -o -H newc | lz4 -l) > $out/initrd
 
       cat > $out/manifest.json << 'EOF'
       ${builtins.toJSON manifest}
