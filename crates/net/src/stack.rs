@@ -3,6 +3,7 @@ use crate::dhcp::DhcpServer;
 use crate::error::NetError;
 use crate::frame_io::FrameIO;
 use crate::nat::{FrameReceiver, NatTable, frame_channel};
+use crate::port_forward::PortForwarder;
 
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::socket::udp::{self, PacketBuffer, PacketMetadata};
@@ -19,6 +20,14 @@ use std::time::Duration;
 /// With 1ms polling intervals, 10000 means every 10 seconds.
 const NAT_CLEANUP_INTERVAL_MS: u32 = 10_000;
 
+/// Port forwarding rule.
+#[derive(Clone, Debug)]
+pub struct PortForwardRule {
+    pub host_port: u16,
+    pub guest_port: u16,
+    pub is_tcp: bool,
+}
+
 /// Configuration for the userspace NAT stack.
 #[derive(Clone, Debug)]
 pub struct StackConfig {
@@ -32,6 +41,8 @@ pub struct StackConfig {
     pub dhcp_range_end: Ipv4Addr,
     /// MAC address for the gateway interface
     pub gateway_mac: [u8; 6],
+    /// Port forwarding rules
+    pub port_forwards: Vec<PortForwardRule>,
 }
 
 impl Default for StackConfig {
@@ -42,6 +53,7 @@ impl Default for StackConfig {
             dhcp_range_start: Ipv4Addr::new(10, 0, 2, 15),
             dhcp_range_end: Ipv4Addr::new(10, 0, 2, 254),
             gateway_mac: [0x52, 0x54, 0x00, 0x00, 0x00, 0x01],
+            port_forwards: Vec::new(),
         }
     }
 }
@@ -54,6 +66,7 @@ impl Default for StackConfig {
 /// - DHCP server
 /// - TCP NAT (connection tracking + forwarding)
 /// - UDP NAT (connection tracking + forwarding)
+/// - Port forwarding (host → guest)
 pub struct UserNatStack<F: FrameIO> {
     device: SmoltcpDevice<F>,
     iface: Interface,
@@ -63,6 +76,7 @@ pub struct UserNatStack<F: FrameIO> {
     config: StackConfig,
     nat: NatTable,
     nat_rx: FrameReceiver,
+    port_forwarder: Option<PortForwarder>,
     start_time: std::time::Instant,
 }
 
@@ -107,7 +121,19 @@ impl<F: FrameIO> UserNatStack<F> {
 
         // Create NAT table with response channel
         let (nat_tx, nat_rx) = frame_channel(256);
-        let nat = NatTable::new(config.gateway_ip, config.gateway_mac, nat_tx);
+        let nat = NatTable::new(config.gateway_ip, config.gateway_mac, nat_tx.clone());
+
+        // Create port forwarder if there are any port forward rules
+        let port_forwarder = if config.port_forwards.is_empty() {
+            None
+        } else {
+            Some(PortForwarder::new(
+                nat_tx,
+                config.gateway_ip,
+                config.gateway_mac,
+                config.dhcp_range_start,
+            ))
+        };
 
         Self {
             device,
@@ -118,6 +144,7 @@ impl<F: FrameIO> UserNatStack<F> {
             config,
             nat,
             nat_rx,
+            port_forwarder,
             start_time,
         }
     }
@@ -127,6 +154,29 @@ impl<F: FrameIO> UserNatStack<F> {
     /// This is an async function that should be spawned as a task.
     /// It runs until an error occurs or the frame I/O is closed.
     pub async fn run(mut self) -> Result<(), NetError> {
+        // Start port forward listeners
+        if let Some(ref mut pf) = self.port_forwarder {
+            for rule in &self.config.port_forwards {
+                if rule.is_tcp {
+                    if let Err(e) = pf.start_tcp_forward(rule.host_port, rule.guest_port).await {
+                        tracing::warn!(
+                            "Failed to start TCP port forward {}:{}: {}",
+                            rule.host_port,
+                            rule.guest_port,
+                            e
+                        );
+                    }
+                } else if let Err(e) = pf.start_udp_forward(rule.host_port, rule.guest_port).await {
+                    tracing::warn!(
+                        "Failed to start UDP port forward {}:{}: {}",
+                        rule.host_port,
+                        rule.guest_port,
+                        e
+                    );
+                }
+            }
+        }
+
         let mut interval = tokio::time::interval(Duration::from_millis(1));
         let mut cleanup_counter = 0u32;
 
@@ -147,17 +197,25 @@ impl<F: FrameIO> UserNatStack<F> {
                 }
             }
 
-            // Check if we have a frame and if it's for an external destination
-            if let Some(frame) = self.device.peek_rx()
-                && self.is_external_destination(frame)
-            {
-                // Copy frame for NAT processing
-                let frame_copy = frame.to_vec();
-                self.device.discard_rx();
+            // Check if we have a frame destined to gateway (potential port forward response)
+            if let Some(frame) = self.device.peek_rx() {
+                // Check if this is a port forward response
+                if let Some(ref pf) = self.port_forwarder
+                    && self.is_port_forward_response(frame)
+                {
+                    let frame_copy = frame.to_vec();
+                    self.device.discard_rx();
+                    pf.handle_guest_response(&frame_copy).await;
+                    continue;
+                }
 
-                // Process with NAT
-                self.nat.process_frame(&frame_copy).await;
-                continue;
+                // Check if destined for external IP
+                if self.is_external_destination(frame) {
+                    let frame_copy = frame.to_vec();
+                    self.device.discard_rx();
+                    self.nat.process_frame(&frame_copy).await;
+                    continue;
+                }
             }
 
             // Process with smoltcp (ARP, ICMP, DHCP)
@@ -174,6 +232,27 @@ impl<F: FrameIO> UserNatStack<F> {
                 self.nat.cleanup();
             }
         }
+    }
+
+    /// Check if a frame is a potential port forward response (from guest to gateway).
+    fn is_port_forward_response(&self, frame: &[u8]) -> bool {
+        let Ok(eth_frame) = EthernetFrame::new_checked(frame) else {
+            return false;
+        };
+
+        if eth_frame.ethertype() != EthernetProtocol::Ipv4 {
+            return false;
+        }
+
+        let Ok(ip_packet) = Ipv4Packet::new_checked(eth_frame.payload()) else {
+            return false;
+        };
+
+        let src_ip: Ipv4Addr = ip_packet.src_addr().into();
+        let dst_ip: Ipv4Addr = ip_packet.dst_addr().into();
+
+        // Frame from guest to gateway
+        src_ip == self.config.dhcp_range_start && dst_ip == self.config.gateway_ip
     }
 
     /// Check if a frame is destined for an external IP (not our gateway or broadcast).

@@ -14,7 +14,7 @@ pub use dhcp::DhcpServer;
 pub use error::NetError;
 pub use frame_io::FrameIO;
 pub use port_forward::{ForwardConfig, PortForwarder};
-pub use stack::{StackConfig, UserNatStack};
+pub use stack::{PortForwardRule, StackConfig, UserNatStack};
 
 #[cfg(unix)]
 pub use socketpair::SocketPairDevice;
