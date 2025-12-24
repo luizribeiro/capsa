@@ -12,6 +12,7 @@ tracing = { workspace = true }
 libc = "0.2"
 heapless = "0.8"
 futures = "0.3"
+rand = "0.8"
 
 smoltcp = { version = "0.12", default-features = false, features = [
     "medium-ethernet",

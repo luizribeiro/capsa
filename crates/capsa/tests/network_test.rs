@@ -99,6 +99,53 @@ async fn test_usernat_dns_lookup() {
     }
 }
 
+/// Tests that guest can fetch HTTP content (TCP NAT).
+#[apple_main::harness_test]
+async fn test_usernat_http_fetch() {
+    #[cfg(feature = "linux-kvm")]
+    {
+        eprintln!("Skipping: KVM backend doesn't support UserNat yet");
+        return;
+    }
+
+    #[cfg(feature = "vfkit")]
+    {
+        eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
+        return;
+    }
+
+    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    {
+        let vm = test_vm("default")
+            .network(NetworkMode::UserNat(UserNatConfig::default()))
+            .build()
+            .await
+            .expect("Failed to build VM");
+
+        let console = vm.console().await.expect("Failed to get console");
+
+        // Wait for boot and DHCP to complete
+        console
+            .wait_for_timeout("Network configured via DHCP", Duration::from_secs(30))
+            .await
+            .expect("VM did not configure network via DHCP");
+
+        // Fetch HTTP content (uses TCP NAT)
+        // We use example.com which is designed for testing
+        console
+            .write_line("wget -q -O - http://example.com 2>/dev/null | grep -o 'Example Domain' && echo HTTP_SUCCESS")
+            .await
+            .expect("Failed to send wget command");
+
+        console
+            .wait_for_timeout("HTTP_SUCCESS", Duration::from_secs(15))
+            .await
+            .expect("HTTP fetch failed - TCP NAT may not be working");
+
+        vm.kill().await.expect("Failed to kill VM");
+    }
+}
+
 /// Tests that guest can ping the gateway after DHCP.
 #[apple_main::harness_test]
 async fn test_usernat_ping_gateway() {

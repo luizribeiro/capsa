@@ -321,6 +321,7 @@ dependencies = [
  "heapless",
  "libc",
  "nix",
+ "rand",
  "smoltcp",
  "thiserror 2.0.17",
  "tokio",
