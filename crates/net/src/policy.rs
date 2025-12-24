@@ -88,8 +88,8 @@ impl PolicyChecker {
 
         let ip_packet = Ipv4Packet::new_checked(eth_frame.payload()).ok()?;
 
-        let src_ip: Ipv4Addr = ip_packet.src_addr().into();
-        let dst_ip: Ipv4Addr = ip_packet.dst_addr().into();
+        let src_ip: Ipv4Addr = ip_packet.src_addr();
+        let dst_ip: Ipv4Addr = ip_packet.dst_addr();
 
         let (protocol, src_port, dst_port) = match ip_packet.next_header() {
             IpProtocol::Tcp => {
@@ -186,7 +186,7 @@ impl CompiledMatcher {
             }
             CompiledMatcher::Port(port) => info.dst_port == Some(*port),
             CompiledMatcher::PortRange { start, end } => {
-                info.dst_port.map_or(false, |p| p >= *start && p <= *end)
+                info.dst_port.is_some_and(|p| p >= *start && p <= *end)
             }
             CompiledMatcher::Protocol(proto) => info.protocol == *proto,
             CompiledMatcher::All(matchers) => matchers.iter().all(|m| m.matches(info)),

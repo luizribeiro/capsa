@@ -1,11 +1,13 @@
+mod cluster;
 mod disk;
 mod network;
 mod share;
 
+pub use cluster::{NetworkClusterBuilder, NetworkClusterConfig};
 pub use disk::{DiskImage, ImageFormat};
 pub use network::{
-    NetworkMode, NetworkPolicy, PolicyAction, PolicyRule, PortForward, Protocol, RuleMatcher,
-    UserNatConfig, UserNatConfigBuilder,
+    ClusterPortConfig, NetworkMode, NetworkPolicy, PolicyAction, PolicyRule, PortForward, Protocol,
+    RuleMatcher, UserNatConfig, UserNatConfigBuilder,
 };
 pub use share::{MountMode, ShareMechanism, SharedDir, Virtio9pConfig, VirtioFsConfig};
 

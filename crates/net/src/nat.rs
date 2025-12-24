@@ -552,6 +552,7 @@ impl NatTable {
 }
 
 /// Craft a UDP response ethernet frame to send back to guest.
+#[allow(clippy::useless_conversion)] // Ipv4Address -> IpAddress is needed for emit()
 fn craft_udp_response(
     payload: &[u8],
     src_addr: SocketAddrV4,
@@ -724,6 +725,7 @@ enum TcpControl {
 }
 
 /// Common function to craft TCP frames.
+#[allow(clippy::useless_conversion)] // Ipv4Address -> IpAddress is needed for emit()
 #[allow(clippy::too_many_arguments)]
 fn craft_tcp_frame(
     src_addr: SocketAddrV4,

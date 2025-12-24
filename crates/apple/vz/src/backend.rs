@@ -108,12 +108,20 @@ impl HypervisorBackend for NativeVirtualizationBackend {
 
         // Create socketpair for UserNat networking.
         // We use into_raw_fd() to transfer ownership because NSFileHandle takes ownership.
+        //
+        // For Cluster mode, the switch port and guest fd must be provided externally
+        // via a VirtualSwitch managed at a higher level (e.g., VmBuilder with cluster config).
         let (host_net_device, network_guest_fd) = match &config.network {
             NetworkMode::UserNat(_) => {
                 let (device, guest_fd) = SocketPairDevice::new().map_err(|e| {
                     Error::StartFailed(format!("Failed to create socketpair: {}", e))
                 })?;
                 (Some(device), Some(guest_fd.into_raw_fd()))
+            }
+            NetworkMode::Cluster(_) => {
+                return Err(Error::StartFailed(
+                    "Cluster mode requires external VirtualSwitch setup via VmBuilder".to_string(),
+                ));
             }
             _ => (None, None),
         };

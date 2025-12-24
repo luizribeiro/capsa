@@ -38,13 +38,14 @@ pub struct CreateVmConfig {
     pub root_disk: Option<DiskImage>,
     pub disks: Vec<DiskImage>,
     pub network: NetworkMode,
-    /// Guest-side file descriptor for UserNat networking (from socketpair).
+    /// Guest-side file descriptor for UserNat or Cluster networking.
     ///
-    /// When NetworkMode::UserNat is configured, this must contain the guest-side
-    /// fd from SocketPairDevice::new().into_raw_fd(). The fd ownership is
-    /// transferred to NSFileHandle; the caller must not close it after passing.
+    /// When NetworkMode::UserNat or NetworkMode::Cluster is configured, this must
+    /// contain the guest-side fd from SocketPairDevice::new().into_raw_fd() or
+    /// a SwitchPort. The fd ownership is transferred to NSFileHandle; the caller
+    /// must not close it after passing.
     ///
-    /// Must be None for other network modes.
+    /// Must be None for other network modes (Nat, None).
     pub network_guest_fd: Option<RawFd>,
     pub vsock: VsockConfig,
     pub console_input_read_fd: Option<RawFd>,
@@ -172,9 +173,17 @@ pub fn create_vm(config: CreateVmConfig) -> Result<(usize, usize)> {
                 ]);
                 vm_config.setNetworkDevices(&net_configs);
             }
-            NetworkMode::UserNat(_) => {
+            NetworkMode::UserNat(_) | NetworkMode::Cluster(_) => {
+                let mode_name = match &config.network {
+                    NetworkMode::UserNat(_) => "UserNat",
+                    NetworkMode::Cluster(_) => "Cluster",
+                    _ => unreachable!(),
+                };
                 let guest_fd = config.network_guest_fd.ok_or_else(|| {
-                    Error::StartFailed("UserNat network mode requires network_guest_fd".to_string())
+                    Error::StartFailed(format!(
+                        "{} network mode requires network_guest_fd",
+                        mode_name
+                    ))
                 })?;
 
                 // SAFETY: NSFileHandle::initWithFileDescriptor takes ownership of the fd.

@@ -225,29 +225,29 @@ impl<F: FrameIO> UserNatStack<F> {
                 // Check if destined for external IP
                 if self.is_external_destination(frame) {
                     // Apply network policy if configured
-                    if let Some(ref checker) = self.policy_checker {
-                        if let Some(info) = PolicyChecker::extract_packet_info(frame) {
-                            match checker.check(&info) {
-                                PolicyResult::Deny => {
-                                    tracing::debug!(
-                                        "Policy denied: {} -> {}:{}",
-                                        info.src_ip,
-                                        info.dst_ip,
-                                        info.dst_port.unwrap_or(0)
-                                    );
-                                    self.device.discard_rx();
-                                    continue;
-                                }
-                                PolicyResult::Log => {
-                                    tracing::info!(
-                                        "Policy logged: {} -> {}:{}",
-                                        info.src_ip,
-                                        info.dst_ip,
-                                        info.dst_port.unwrap_or(0)
-                                    );
-                                }
-                                PolicyResult::Allow => {}
+                    if let Some(ref checker) = self.policy_checker
+                        && let Some(info) = PolicyChecker::extract_packet_info(frame)
+                    {
+                        match checker.check(&info) {
+                            PolicyResult::Deny => {
+                                tracing::debug!(
+                                    "Policy denied: {} -> {}:{}",
+                                    info.src_ip,
+                                    info.dst_ip,
+                                    info.dst_port.unwrap_or(0)
+                                );
+                                self.device.discard_rx();
+                                continue;
                             }
+                            PolicyResult::Log => {
+                                tracing::info!(
+                                    "Policy logged: {} -> {}:{}",
+                                    info.src_ip,
+                                    info.dst_ip,
+                                    info.dst_port.unwrap_or(0)
+                                );
+                            }
+                            PolicyResult::Allow => {}
                         }
                     }
 
@@ -288,8 +288,8 @@ impl<F: FrameIO> UserNatStack<F> {
             return false;
         };
 
-        let src_ip: Ipv4Addr = ip_packet.src_addr().into();
-        let dst_ip: Ipv4Addr = ip_packet.dst_addr().into();
+        let src_ip: Ipv4Addr = ip_packet.src_addr();
+        let dst_ip: Ipv4Addr = ip_packet.dst_addr();
 
         // Frame from guest to gateway
         src_ip == self.config.dhcp_range_start && dst_ip == self.config.gateway_ip

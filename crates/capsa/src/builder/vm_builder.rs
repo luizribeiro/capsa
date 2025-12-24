@@ -390,6 +390,11 @@ impl<B: BootConfigBuilder, P> VmBuilder<B, P> {
                     return Err(Error::UnsupportedFeature("network mode: user_nat".into()));
                 }
             }
+            NetworkMode::Cluster(_) => {
+                if !capabilities.network_modes.cluster {
+                    return Err(Error::UnsupportedFeature("network mode: cluster".into()));
+                }
+            }
         }
 
         // Validate boot disk format if present
@@ -535,6 +540,7 @@ mod tests {
                 none: true,
                 nat: true,
                 user_nat: true,
+                cluster: true,
             },
             share_mechanisms: ShareMechanismSupport {
                 virtio_fs: true,

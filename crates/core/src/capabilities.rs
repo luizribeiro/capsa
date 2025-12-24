@@ -24,6 +24,7 @@ pub struct NetworkModeSupport {
     pub none: bool,
     pub nat: bool,
     pub user_nat: bool,
+    pub cluster: bool,
 }
 
 #[derive(Debug, Clone, Default)]

@@ -74,8 +74,8 @@ impl VfkitStrategy {
                 args.push("--device".to_string());
                 args.push("virtio-net,nat".to_string());
             }
-            NetworkMode::UserNat(_) => {
-                // TODO: UserNat not yet supported on vfkit backend
+            NetworkMode::UserNat(_) | NetworkMode::Cluster(_) => {
+                // TODO: UserNat and Cluster not yet supported on vfkit backend
                 // For now, fall back to regular NAT
                 args.push("--device".to_string());
                 args.push("virtio-net,nat".to_string());

@@ -166,12 +166,51 @@ pub enum NetworkMode {
     /// Userspace NAT via capsa-net (cross-platform, supports filtering).
     #[serde(rename = "user_nat")]
     UserNat(UserNatConfig),
+    /// Cluster mode - VM joins a shared virtual switch for multi-VM networking.
+    #[serde(rename = "cluster")]
+    Cluster(ClusterPortConfig),
+}
+
+/// Configuration for a VM port connected to a network cluster.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ClusterPortConfig {
+    /// Name of the cluster to join.
+    pub cluster_name: String,
+    /// Optional static IP address (otherwise assigned via DHCP).
+    pub static_ip: Option<Ipv4Addr>,
+}
+
+impl ClusterPortConfig {
+    /// Set a static IP address.
+    pub fn with_ip(mut self, ip: Ipv4Addr) -> Self {
+        self.static_ip = Some(ip);
+        self
+    }
+
+    /// Convert to NetworkMode.
+    pub fn build(self) -> NetworkMode {
+        NetworkMode::Cluster(self)
+    }
+}
+
+impl From<ClusterPortConfig> for NetworkMode {
+    fn from(config: ClusterPortConfig) -> Self {
+        NetworkMode::Cluster(config)
+    }
 }
 
 impl NetworkMode {
     /// Create a userspace NAT configuration with default settings.
     pub fn user_nat() -> UserNatConfigBuilder {
         UserNatConfigBuilder::default()
+    }
+
+    /// Create a cluster port configuration.
+    pub fn cluster(cluster_name: &str) -> ClusterPortConfig {
+        ClusterPortConfig {
+            cluster_name: cluster_name.to_string(),
+            static_ip: None,
+        }
     }
 }
 

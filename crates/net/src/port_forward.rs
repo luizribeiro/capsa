@@ -152,10 +152,9 @@ impl PortForwarder {
 
                         if let Some(syn_frame) =
                             craft_tcp_syn(src_addr, dst_addr, our_seq, gateway_mac, dst_mac)
+                            && let Err(e) = tx.send(syn_frame).await
                         {
-                            if let Err(e) = tx.send(syn_frame).await {
-                                tracing::warn!("Failed to send SYN to guest: {}", e);
-                            }
+                            tracing::warn!("Failed to send SYN to guest: {}", e);
                         }
                     }
                     Err(e) => {
@@ -206,10 +205,9 @@ impl PortForwarder {
 
                         if let Some(frame) =
                             craft_udp_frame(src_addr, dst_addr, &buf[..len], gateway_mac, dst_mac)
+                            && let Err(e) = tx.send(frame).await
                         {
-                            if let Err(e) = tx.send(frame).await {
-                                tracing::warn!("Failed to send UDP to guest: {}", e);
-                            }
+                            tracing::warn!("Failed to send UDP to guest: {}", e);
                         }
                     }
                     Err(e) => {
@@ -249,8 +247,8 @@ impl PortForwarder {
             return false;
         };
 
-        let src_ip: Ipv4Addr = ip_packet.src_addr().into();
-        let dst_ip: Ipv4Addr = ip_packet.dst_addr().into();
+        let src_ip: Ipv4Addr = ip_packet.src_addr();
+        let dst_ip: Ipv4Addr = ip_packet.dst_addr();
 
         // Only handle responses from our guest to gateway
         if src_ip != self.guest_ip || dst_ip != self.gateway_ip {
@@ -379,6 +377,7 @@ impl Drop for PortForwarder {
 }
 
 /// Craft a TCP SYN frame to initiate connection to guest.
+#[allow(clippy::useless_conversion)] // Ipv4Address -> IpAddress is needed for emit()
 fn craft_tcp_syn(
     src_addr: SocketAddrV4,
     dst_addr: SocketAddrV4,
@@ -440,6 +439,7 @@ fn craft_tcp_syn(
 }
 
 /// Craft a TCP ACK frame.
+#[allow(clippy::useless_conversion)] // Ipv4Address -> IpAddress is needed for emit()
 fn craft_tcp_ack(
     src_addr: SocketAddrV4,
     dst_addr: SocketAddrV4,
@@ -501,6 +501,7 @@ fn craft_tcp_ack(
 }
 
 /// Craft a UDP frame to send to guest.
+#[allow(clippy::useless_conversion)] // Ipv4Address -> IpAddress is needed for emit()
 fn craft_udp_frame(
     src_addr: SocketAddrV4,
     dst_addr: SocketAddrV4,
