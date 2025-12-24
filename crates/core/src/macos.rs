@@ -17,6 +17,7 @@ pub fn macos_virtualization_capabilities() -> BackendCapabilities {
         network_modes: NetworkModeSupport {
             none: true,
             nat: true,
+            user_nat: true,
         },
         share_mechanisms: ShareMechanismSupport {
             virtio_fs: true,

@@ -64,6 +64,7 @@ impl KvmBackend {
                 network_modes: NetworkModeSupport {
                     none: true,
                     nat: false,
+                    user_nat: false, // Phase 2: Enable after TAP implementation
                 },
                 share_mechanisms: ShareMechanismSupport {
                     virtio_fs: false,

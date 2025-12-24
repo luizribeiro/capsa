@@ -374,7 +374,7 @@ impl<B: BootConfigBuilder, P> VmBuilder<B, P> {
             )));
         }
 
-        match self.network {
+        match &self.network {
             NetworkMode::None => {
                 if !capabilities.network_modes.none {
                     return Err(Error::UnsupportedFeature("network mode: none".into()));
@@ -383,6 +383,11 @@ impl<B: BootConfigBuilder, P> VmBuilder<B, P> {
             NetworkMode::Nat => {
                 if !capabilities.network_modes.nat {
                     return Err(Error::UnsupportedFeature("network mode: nat".into()));
+                }
+            }
+            NetworkMode::UserNat(_) => {
+                if !capabilities.network_modes.user_nat {
+                    return Err(Error::UnsupportedFeature("network mode: user_nat".into()));
                 }
             }
         }
@@ -529,6 +534,7 @@ mod tests {
             network_modes: NetworkModeSupport {
                 none: true,
                 nat: true,
+                user_nat: true,
             },
             share_mechanisms: ShareMechanismSupport {
                 virtio_fs: true,
