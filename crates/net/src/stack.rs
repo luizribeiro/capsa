@@ -2,19 +2,22 @@ use crate::device::SmoltcpDevice;
 use crate::dhcp::DhcpServer;
 use crate::error::NetError;
 use crate::frame_io::FrameIO;
+use crate::nat::{FrameReceiver, NatTable, frame_channel};
 
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::socket::udp::{self, PacketBuffer, PacketMetadata};
 use smoltcp::time::Instant;
 use smoltcp::wire::{
-    DhcpPacket, EthernetAddress, HardwareAddress, IpAddress, IpCidr, IpEndpoint, Ipv4Address,
+    DhcpPacket, EthernetAddress, EthernetFrame, EthernetProtocol, HardwareAddress, IpAddress,
+    IpCidr, IpEndpoint, Ipv4Address, Ipv4Packet,
 };
 
-use std::collections::HashMap;
-use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+use std::net::Ipv4Addr;
 use std::time::Duration;
 
-use tokio::net::{TcpStream, UdpSocket};
+/// How often to run NAT cleanup (in milliseconds).
+/// With 1ms polling intervals, 10000 means every 10 seconds.
+const NAT_CLEANUP_INTERVAL_MS: u32 = 10_000;
 
 /// Configuration for the userspace NAT stack.
 #[derive(Clone, Debug)]
@@ -50,52 +53,17 @@ impl Default for StackConfig {
 /// - ICMP echo (automatic via smoltcp)
 /// - DHCP server
 /// - TCP NAT (connection tracking + forwarding)
-/// - UDP NAT
+/// - UDP NAT (connection tracking + forwarding)
 pub struct UserNatStack<F: FrameIO> {
     device: SmoltcpDevice<F>,
     iface: Interface,
     sockets: SocketSet<'static>,
     dhcp_handle: SocketHandle,
     dhcp_server: DhcpServer,
-    #[allow(dead_code)]
     config: StackConfig,
-    #[allow(dead_code)]
-    tcp_connections: HashMap<TcpConnectionKey, TcpConnection>,
-    #[allow(dead_code)]
-    udp_sockets: HashMap<UdpKey, UdpState>,
+    nat: NatTable,
+    nat_rx: FrameReceiver,
     start_time: std::time::Instant,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-struct TcpConnectionKey {
-    guest_addr: SocketAddrV4,
-    remote_addr: SocketAddrV4,
-}
-
-#[allow(dead_code)]
-struct TcpConnection {
-    socket_handle: SocketHandle,
-    host_stream: Option<TcpStream>,
-    state: TcpState,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-#[allow(dead_code)]
-enum TcpState {
-    Connecting,
-    Connected,
-    Closing,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-struct UdpKey {
-    guest_addr: SocketAddrV4,
-}
-
-#[allow(dead_code)]
-struct UdpState {
-    socket: UdpSocket,
-    last_remote: SocketAddr,
 }
 
 impl<F: FrameIO> UserNatStack<F> {
@@ -137,6 +105,10 @@ impl<F: FrameIO> UserNatStack<F> {
             config.dhcp_range_end,
         );
 
+        // Create NAT table with response channel
+        let (nat_tx, nat_rx) = frame_channel(256);
+        let nat = NatTable::new(config.gateway_ip, config.gateway_mac, nat_tx);
+
         Self {
             device,
             iface,
@@ -144,8 +116,8 @@ impl<F: FrameIO> UserNatStack<F> {
             dhcp_handle,
             dhcp_server,
             config,
-            tcp_connections: HashMap::new(),
-            udp_sockets: HashMap::new(),
+            nat,
+            nat_rx,
             start_time,
         }
     }
@@ -156,32 +128,97 @@ impl<F: FrameIO> UserNatStack<F> {
     /// It runs until an error occurs or the frame I/O is closed.
     pub async fn run(mut self) -> Result<(), NetError> {
         let mut interval = tokio::time::interval(Duration::from_millis(1));
-        // TODO: Optimize with proper async wakeups instead of fixed polling
+        let mut cleanup_counter = 0u32;
 
         loop {
             interval.tick().await;
 
-            // Synchronous processing block - no awaits allowed here
+            // Receive frames from guest
             {
                 let waker = futures::task::noop_waker();
                 let mut cx = std::task::Context::from_waker(&waker);
-
-                // Poll for incoming frames
                 self.device.poll_recv(&mut cx);
+            }
 
-                // Process the smoltcp interface
+            // Check for NAT response frames to send back to guest
+            while let Ok(frame) = self.nat_rx.try_recv() {
+                if let Err(e) = self.device.send_frame(&frame) {
+                    tracing::warn!("Failed to send NAT response frame: {}", e);
+                }
+            }
+
+            // Check if we have a frame and if it's for an external destination
+            if let Some(frame) = self.device.peek_rx() {
+                if self.is_external_destination(frame) {
+                    // Copy frame for NAT processing
+                    let frame_copy = frame.to_vec();
+                    self.device.discard_rx();
+
+                    // Process with NAT
+                    self.nat.process_frame(&frame_copy).await;
+                    continue;
+                }
+            }
+
+            // Process with smoltcp (ARP, ICMP, DHCP)
+            {
                 let timestamp = smoltcp_now(self.start_time);
                 self.iface
                     .poll(timestamp, &mut self.device, &mut self.sockets);
-
-                // Handle DHCP
                 self.process_dhcp();
             }
 
-            // Async processing - TCP and UDP NAT
-            self.process_tcp().await;
-            self.process_udp().await;
+            // Periodic cleanup of idle NAT entries
+            cleanup_counter = cleanup_counter.wrapping_add(1);
+            if cleanup_counter % NAT_CLEANUP_INTERVAL_MS == 0 {
+                self.nat.cleanup();
+            }
         }
+    }
+
+    /// Check if a frame is destined for an external IP (not our gateway or broadcast).
+    fn is_external_destination(&self, frame: &[u8]) -> bool {
+        let Ok(eth_frame) = EthernetFrame::new_checked(frame) else {
+            return false;
+        };
+
+        // Non-IPv4 (ARP, etc.) should go to smoltcp
+        if eth_frame.ethertype() != EthernetProtocol::Ipv4 {
+            return false;
+        }
+
+        let Ok(ip_packet) = Ipv4Packet::new_checked(eth_frame.payload()) else {
+            return false;
+        };
+
+        let dst_ip: Ipv4Addr = ip_packet.dst_addr().into();
+
+        // Gateway IP - let smoltcp handle it (ICMP, DHCP requests to gateway)
+        if dst_ip == self.config.gateway_ip {
+            return false;
+        }
+
+        // Broadcast addresses should go to smoltcp
+        if dst_ip.is_broadcast() || dst_ip.octets()[3] == 255 {
+            return false;
+        }
+
+        // Multicast should go to smoltcp (or be dropped)
+        if dst_ip.is_multicast() {
+            return false;
+        }
+
+        // Local subnet broadcast (e.g., 10.0.2.255 for 10.0.2.0/24)
+        // Check if it's the subnet broadcast address
+        let subnet_mask = !((1u32 << (32 - self.config.subnet_prefix)) - 1);
+        let subnet = u32::from_be_bytes(self.config.gateway_ip.octets()) & subnet_mask;
+        let broadcast = subnet | !subnet_mask;
+        if u32::from_be_bytes(dst_ip.octets()) == broadcast {
+            return false;
+        }
+
+        // Everything else is external and should be NAT'd
+        true
     }
 
     fn process_dhcp(&mut self) {
@@ -212,22 +249,6 @@ impl<F: FrameIO> UserNatStack<F> {
                 }
             }
         }
-    }
-
-    async fn process_tcp(&mut self) {
-        // TODO: Implement TCP NAT
-        // For each smoltcp TCP socket:
-        // 1. If new connection (SYN received), open host TCP socket
-        // 2. Forward data bidirectionally
-        // 3. Handle connection close
-    }
-
-    async fn process_udp(&mut self) {
-        // TODO: Implement UDP NAT
-        // For each outbound UDP packet:
-        // 1. Get or create host UDP socket
-        // 2. Forward packet
-        // 3. Forward any responses back
     }
 }
 

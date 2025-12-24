@@ -43,6 +43,23 @@ impl<F: FrameIO> SmoltcpDevice<F> {
     pub fn has_pending_rx(&self) -> bool {
         self.rx_len.is_some()
     }
+
+    /// Peek at the pending received frame without consuming it.
+    /// Returns None if no frame is pending.
+    pub fn peek_rx(&self) -> Option<&[u8]> {
+        self.rx_len.map(|len| &self.rx_buffer[..len])
+    }
+
+    /// Discard the pending received frame without processing it.
+    /// Use this after handling a frame externally (e.g., for NAT).
+    pub fn discard_rx(&mut self) {
+        self.rx_len = None;
+    }
+
+    /// Send a frame directly, bypassing smoltcp.
+    pub fn send_frame(&mut self, frame: &[u8]) -> std::io::Result<()> {
+        self.frame_io.send(frame)
+    }
 }
 
 impl<F: FrameIO> Device for SmoltcpDevice<F> {
