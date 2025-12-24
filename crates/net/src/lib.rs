@@ -2,6 +2,8 @@ mod device;
 mod dhcp;
 mod error;
 mod frame_io;
+mod nat;
+mod stack;
 
 #[cfg(target_os = "macos")]
 mod socketpair;
@@ -13,6 +15,7 @@ pub use device::SmoltcpDevice;
 pub use dhcp::DhcpServer;
 pub use error::NetError;
 pub use frame_io::FrameIO;
+pub use stack::{StackConfig, UserNatStack};
 
 #[cfg(target_os = "macos")]
 pub use socketpair::SocketPairDevice;
