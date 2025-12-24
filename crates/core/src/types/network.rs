@@ -17,6 +17,143 @@ pub struct PortForward {
     pub guest_port: u16,
 }
 
+/// Action to take when a policy rule matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PolicyAction {
+    /// Allow the traffic
+    Allow,
+    /// Block the traffic
+    Deny,
+    /// Allow but log the traffic
+    Log,
+}
+
+/// Criteria for matching network traffic.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleMatcher {
+    /// Match any traffic
+    Any,
+    /// Match traffic to specific IP address
+    Ip(Ipv4Addr),
+    /// Match traffic to IP range (CIDR notation)
+    IpRange { network: Ipv4Addr, prefix: u8 },
+    /// Match traffic to specific port
+    Port(u16),
+    /// Match traffic to port range (inclusive)
+    PortRange { start: u16, end: u16 },
+    /// Match traffic by protocol
+    Protocol(Protocol),
+    /// Match DNS queries for domain (requires DNS interception)
+    Domain(String),
+    /// All matchers must match
+    All(Vec<RuleMatcher>),
+}
+
+/// A single policy rule.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PolicyRule {
+    pub action: PolicyAction,
+    pub matcher: RuleMatcher,
+}
+
+/// Network filtering policy for controlling guest traffic.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NetworkPolicy {
+    /// Default action when no rule matches
+    pub default_action: PolicyAction,
+    /// Rules evaluated in order (first match wins)
+    pub rules: Vec<PolicyRule>,
+}
+
+impl Default for NetworkPolicy {
+    fn default() -> Self {
+        Self {
+            default_action: PolicyAction::Allow,
+            rules: Vec::new(),
+        }
+    }
+}
+
+impl NetworkPolicy {
+    /// Create a policy that allows all traffic (default).
+    pub fn allow_all() -> Self {
+        Self::default()
+    }
+
+    /// Create a policy that denies all traffic.
+    pub fn deny_all() -> Self {
+        Self {
+            default_action: PolicyAction::Deny,
+            rules: Vec::new(),
+        }
+    }
+
+    /// Add a rule to allow traffic to a specific IP.
+    pub fn allow_ip(mut self, ip: Ipv4Addr) -> Self {
+        self.rules.push(PolicyRule {
+            action: PolicyAction::Allow,
+            matcher: RuleMatcher::Ip(ip),
+        });
+        self
+    }
+
+    /// Add a rule to allow traffic to a port.
+    pub fn allow_port(mut self, port: u16) -> Self {
+        self.rules.push(PolicyRule {
+            action: PolicyAction::Allow,
+            matcher: RuleMatcher::Port(port),
+        });
+        self
+    }
+
+    /// Add a rule to deny traffic to a specific IP.
+    pub fn deny_ip(mut self, ip: Ipv4Addr) -> Self {
+        self.rules.push(PolicyRule {
+            action: PolicyAction::Deny,
+            matcher: RuleMatcher::Ip(ip),
+        });
+        self
+    }
+
+    /// Add a rule to deny traffic to a port.
+    pub fn deny_port(mut self, port: u16) -> Self {
+        self.rules.push(PolicyRule {
+            action: PolicyAction::Deny,
+            matcher: RuleMatcher::Port(port),
+        });
+        self
+    }
+
+    /// Add a rule to allow HTTPS traffic (port 443).
+    pub fn allow_https(mut self) -> Self {
+        self.rules.push(PolicyRule {
+            action: PolicyAction::Allow,
+            matcher: RuleMatcher::Port(443),
+        });
+        self
+    }
+
+    /// Add a rule to allow DNS traffic (port 53 UDP).
+    pub fn allow_dns(mut self) -> Self {
+        self.rules.push(PolicyRule {
+            action: PolicyAction::Allow,
+            matcher: RuleMatcher::All(vec![
+                RuleMatcher::Port(53),
+                RuleMatcher::Protocol(Protocol::Udp),
+            ]),
+        });
+        self
+    }
+
+    /// Add a custom rule.
+    pub fn rule(mut self, action: PolicyAction, matcher: RuleMatcher) -> Self {
+        self.rules.push(PolicyRule { action, matcher });
+        self
+    }
+}
+
 /// Network configuration for VMs.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -56,6 +193,9 @@ pub struct UserNatConfig {
     /// Port forwarding rules (host → guest).
     #[serde(default)]
     pub port_forwards: Vec<PortForward>,
+    /// Network filtering policy.
+    #[serde(default)]
+    pub policy: Option<NetworkPolicy>,
 }
 
 impl Default for UserNatConfig {
@@ -66,6 +206,7 @@ impl Default for UserNatConfig {
             dhcp_start: Ipv4Addr::new(10, 0, 2, 15),
             dhcp_end: Ipv4Addr::new(10, 0, 2, 254),
             port_forwards: Vec::new(),
+            policy: None,
         }
     }
 }
@@ -109,6 +250,12 @@ impl UserNatConfigBuilder {
             host_port,
             guest_port,
         });
+        self
+    }
+
+    /// Set the network filtering policy.
+    pub fn policy(mut self, policy: NetworkPolicy) -> Self {
+        self.config.policy = Some(policy);
         self
     }
 
@@ -196,6 +343,34 @@ mod tests {
                 assert_eq!(config.port_forwards[1].protocol, Protocol::Udp);
                 assert_eq!(config.port_forwards[1].host_port, 5353);
                 assert_eq!(config.port_forwards[1].guest_port, 53);
+            }
+            _ => panic!("Expected UserNat"),
+        }
+    }
+
+    #[test]
+    fn network_policy_builders() {
+        let policy = NetworkPolicy::deny_all()
+            .allow_port(443)
+            .allow_dns()
+            .allow_ip(Ipv4Addr::new(8, 8, 8, 8));
+
+        assert_eq!(policy.default_action, PolicyAction::Deny);
+        assert_eq!(policy.rules.len(), 3);
+        assert_eq!(policy.rules[0].action, PolicyAction::Allow);
+        assert!(matches!(policy.rules[0].matcher, RuleMatcher::Port(443)));
+    }
+
+    #[test]
+    fn user_nat_with_policy() {
+        let mode = NetworkMode::user_nat()
+            .policy(NetworkPolicy::deny_all().allow_https())
+            .build();
+        match mode {
+            NetworkMode::UserNat(config) => {
+                let policy = config.policy.expect("Expected policy");
+                assert_eq!(policy.default_action, PolicyAction::Deny);
+                assert_eq!(policy.rules.len(), 1);
             }
             _ => panic!("Expected UserNat"),
         }
