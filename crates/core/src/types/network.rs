@@ -61,13 +61,13 @@ impl UserNatConfigBuilder {
     pub fn subnet(mut self, subnet: &str) -> Self {
         self.config.subnet = subnet.to_string();
         // Parse to update gateway and DHCP range
-        if let Some((base, _prefix)) = subnet.split_once('/') {
-            if let Ok(base_ip) = base.parse::<Ipv4Addr>() {
-                let octets = base_ip.octets();
-                self.config.gateway = Ipv4Addr::new(octets[0], octets[1], octets[2], 2);
-                self.config.dhcp_start = Ipv4Addr::new(octets[0], octets[1], octets[2], 15);
-                self.config.dhcp_end = Ipv4Addr::new(octets[0], octets[1], octets[2], 254);
-            }
+        if let Some((base, _prefix)) = subnet.split_once('/')
+            && let Ok(base_ip) = base.parse::<Ipv4Addr>()
+        {
+            let octets = base_ip.octets();
+            self.config.gateway = Ipv4Addr::new(octets[0], octets[1], octets[2], 2);
+            self.config.dhcp_start = Ipv4Addr::new(octets[0], octets[1], octets[2], 15);
+            self.config.dhcp_end = Ipv4Addr::new(octets[0], octets[1], octets[2], 254);
         }
         self
     }

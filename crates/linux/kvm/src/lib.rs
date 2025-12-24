@@ -119,7 +119,7 @@ impl HypervisorBackend for KvmBackend {
         cmdline.flag("quiet");
         cmdline.arg(
             "virtio_mmio.device",
-            &format!(
+            format!(
                 "0x{:x}@0x{:x}:{}",
                 arch::VIRTIO_MMIO_SIZE,
                 arch::VIRTIO_MMIO_BASE,

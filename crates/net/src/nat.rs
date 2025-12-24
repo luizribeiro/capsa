@@ -6,8 +6,8 @@
 
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::wire::{
-    EthernetAddress, EthernetFrame, EthernetProtocol, EthernetRepr, IpProtocol, Ipv4Address,
-    Ipv4Packet, Ipv4Repr, TcpPacket, TcpRepr, TcpSeqNumber, UdpPacket, UdpRepr,
+    EthernetAddress, EthernetFrame, EthernetProtocol, EthernetRepr, IpProtocol, Ipv4Packet,
+    Ipv4Repr, TcpPacket, TcpRepr, TcpSeqNumber, UdpPacket, UdpRepr,
 };
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
@@ -122,7 +122,7 @@ impl NatTable {
             return false;
         };
 
-        let dst_ip: Ipv4Addr = ip_packet.dst_addr().into();
+        let dst_ip: Ipv4Addr = ip_packet.dst_addr();
 
         // If destination is our gateway IP, let smoltcp handle it
         if dst_ip == self.gateway_ip {
@@ -147,8 +147,8 @@ impl NatTable {
             return false;
         };
 
-        let src_ip: Ipv4Addr = ip_packet.src_addr().into();
-        let dst_ip: Ipv4Addr = ip_packet.dst_addr().into();
+        let src_ip: Ipv4Addr = ip_packet.src_addr();
+        let dst_ip: Ipv4Addr = ip_packet.dst_addr();
         let guest_addr = SocketAddrV4::new(src_ip, tcp_packet.src_port());
         let remote_addr = SocketAddrV4::new(dst_ip, tcp_packet.dst_port());
         let key = TcpKey {
@@ -415,8 +415,8 @@ impl NatTable {
             return false;
         };
 
-        let src_ip: Ipv4Addr = ip_packet.src_addr().into();
-        let dst_ip: Ipv4Addr = ip_packet.dst_addr().into();
+        let src_ip: Ipv4Addr = ip_packet.src_addr();
+        let dst_ip: Ipv4Addr = ip_packet.dst_addr();
         let src = SocketAddrV4::new(src_ip, udp_packet.src_port());
         let dst = SocketAddrV4::new(dst_ip, udp_packet.dst_port());
         let key = UdpKey { guest_addr: src };
@@ -461,14 +461,13 @@ impl NatTable {
                                 gateway_ip,
                                 gateway_mac,
                                 guest_mac,
-                            ) {
-                                if tx.send(frame).await.is_err() {
-                                    tracing::debug!(
-                                        "NAT: Response channel closed for {}, terminating",
-                                        guest_addr
-                                    );
-                                    break;
-                                }
+                            ) && tx.send(frame).await.is_err()
+                            {
+                                tracing::debug!(
+                                    "NAT: Response channel closed for {}, terminating",
+                                    guest_addr
+                                );
+                                break;
                             }
                         }
                         Err(e) => {
@@ -573,8 +572,8 @@ fn craft_udp_response(
 
     // Build IP header
     let ip_repr = Ipv4Repr {
-        src_addr: Ipv4Address::from(*src_addr.ip()),
-        dst_addr: Ipv4Address::from(*dst_addr.ip()),
+        src_addr: *src_addr.ip(),
+        dst_addr: *dst_addr.ip(),
         next_header: IpProtocol::Udp,
         payload_len: udp_len,
         hop_limit: 64,
@@ -719,6 +718,7 @@ enum TcpControl {
 }
 
 /// Common function to craft TCP frames.
+#[allow(clippy::too_many_arguments)]
 fn craft_tcp_frame(
     src_addr: SocketAddrV4,
     dst_addr: SocketAddrV4,
@@ -747,8 +747,8 @@ fn craft_tcp_frame(
 
     // Build IP header
     let ip_repr = Ipv4Repr {
-        src_addr: Ipv4Address::from(*src_addr.ip()),
-        dst_addr: Ipv4Address::from(*dst_addr.ip()),
+        src_addr: *src_addr.ip(),
+        dst_addr: *dst_addr.ip(),
         next_header: IpProtocol::Tcp,
         payload_len: tcp_len,
         hop_limit: 64,

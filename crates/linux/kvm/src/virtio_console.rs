@@ -175,7 +175,7 @@ impl VirtioConsole {
         while let Some(mut desc_chain) = queue.pop_descriptor_chain(memory) {
             let mut len = 0u32;
 
-            while let Some(desc) = desc_chain.next() {
+            for desc in desc_chain.by_ref() {
                 let desc: Descriptor = desc;
                 if desc.is_write_only() {
                     continue;
@@ -231,7 +231,7 @@ impl VirtioConsole {
 
             let mut written = 0u32;
 
-            while let Some(desc) = desc_chain.next() {
+            for desc in desc_chain.by_ref() {
                 let desc: Descriptor = desc;
                 if !desc.is_write_only() {
                     continue;

@@ -41,8 +41,8 @@ impl DhcpServer {
         dns_servers.push(Ipv4Address::new(8, 8, 4, 4)).ok();
 
         Self {
-            server_ip: gateway.into(),
-            subnet_mask: mask.into(),
+            server_ip: gateway,
+            subnet_mask: mask,
             lease_duration: 3600, // 1 hour
             next_ip: range_start,
             last_ip: range_end,
@@ -113,10 +113,10 @@ impl DhcpServer {
         let assigned_ip = self.leases.get(&client_mac).copied()?;
 
         // Verify the requested IP matches (if specified)
-        if let Some(requested) = request.requested_ip {
-            if requested != assigned_ip {
-                return None; // NAK would be appropriate, but we'll just ignore
-            }
+        if let Some(requested) = request.requested_ip
+            && requested != assigned_ip
+        {
+            return None; // NAK would be appropriate, but we'll just ignore
         }
 
         Some(DhcpRepr {
@@ -161,7 +161,7 @@ impl DhcpServer {
             return None;
         }
 
-        let ip: Ipv4Address = self.next_ip.into();
+        let ip: Ipv4Address = self.next_ip;
         self.leases.insert(client_mac, ip);
 
         // Increment next_ip

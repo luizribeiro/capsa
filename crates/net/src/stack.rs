@@ -81,7 +81,7 @@ impl<F: FrameIO> UserNatStack<F> {
         iface.update_ip_addrs(|addrs| {
             addrs
                 .push(IpCidr::new(
-                    IpAddress::Ipv4(config.gateway_ip.into()),
+                    IpAddress::Ipv4(config.gateway_ip),
                     config.subnet_prefix,
                 ))
                 .ok();
@@ -148,16 +148,16 @@ impl<F: FrameIO> UserNatStack<F> {
             }
 
             // Check if we have a frame and if it's for an external destination
-            if let Some(frame) = self.device.peek_rx() {
-                if self.is_external_destination(frame) {
-                    // Copy frame for NAT processing
-                    let frame_copy = frame.to_vec();
-                    self.device.discard_rx();
+            if let Some(frame) = self.device.peek_rx()
+                && self.is_external_destination(frame)
+            {
+                // Copy frame for NAT processing
+                let frame_copy = frame.to_vec();
+                self.device.discard_rx();
 
-                    // Process with NAT
-                    self.nat.process_frame(&frame_copy).await;
-                    continue;
-                }
+                // Process with NAT
+                self.nat.process_frame(&frame_copy).await;
+                continue;
             }
 
             // Process with smoltcp (ARP, ICMP, DHCP)
@@ -170,7 +170,7 @@ impl<F: FrameIO> UserNatStack<F> {
 
             // Periodic cleanup of idle NAT entries
             cleanup_counter = cleanup_counter.wrapping_add(1);
-            if cleanup_counter % NAT_CLEANUP_INTERVAL_MS == 0 {
+            if cleanup_counter.is_multiple_of(NAT_CLEANUP_INTERVAL_MS) {
                 self.nat.cleanup();
             }
         }
@@ -191,7 +191,7 @@ impl<F: FrameIO> UserNatStack<F> {
             return false;
         };
 
-        let dst_ip: Ipv4Addr = ip_packet.dst_addr().into();
+        let dst_ip: Ipv4Addr = ip_packet.dst_addr();
 
         // Gateway IP - let smoltcp handle it (ICMP, DHCP requests to gateway)
         if dst_ip == self.config.gateway_ip {
@@ -235,15 +235,14 @@ impl<F: FrameIO> UserNatStack<F> {
                     // DHCP packets are typically around 300-400 bytes, 576 is safe minimum
                     let mut response_buf = vec![0u8; 576];
                     if let Ok(mut response_packet) = DhcpPacket::new_checked(&mut response_buf[..])
+                        && response.emit(&mut response_packet).is_ok()
                     {
-                        if response.emit(&mut response_packet).is_ok() {
-                            // The DHCP packet header is 240 bytes minimum, plus options
-                            // We'll send the whole buffer since UDP doesn't care about trailing zeros
-                            // and the client will parse based on the options
-                            let dest = IpEndpoint::new(IpAddress::Ipv4(Ipv4Address::BROADCAST), 68);
-                            if let Err(e) = socket.send_slice(&response_buf, dest) {
-                                tracing::warn!("Failed to send DHCP response: {:?}", e);
-                            }
+                        // The DHCP packet header is 240 bytes minimum, plus options
+                        // We'll send the whole buffer since UDP doesn't care about trailing zeros
+                        // and the client will parse based on the options
+                        let dest = IpEndpoint::new(IpAddress::Ipv4(Ipv4Address::BROADCAST), 68);
+                        if let Err(e) = socket.send_slice(&response_buf, dest) {
+                            tracing::warn!("Failed to send DHCP response: {:?}", e);
                         }
                     }
                 }

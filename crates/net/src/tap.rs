@@ -1,6 +1,6 @@
 use crate::FrameIO;
 use std::io;
-use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::os::fd::OwnedFd;
 use std::task::{Context, Poll};
 
 /// TAP device for Linux KVM networking.
