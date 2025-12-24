@@ -1,10 +1,11 @@
 use crate::arch::{
     BOOT_PARAMS_ADDR, KERNEL_LOAD_ADDR, RTC_INDEX_PORT, RtcDevice, SERIAL_IRQ, SERIAL_PORT_BASE,
-    SERIAL_PORT_END, create_guest_memory, initrd_load_addr, run_vcpu, setup_boot_params,
-    setup_regs, setup_sregs,
+    SERIAL_PORT_END, VIRTIO_CONSOLE_IRQ, VIRTIO_MMIO_BASE, VIRTIO_MMIO_SIZE, create_guest_memory,
+    initrd_load_addr, run_vcpu, setup_boot_params, setup_regs, setup_sregs,
 };
 use crate::handle::KvmVmHandle;
 use crate::serial::{SerialDevice, create_console_pipes};
+use crate::virtio_console::VirtioConsole;
 use capsa_core::{BackendVmHandle, BootMethod, Error, Result, VmConfig};
 use kvm_bindings::kvm_pit_config;
 use kvm_ioctls::{Kvm, VmFd};
@@ -13,14 +14,14 @@ use linux_loader::loader::bzimage::BzImage;
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 use std::fs::File;
 use std::io::{Read, Write};
-use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::io::Interest;
 use tokio::io::unix::AsyncFd;
 use tokio::sync::mpsc;
-use vm_device::bus::{PioAddress, PioRange};
-use vm_device::device_manager::{IoManager, PioManager};
+use vm_device::bus::{MmioAddress, MmioRange, PioAddress, PioRange};
+use vm_device::device_manager::{IoManager, MmioManager, PioManager};
 use vm_memory::{Address, Bytes, GuestAddress, GuestMemory, GuestMemoryMmap, GuestMemoryRegion};
 
 static SIGNAL_HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -68,11 +69,17 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
     let memory_mb = config.resources.memory_mb as u64;
     let console_enabled = config.console_enabled;
 
-    let (host_read, host_write, guest_read, serial) = if console_enabled {
+    let (host_read, host_write, guest_read, serial, virtio_console_fd) = if console_enabled {
         let (guest_read, host_write, host_read, guest_write) = create_console_pipes()
             .map_err(|e| Error::StartFailed(format!("failed to create console pipes: {}", e)))?;
 
         tracing::debug!("Console pipes created");
+
+        // Dup the guest_write fd for virtio-console before serial consumes it
+        let virtio_fd = nix::unistd::dup(guest_write.as_raw_fd())
+            .map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
+            .map_err(|e| Error::StartFailed(format!("failed to dup console fd: {}", e)))?;
+
         let writer = ConsolePipeWriter(guest_write);
         // Wrap in Arc<Mutex> for IoManager registration and sharing with console input task
         let serial = Arc::new(Mutex::new(SerialDevice::new(Box::new(writer))));
@@ -81,10 +88,11 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
             Some(host_write),
             Some(guest_read),
             Some(serial),
+            Some(virtio_fd),
         )
     } else {
         tracing::debug!("Console disabled");
-        (None, None, None, None)
+        (None, None, None, None, None)
     };
 
     let kvm =
@@ -133,6 +141,7 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
 
     let memory = create_guest_memory(memory_mb)
         .map_err(|e| Error::StartFailed(format!("failed to create guest memory: {}", e)))?;
+    let memory = Arc::new(memory);
 
     setup_memory_regions(&vm_fd, &memory)?;
 
@@ -186,6 +195,42 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         Arc::new(Mutex::new(RtcDevice::new())),
         "RTC device",
     )?;
+
+    // Register virtio-console device if console is enabled
+    let virtio_console_interrupt_data = if let Some(fd) = virtio_console_fd {
+        let writer = ConsolePipeWriter(fd);
+        let console = Arc::new(Mutex::new(VirtioConsole::new(Box::new(writer))));
+        console.lock().unwrap().set_memory(memory.clone());
+
+        // Get interrupt eventfd before registering
+        let evt = console
+            .lock()
+            .unwrap()
+            .interrupt_evt()
+            .try_clone()
+            .map_err(|e| {
+                Error::StartFailed(format!(
+                    "failed to clone virtio-console interrupt fd: {}",
+                    e
+                ))
+            })?;
+
+        // Dup VM fd for interrupt thread
+        let vm_fd_dup = nix::unistd::dup(vm_fd.as_raw_fd()).map_err(|e| {
+            Error::StartFailed(format!("failed to dup vm_fd for virtio-console: {}", e))
+        })?;
+
+        register_mmio_device(
+            &mut io_manager,
+            VIRTIO_MMIO_BASE,
+            VIRTIO_MMIO_SIZE,
+            console,
+            "virtio-console",
+        )?;
+        Some((evt, vm_fd_dup))
+    } else {
+        None
+    };
 
     let io_manager = Arc::new(io_manager);
 
@@ -269,6 +314,45 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
     } else {
         None
     };
+
+    // TODO: Use irqfd instead of manual interrupt injection (see serial TODO above).
+    let _virtio_console_interrupt_thread =
+        if let Some((evt, vm_fd_dup)) = virtio_console_interrupt_data {
+            let running_clone = running.clone();
+            Some(std::thread::spawn(move || {
+                #[repr(C)]
+                struct KvmIrqLevel {
+                    irq: u32,
+                    level: u32,
+                }
+                const KVM_IRQ_LINE: nix::libc::c_ulong = 0x4008_AE61;
+
+                while running_clone.load(Ordering::Relaxed) {
+                    match evt.read() {
+                        Ok(_) => {
+                            // Pulse IRQ line for level-triggered interrupt
+                            let irq_low = KvmIrqLevel {
+                                irq: VIRTIO_CONSOLE_IRQ,
+                                level: 0,
+                            };
+                            unsafe { nix::libc::ioctl(vm_fd_dup, KVM_IRQ_LINE, &irq_low) };
+
+                            let irq_high = KvmIrqLevel {
+                                irq: VIRTIO_CONSOLE_IRQ,
+                                level: 1,
+                            };
+                            unsafe { nix::libc::ioctl(vm_fd_dup, KVM_IRQ_LINE, &irq_high) };
+                        }
+                        Err(_) => break,
+                    }
+                }
+                unsafe {
+                    nix::libc::close(vm_fd_dup);
+                }
+            }))
+        } else {
+            None
+        };
 
     let console_input_task = if let (Some(serial), Some(guest_read)) = (&serial, guest_read) {
         let serial_clone = serial.clone();
@@ -373,6 +457,22 @@ fn register_pio_device<D: vm_device::MutDevicePio + Send + 'static>(
         .map_err(|e| Error::StartFailed(format!("failed to create {} PIO range: {:?}", name, e)))?;
     io_manager
         .register_pio(range, device)
+        .map_err(|e| Error::StartFailed(format!("failed to register {}: {:?}", name, e)))?;
+    Ok(())
+}
+
+fn register_mmio_device<D: vm_device::MutDeviceMmio + Send + 'static>(
+    io_manager: &mut IoManager,
+    base: u64,
+    size: u64,
+    device: Arc<Mutex<D>>,
+    name: &str,
+) -> Result<()> {
+    let range = MmioRange::new(MmioAddress(base), size).map_err(|e| {
+        Error::StartFailed(format!("failed to create {} MMIO range: {:?}", name, e))
+    })?;
+    io_manager
+        .register_mmio(range, device)
         .map_err(|e| Error::StartFailed(format!("failed to register {}: {:?}", name, e)))?;
     Ok(())
 }

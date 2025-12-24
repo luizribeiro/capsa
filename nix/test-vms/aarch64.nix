@@ -25,16 +25,12 @@ let
     linuxArch = "arm64";
     inherit kernelImage kernelTarget;
     config = {
-      # PCI bus - required for virtio on ARM64 (no direct MMIO like x86)
+      # PCI bus - required for virtio on ARM64
       PCI = true;
       PCI_HOST_COMMON = true;
-      PCI_HOST_GENERIC = true;    # generic PCIe host for VMs
-
-      # Virtio console (hvc0) - ARM64 uses virtio-console, not 8250 UART
-      VIRTIO_MENU = true;
+      PCI_HOST_GENERIC = true;
+      VIRTIO_PCI = true;
       VIRTIO_PCI_LIB = true;
-      HVC_DRIVER = true;          # hypervisor console driver
-      VIRTIO_CONSOLE = true;
 
       # Disable unused features to reduce kernel size
       IPV6 = false;
@@ -55,21 +51,17 @@ let
     inherit kernelImage kernelTarget;
     initramfsDir = uefiInitramfsDir;
     config = {
-      # PCI bus - required for virtio on ARM64 (no direct MMIO like x86)
+      # PCI bus - required for virtio on ARM64
       PCI = true;
       PCI_HOST_COMMON = true;
-      PCI_HOST_GENERIC = true;    # generic PCIe host for VMs
-
-      # Virtio console (hvc0) - ARM64 uses virtio-console, not 8250 UART
-      VIRTIO_MENU = true;
+      PCI_HOST_GENERIC = true;
+      VIRTIO_PCI = true;
       VIRTIO_PCI_LIB = true;
-      HVC_DRIVER = true;          # hypervisor console driver
-      VIRTIO_CONSOLE = true;
 
-      # EFI stub boot - kernel boots directly from EFI without bootloader
+      # EFI stub boot
       EFI = true;
       EFI_STUB = true;
-      ACPI = true;                # ACPI tables from firmware
+      ACPI = true;
 
       # Baked-in cmdline (EFI stub doesn't pass cmdline from firmware)
       CMDLINE_FORCE = true;

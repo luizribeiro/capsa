@@ -12,21 +12,21 @@ let
   kernelTarget = "bzImage";
 
   kernel = vmLib.mkKernel {
-    name = "universal";
+    name = "x86_64";
     linuxArch = "x86";
     inherit kernelImage kernelTarget;
     config = {
       # Architecture
       X86_64 = true;
 
-      # Serial console (ttyS0) - directly emulated by KVM
-      SERIAL_8250 = true;
-      SERIAL_8250_CONSOLE = true;
+      # Virtio MMIO transport (used by KVM backend)
+      VIRTIO_MMIO = true;
+      VIRTIO_MMIO_CMDLINE_DEVICES = true;
     };
   };
 
   initrd = vmLib.mkInitrd {
-    console = "ttyS0";
+    console = "hvc0";
   };
 in
 vmLib.mkCombined {

@@ -115,8 +115,12 @@ esac
 
     # Virtio (paravirtualized I/O for VMs)
     VIRTIO = true;
-    VIRTIO_PCI = true;        # virtio over PCI bus
-    VIRTIO_BLK = true;        # virtio block devices (/dev/vda)
+    VIRTIO_MENU = true;
+    VIRTIO_BLK = true;
+
+    # Virtio console (hvc0)
+    HVC_DRIVER = true;
+    VIRTIO_CONSOLE = true;
 
     # Filesystems
     EXT4_FS = true;           # ext4 for disk images

@@ -20,7 +20,7 @@ pub struct KvmVmHandle {
     console_write_fd: Mutex<Option<OwnedFd>>,
     console_enabled: bool,
     #[allow(dead_code)]
-    memory: GuestMemoryMmap, // Keep memory alive for the VM's lifetime
+    memory: Arc<GuestMemoryMmap>, // Keep memory alive for the VM's lifetime
 }
 
 impl KvmVmHandle {
@@ -34,7 +34,7 @@ impl KvmVmHandle {
         console_read_fd: Option<OwnedFd>,
         console_write_fd: Option<OwnedFd>,
         console_enabled: bool,
-        memory: GuestMemoryMmap,
+        memory: Arc<GuestMemoryMmap>,
     ) -> Self {
         Self {
             running,

@@ -20,4 +20,5 @@ linux-loader = { version = "0.13", features = ["bzimage", "elf"] }
 vm-superio = "0.8"
 vm-device = "0.1"
 vmm-sys-util = "0.12"
+virtio-queue = "0.17"
 vm-fdt = "0.3"

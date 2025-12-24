@@ -6,8 +6,8 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use tokio::sync::mpsc;
 use vm_device::MutDevicePio;
-use vm_device::bus::{PioAddress, PioAddressOffset};
-use vm_device::device_manager::{IoManager, PioManager};
+use vm_device::bus::{MmioAddress, PioAddress, PioAddressOffset};
+use vm_device::device_manager::{IoManager, MmioManager, PioManager};
 
 use super::memory::{BOOT_GDT_OFFSET, BOOT_IDT_OFFSET, BOOT_STACK_POINTER, PML4_START};
 
@@ -315,8 +315,18 @@ pub fn run_vcpu(
                     tracing::trace!("unhandled PIO write to port 0x{:04x}: {:?}", port, e);
                 }
             }
-            Ok(VcpuExit::MmioRead(_, data)) => data.fill(0),
-            Ok(VcpuExit::MmioWrite(_, _)) | Ok(_) => {}
+            Ok(VcpuExit::MmioRead(addr, data)) => {
+                if let Err(e) = io_manager.mmio_read(MmioAddress(addr), data) {
+                    tracing::trace!("unhandled MMIO read from 0x{:08x}: {:?}", addr, e);
+                    data.fill(0);
+                }
+            }
+            Ok(VcpuExit::MmioWrite(addr, data)) => {
+                if let Err(e) = io_manager.mmio_write(MmioAddress(addr), data) {
+                    tracing::trace!("unhandled MMIO write to 0x{:08x}: {:?}", addr, e);
+                }
+            }
+            Ok(_) => {}
             Err(e) => {
                 if e.errno() == libc::EAGAIN || e.errno() == libc::EINTR {
                     continue;

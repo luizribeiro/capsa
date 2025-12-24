@@ -29,6 +29,7 @@
 mod arch;
 mod handle;
 mod serial;
+mod virtio_console;
 mod vm;
 
 use async_trait::async_trait;
@@ -110,9 +111,20 @@ impl HypervisorBackend for KvmBackend {
 
     fn kernel_cmdline_defaults(&self) -> KernelCmdline {
         let mut cmdline = KernelCmdline::new();
-        cmdline.console(arch::DEFAULT_CONSOLE);
+        // Use virtio-console for higher throughput
+        cmdline.console("hvc0");
         cmdline.arg("reboot", "t");
         cmdline.arg("panic", "-1");
+        cmdline.flag("quiet");
+        cmdline.arg(
+            "virtio_mmio.device",
+            &format!(
+                "0x{:x}@0x{:x}:{}",
+                arch::VIRTIO_MMIO_SIZE,
+                arch::VIRTIO_MMIO_BASE,
+                arch::VIRTIO_CONSOLE_IRQ
+            ),
+        );
         cmdline
     }
 
