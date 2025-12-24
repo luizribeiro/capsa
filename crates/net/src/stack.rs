@@ -3,6 +3,7 @@ use crate::dhcp::DhcpServer;
 use crate::error::NetError;
 use crate::frame_io::FrameIO;
 use crate::nat::{FrameReceiver, NatTable, frame_channel};
+use crate::policy::{PolicyChecker, PolicyResult};
 use crate::port_forward::PortForwarder;
 
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
@@ -43,6 +44,8 @@ pub struct StackConfig {
     pub gateway_mac: [u8; 6],
     /// Port forwarding rules
     pub port_forwards: Vec<PortForwardRule>,
+    /// Network filtering policy
+    pub policy: Option<capsa_core::NetworkPolicy>,
 }
 
 impl Default for StackConfig {
@@ -54,6 +57,7 @@ impl Default for StackConfig {
             dhcp_range_end: Ipv4Addr::new(10, 0, 2, 254),
             gateway_mac: [0x52, 0x54, 0x00, 0x00, 0x00, 0x01],
             port_forwards: Vec::new(),
+            policy: None,
         }
     }
 }
@@ -67,6 +71,7 @@ impl Default for StackConfig {
 /// - TCP NAT (connection tracking + forwarding)
 /// - UDP NAT (connection tracking + forwarding)
 /// - Port forwarding (host → guest)
+/// - Network policy enforcement
 pub struct UserNatStack<F: FrameIO> {
     device: SmoltcpDevice<F>,
     iface: Interface,
@@ -77,6 +82,7 @@ pub struct UserNatStack<F: FrameIO> {
     nat: NatTable,
     nat_rx: FrameReceiver,
     port_forwarder: Option<PortForwarder>,
+    policy_checker: Option<PolicyChecker>,
     start_time: std::time::Instant,
 }
 
@@ -135,6 +141,12 @@ impl<F: FrameIO> UserNatStack<F> {
             ))
         };
 
+        // Create policy checker if policy is configured
+        let policy_checker = config
+            .policy
+            .as_ref()
+            .map(|p| PolicyChecker::new(p.default_action, &p.rules));
+
         Self {
             device,
             iface,
@@ -145,6 +157,7 @@ impl<F: FrameIO> UserNatStack<F> {
             nat,
             nat_rx,
             port_forwarder,
+            policy_checker,
             start_time,
         }
     }
@@ -211,6 +224,33 @@ impl<F: FrameIO> UserNatStack<F> {
 
                 // Check if destined for external IP
                 if self.is_external_destination(frame) {
+                    // Apply network policy if configured
+                    if let Some(ref checker) = self.policy_checker {
+                        if let Some(info) = PolicyChecker::extract_packet_info(frame) {
+                            match checker.check(&info) {
+                                PolicyResult::Deny => {
+                                    tracing::debug!(
+                                        "Policy denied: {} -> {}:{}",
+                                        info.src_ip,
+                                        info.dst_ip,
+                                        info.dst_port.unwrap_or(0)
+                                    );
+                                    self.device.discard_rx();
+                                    continue;
+                                }
+                                PolicyResult::Log => {
+                                    tracing::info!(
+                                        "Policy logged: {} -> {}:{}",
+                                        info.src_ip,
+                                        info.dst_ip,
+                                        info.dst_port.unwrap_or(0)
+                                    );
+                                }
+                                PolicyResult::Allow => {}
+                            }
+                        }
+                    }
+
                     let frame_copy = frame.to_vec();
                     self.device.discard_rx();
                     self.nat.process_frame(&frame_copy).await;
