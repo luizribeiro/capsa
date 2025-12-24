@@ -8,6 +8,8 @@ test-linux = "test --workspace --features linux-kvm --exclude capsa-apple-vz --e
 test-macos-vfkit = "test --workspace --features vfkit --exclude capsa-linux-kvm"
 test-macos-native = "test --workspace --features macos-native --exclude capsa-linux-kvm"
 test-macos-subprocess = "test --workspace --features macos-subprocess --exclude capsa-linux-kvm"
+bench-linux = "bench --package capsa --features linux-kvm"
+bench-macos = "bench --package capsa --features macos-native"
 
 [env]
 CAPSA_ENTITLEMENTS = { value = "entitlements.plist", relative = true }
