@@ -1,21 +1,27 @@
 use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::os::fd::OwnedFd;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use vm_device::MutDevicePio;
 use vm_device::bus::{PioAddress, PioAddressOffset};
 use vm_superio::serial::NoEvents;
 use vm_superio::{Serial, Trigger};
+use vmm_sys_util::eventfd::EventFd;
 
+/// Trigger for vm-superio that signals when an interrupt should be delivered.
 pub struct EventFdTrigger {
-    fd: vmm_sys_util::eventfd::EventFd,
+    fd: Arc<EventFd>,
 }
 
 impl EventFdTrigger {
     fn new() -> Self {
         Self {
-            fd: vmm_sys_util::eventfd::EventFd::new(0).expect("failed to create eventfd"),
+            fd: Arc::new(EventFd::new(0).expect("failed to create eventfd")),
         }
+    }
+
+    fn shared_fd(&self) -> Arc<EventFd> {
+        self.fd.clone()
     }
 }
 
@@ -30,16 +36,23 @@ impl Trigger for EventFdTrigger {
 pub struct SerialDevice {
     serial: Mutex<Serial<EventFdTrigger, NoEvents, Box<dyn Write + Send>>>,
     input_buffer: Mutex<VecDeque<u8>>,
+    interrupt_evt: Arc<EventFd>,
 }
 
 impl SerialDevice {
     pub fn new(output: Box<dyn Write + Send>) -> Self {
         let trigger = EventFdTrigger::new();
+        let interrupt_evt = trigger.shared_fd();
         let serial = Serial::with_events(trigger, NoEvents, output);
         Self {
             serial: Mutex::new(serial),
             input_buffer: Mutex::new(VecDeque::new()),
+            interrupt_evt,
         }
+    }
+
+    pub fn interrupt_evt(&self) -> &EventFd {
+        &self.interrupt_evt
     }
 
     pub fn enqueue_input(&self, data: &[u8]) {
