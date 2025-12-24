@@ -23,8 +23,5 @@ smoltcp = { version = "0.12", default-features = false, features = [
     "alloc",
 ] }
 
-[target.'cfg(target_os = "linux")'.dependencies]
-nix = { workspace = true, features = ["ioctl", "net"] }
-
 [dev-dependencies]
 tokio = { workspace = true, features = ["test-util", "macros"] }

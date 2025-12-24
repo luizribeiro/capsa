@@ -1,12 +1,15 @@
 use crate::arch::{
     BOOT_PARAMS_ADDR, KERNEL_LOAD_ADDR, RTC_INDEX_PORT, RtcDevice, SERIAL_IRQ, SERIAL_PORT_BASE,
-    SERIAL_PORT_END, VIRTIO_CONSOLE_IRQ, VIRTIO_MMIO_BASE, VIRTIO_MMIO_SIZE, create_guest_memory,
-    initrd_load_addr, run_vcpu, setup_boot_params, setup_regs, setup_sregs,
+    SERIAL_PORT_END, VIRTIO_CONSOLE_IRQ, VIRTIO_MMIO_BASE, VIRTIO_MMIO_SIZE, VIRTIO_NET_IRQ,
+    VIRTIO_NET_MMIO_BASE, create_guest_memory, initrd_load_addr, run_vcpu, setup_boot_params,
+    setup_regs, setup_sregs,
 };
 use crate::handle::KvmVmHandle;
 use crate::serial::{SerialDevice, create_console_pipes};
 use crate::virtio_console::VirtioConsole;
-use capsa_core::{BackendVmHandle, BootMethod, Error, Result, VmConfig};
+use crate::virtio_net::VirtioNet;
+use capsa_core::{BackendVmHandle, BootMethod, Error, NetworkMode, Result, VmConfig};
+use capsa_net::{SocketPairDevice, StackConfig, UserNatStack};
 use kvm_bindings::kvm_pit_config;
 use kvm_ioctls::{Kvm, VmFd};
 use linux_loader::loader::KernelLoader;
@@ -214,6 +217,65 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
             "virtio-console",
         )?;
     }
+
+    // Set up virtio-net device if UserNat networking is configured
+    let _network_task = if let NetworkMode::UserNat(_) = &config.network {
+        // Create socketpair for frame I/O between virtio-net and UserNatStack
+        let (host_device, guest_fd) = SocketPairDevice::new().map_err(|e| {
+            Error::StartFailed(format!("failed to create network socketpair: {}", e))
+        })?;
+
+        // Default MAC address for the guest (52:54:00:xx:xx:xx is QEMU convention)
+        let mac = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
+
+        let virtio_net = Arc::new(Mutex::new(VirtioNet::new(guest_fd, mac)));
+        virtio_net.lock().unwrap().set_memory(memory.clone());
+
+        // Register irqfd for virtio-net interrupts
+        let evt = virtio_net
+            .lock()
+            .unwrap()
+            .interrupt_evt()
+            .try_clone()
+            .map_err(|e| {
+                Error::StartFailed(format!("failed to clone virtio-net interrupt fd: {}", e))
+            })?;
+        vm_fd.register_irqfd(&evt, VIRTIO_NET_IRQ).map_err(|e| {
+            Error::StartFailed(format!("failed to register virtio-net irqfd: {}", e))
+        })?;
+
+        register_mmio_device(
+            &mut io_manager,
+            VIRTIO_NET_MMIO_BASE,
+            VIRTIO_MMIO_SIZE,
+            virtio_net.clone(),
+            "virtio-net",
+        )?;
+
+        tracing::debug!("virtio-net device registered");
+
+        // Spawn the UserNatStack to handle NAT
+        let stack = UserNatStack::new(host_device, StackConfig::default());
+        tokio::spawn(async move {
+            if let Err(e) = stack.run().await {
+                tracing::error!("UserNat stack error: {:?}", e);
+            }
+        });
+
+        // Spawn a task to poll for incoming frames from the network
+        let virtio_net_for_rx = virtio_net.clone();
+        Some(tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(1));
+            loop {
+                interval.tick().await;
+                if let Ok(mut net) = virtio_net_for_rx.try_lock() {
+                    net.poll_rx();
+                }
+            }
+        }))
+    } else {
+        None
+    };
 
     let io_manager = Arc::new(io_manager);
 

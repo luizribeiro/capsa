@@ -5,11 +5,8 @@ mod frame_io;
 mod nat;
 mod stack;
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 mod socketpair;
-
-#[cfg(target_os = "linux")]
-mod tap;
 
 pub use device::SmoltcpDevice;
 pub use dhcp::DhcpServer;
@@ -17,8 +14,5 @@ pub use error::NetError;
 pub use frame_io::FrameIO;
 pub use stack::{StackConfig, UserNatStack};
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 pub use socketpair::SocketPairDevice;
-
-#[cfg(target_os = "linux")]
-pub use tap::TapDevice;

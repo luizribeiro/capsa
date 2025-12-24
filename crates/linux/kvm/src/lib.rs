@@ -30,6 +30,7 @@ mod arch;
 mod handle;
 mod serial;
 mod virtio_console;
+mod virtio_net;
 mod vm;
 
 use async_trait::async_trait;
@@ -64,7 +65,7 @@ impl KvmBackend {
                 network_modes: NetworkModeSupport {
                     none: true,
                     nat: false,
-                    user_nat: false, // Phase 2: Enable after TAP implementation
+                    user_nat: true,
                 },
                 share_mechanisms: ShareMechanismSupport {
                     virtio_fs: false,
@@ -117,6 +118,7 @@ impl HypervisorBackend for KvmBackend {
         cmdline.arg("reboot", "t");
         cmdline.arg("panic", "-1");
         cmdline.flag("quiet");
+        // virtio-console MMIO device
         cmdline.arg(
             "virtio_mmio.device",
             format!(
@@ -124,6 +126,16 @@ impl HypervisorBackend for KvmBackend {
                 arch::VIRTIO_MMIO_SIZE,
                 arch::VIRTIO_MMIO_BASE,
                 arch::VIRTIO_CONSOLE_IRQ
+            ),
+        );
+        // virtio-net MMIO device
+        cmdline.arg(
+            "virtio_mmio.device",
+            format!(
+                "0x{:x}@0x{:x}:{}",
+                arch::VIRTIO_MMIO_SIZE,
+                arch::VIRTIO_NET_MMIO_BASE,
+                arch::VIRTIO_NET_IRQ
             ),
         );
         cmdline

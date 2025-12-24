@@ -7,8 +7,7 @@
 //! - Guest gets IP via DHCP from our DHCP server
 //! - Guest can ping the gateway
 //!
-//! NOTE: These tests only work with the macos-native backend.
-//! The vfkit and linux-kvm backends don't support UserNat yet.
+//! NOTE: The vfkit backend doesn't support UserNat (VZFileHandleNetworkDeviceAttachment).
 
 use capsa::test_utils::test_vm;
 use capsa_core::{NetworkMode, UserNatConfig};
@@ -20,19 +19,13 @@ use std::time::Duration;
 /// If successful, the init script prints "Network configured via DHCP".
 #[apple_main::harness_test]
 async fn test_usernat_dhcp() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM backend doesn't support UserNat yet");
-        return;
-    }
-
     #[cfg(feature = "vfkit")]
     {
         eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
         return;
     }
 
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    #[cfg(not(feature = "vfkit"))]
     {
         let vm = test_vm("default")
             .network(NetworkMode::UserNat(UserNatConfig::default()))
@@ -55,19 +48,13 @@ async fn test_usernat_dhcp() {
 /// Tests that guest can do DNS lookup (UDP NAT).
 #[apple_main::harness_test]
 async fn test_usernat_dns_lookup() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM backend doesn't support UserNat yet");
-        return;
-    }
-
     #[cfg(feature = "vfkit")]
     {
         eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
         return;
     }
 
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    #[cfg(not(feature = "vfkit"))]
     {
         let vm = test_vm("default")
             .network(NetworkMode::UserNat(UserNatConfig::default()))
@@ -102,19 +89,13 @@ async fn test_usernat_dns_lookup() {
 /// Tests that guest can fetch HTTP content (TCP NAT).
 #[apple_main::harness_test]
 async fn test_usernat_http_fetch() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM backend doesn't support UserNat yet");
-        return;
-    }
-
     #[cfg(feature = "vfkit")]
     {
         eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
         return;
     }
 
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    #[cfg(not(feature = "vfkit"))]
     {
         let vm = test_vm("default")
             .network(NetworkMode::UserNat(UserNatConfig::default()))
@@ -149,19 +130,13 @@ async fn test_usernat_http_fetch() {
 /// Tests that guest can ping the gateway after DHCP.
 #[apple_main::harness_test]
 async fn test_usernat_ping_gateway() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM backend doesn't support UserNat yet");
-        return;
-    }
-
     #[cfg(feature = "vfkit")]
     {
         eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
         return;
     }
 
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    #[cfg(not(feature = "vfkit"))]
     {
         let vm = test_vm("default")
             .network(NetworkMode::UserNat(UserNatConfig::default()))

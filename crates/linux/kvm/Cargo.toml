@@ -7,6 +7,7 @@ description = "KVM backend for capsa VM runtime"
 
 [dependencies]
 capsa-core = { path = "../../core" }
+capsa-net = { path = "../../net" }
 async-trait = { workspace = true }
 tokio = { workspace = true }
 thiserror = { workspace = true }

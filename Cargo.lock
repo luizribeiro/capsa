@@ -298,6 +298,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "capsa-core",
+ "capsa-net",
  "kvm-bindings",
  "kvm-ioctls",
  "linux-loader",
@@ -320,7 +321,6 @@ dependencies = [
  "futures",
  "heapless",
  "libc",
- "nix",
  "rand",
  "smoltcp",
  "thiserror 2.0.17",
