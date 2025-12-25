@@ -110,12 +110,16 @@ impl HypervisorBackend for NativeVirtualizationBackend {
         // We use into_raw_fd() to transfer ownership because NSFileHandle takes ownership.
         //
         // For Cluster mode, the guest fd is pre-created and passed via cluster_network_fd.
-        let (host_net_device, network_guest_fd) = match &config.network {
-            NetworkMode::UserNat(_) => {
+        let (host_net_device, network_guest_fd, user_nat_config) = match &config.network {
+            NetworkMode::UserNat(user_nat_config) => {
                 let (device, guest_fd) = SocketPairDevice::new().map_err(|e| {
                     Error::StartFailed(format!("Failed to create socketpair: {}", e))
                 })?;
-                (Some(device), Some(guest_fd.into_raw_fd()))
+                (
+                    Some(device),
+                    Some(guest_fd.into_raw_fd()),
+                    Some(user_nat_config.clone()),
+                )
             }
             NetworkMode::Cluster(_) => {
                 // For Cluster mode, the guest fd should be pre-created by VmBuilder
@@ -125,9 +129,9 @@ impl HypervisorBackend for NativeVirtualizationBackend {
                             .to_string(),
                     )
                 })?;
-                (None, Some(guest_fd))
+                (None, Some(guest_fd), None)
             }
-            _ => (None, None),
+            _ => (None, None, None),
         };
 
         let vm_config = CreateVmConfig {
@@ -193,7 +197,11 @@ impl HypervisorBackend for NativeVirtualizationBackend {
 
         // Spawn the userspace NAT stack if configured
         let network_task = host_net_device.map(|device| {
-            let stack = UserNatStack::new(device, StackConfig::default());
+            let stack_config = user_nat_config
+                .as_ref()
+                .map(StackConfig::from)
+                .unwrap_or_default();
+            let stack = UserNatStack::new(device, stack_config);
             tokio::spawn(async move {
                 if let Err(e) = stack.run().await {
                     tracing::error!("UserNat stack error: {:?}", e);

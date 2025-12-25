@@ -296,7 +296,7 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
 
     // Set up virtio-net device if networking is configured
     let network_task = match &config.network {
-        NetworkMode::UserNat(_) => {
+        NetworkMode::UserNat(user_nat_config) => {
             // Create socketpair for frame I/O between virtio-net and UserNatStack
             let (host_device, guest_fd) = SocketPairDevice::new().map_err(|e| {
                 Error::StartFailed(format!("failed to create network socketpair: {}", e))
@@ -324,8 +324,9 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
 
             tracing::debug!("virtio-net device registered for UserNat");
 
-            // Spawn the UserNatStack to handle NAT
-            let stack = UserNatStack::new(host_device, StackConfig::default());
+            // Spawn the UserNatStack to handle NAT with port forwards and policy from config
+            let stack_config = StackConfig::from(user_nat_config);
+            let stack = UserNatStack::new(host_device, stack_config);
             tokio::spawn(async move {
                 if let Err(e) = stack.run().await {
                     tracing::error!("UserNat stack error: {:?}", e);

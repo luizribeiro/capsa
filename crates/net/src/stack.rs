@@ -64,6 +64,36 @@ impl Default for StackConfig {
     }
 }
 
+impl From<&capsa_core::UserNatConfig> for StackConfig {
+    fn from(config: &capsa_core::UserNatConfig) -> Self {
+        let subnet_prefix = config
+            .subnet
+            .split_once('/')
+            .and_then(|(_, p)| p.parse().ok())
+            .unwrap_or(24);
+
+        let port_forwards = config
+            .port_forwards
+            .iter()
+            .map(|pf| PortForwardRule {
+                host_port: pf.host_port,
+                guest_port: pf.guest_port,
+                is_tcp: pf.protocol == capsa_core::Protocol::Tcp,
+            })
+            .collect();
+
+        Self {
+            gateway_ip: config.gateway,
+            subnet_prefix,
+            dhcp_range_start: config.dhcp_start,
+            dhcp_range_end: config.dhcp_end,
+            gateway_mac: [0x52, 0x54, 0x00, 0x00, 0x00, 0x01],
+            port_forwards,
+            policy: config.policy.clone(),
+        }
+    }
+}
+
 /// The main userspace NAT stack.
 ///
 /// This runs the smoltcp interface and handles:
@@ -445,4 +475,78 @@ impl<F: FrameIO> UserNatStack<F> {
 fn smoltcp_now(start: std::time::Instant) -> Instant {
     let elapsed = start.elapsed();
     Instant::from_millis(elapsed.as_millis() as i64)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use capsa_core::{NetworkPolicy, PolicyAction, PortForward, Protocol, UserNatConfig};
+
+    #[test]
+    fn test_stack_config_from_user_nat_config() {
+        let user_config = UserNatConfig {
+            subnet: "192.168.1.0/24".to_string(),
+            gateway: Ipv4Addr::new(192, 168, 1, 1),
+            dhcp_start: Ipv4Addr::new(192, 168, 1, 100),
+            dhcp_end: Ipv4Addr::new(192, 168, 1, 200),
+            port_forwards: vec![
+                PortForward {
+                    protocol: Protocol::Tcp,
+                    host_port: 8080,
+                    guest_port: 80,
+                },
+                PortForward {
+                    protocol: Protocol::Udp,
+                    host_port: 5353,
+                    guest_port: 53,
+                },
+            ],
+            policy: Some(NetworkPolicy {
+                default_action: PolicyAction::Deny,
+                rules: vec![],
+            }),
+        };
+
+        let stack_config = StackConfig::from(&user_config);
+
+        assert_eq!(stack_config.gateway_ip, Ipv4Addr::new(192, 168, 1, 1));
+        assert_eq!(stack_config.subnet_prefix, 24);
+        assert_eq!(
+            stack_config.dhcp_range_start,
+            Ipv4Addr::new(192, 168, 1, 100)
+        );
+        assert_eq!(stack_config.dhcp_range_end, Ipv4Addr::new(192, 168, 1, 200));
+
+        assert_eq!(stack_config.port_forwards.len(), 2);
+        assert_eq!(stack_config.port_forwards[0].host_port, 8080);
+        assert_eq!(stack_config.port_forwards[0].guest_port, 80);
+        assert!(stack_config.port_forwards[0].is_tcp);
+        assert_eq!(stack_config.port_forwards[1].host_port, 5353);
+        assert_eq!(stack_config.port_forwards[1].guest_port, 53);
+        assert!(!stack_config.port_forwards[1].is_tcp);
+
+        assert!(stack_config.policy.is_some());
+        assert_eq!(
+            stack_config.policy.unwrap().default_action,
+            PolicyAction::Deny
+        );
+    }
+
+    #[test]
+    fn test_stack_config_from_user_nat_config_no_policy() {
+        let user_config = UserNatConfig {
+            subnet: "10.0.2.0/24".to_string(),
+            gateway: Ipv4Addr::new(10, 0, 2, 2),
+            dhcp_start: Ipv4Addr::new(10, 0, 2, 15),
+            dhcp_end: Ipv4Addr::new(10, 0, 2, 254),
+            port_forwards: vec![],
+            policy: None,
+        };
+
+        let stack_config = StackConfig::from(&user_config);
+
+        assert_eq!(stack_config.gateway_ip, Ipv4Addr::new(10, 0, 2, 2));
+        assert_eq!(stack_config.port_forwards.len(), 0);
+        assert!(stack_config.policy.is_none());
+    }
 }

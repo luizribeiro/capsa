@@ -13,6 +13,7 @@
 
 use capsa::test_utils::test_vm;
 use capsa_core::{NetworkMode, NetworkPolicy, UserNatConfig};
+#[allow(unused_imports)] // Used only in native-vz cfg block
 use std::net::Ipv4Addr;
 use std::time::Duration;
 
@@ -177,7 +178,7 @@ async fn test_usernat_ping_gateway() {
 async fn test_port_forward_tcp() {
     #[cfg(feature = "linux-kvm")]
     {
-        eprintln!("Skipping: KVM backend doesn't support UserNat yet");
+        eprintln!("Skipping: KVM has timing issues with background nc processes in tests");
         return;
     }
 
@@ -230,7 +231,7 @@ async fn test_port_forward_tcp() {
 async fn test_port_forward_udp() {
     #[cfg(feature = "linux-kvm")]
     {
-        eprintln!("Skipping: KVM backend doesn't support UserNat yet");
+        eprintln!("Skipping: KVM has timing issues with background nc processes in tests");
         return;
     }
 
@@ -279,19 +280,13 @@ async fn test_port_forward_udp() {
 /// Tests multiple port forwards simultaneously.
 #[apple_main::harness_test]
 async fn test_port_forward_multiple() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM backend doesn't support UserNat yet");
-        return;
-    }
-
     #[cfg(feature = "vfkit")]
     {
         eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
         return;
     }
 
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    #[cfg(not(feature = "vfkit"))]
     {
         let vm = test_vm("default")
             .network(
@@ -337,7 +332,7 @@ async fn test_port_forward_multiple() {
 async fn test_policy_deny_all_allow_dns() {
     #[cfg(feature = "linux-kvm")]
     {
-        eprintln!("Skipping: KVM backend doesn't support UserNat yet");
+        eprintln!("Skipping: KVM has timing issues with wget timeouts in policy tests");
         return;
     }
 
@@ -417,7 +412,7 @@ async fn test_policy_allow_https_only() {
 async fn test_policy_allow_specific_ip() {
     #[cfg(feature = "linux-kvm")]
     {
-        eprintln!("Skipping: KVM backend doesn't support UserNat yet");
+        eprintln!("Skipping: KVM has timing issues with wget timeouts in policy tests");
         return;
     }
 
@@ -479,19 +474,13 @@ async fn test_policy_allow_specific_ip() {
 /// Tests that allow_all policy permits all traffic (default behavior).
 #[apple_main::harness_test]
 async fn test_policy_allow_all() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM backend doesn't support UserNat yet");
-        return;
-    }
-
     #[cfg(feature = "vfkit")]
     {
         eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
         return;
     }
 
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    #[cfg(not(feature = "vfkit"))]
     {
         // Policy: allow all (explicit)
         let policy = NetworkPolicy::allow_all();
@@ -546,7 +535,7 @@ async fn test_policy_deny_specific_port() {
 async fn test_port_forward_with_policy() {
     #[cfg(feature = "linux-kvm")]
     {
-        eprintln!("Skipping: KVM backend doesn't support UserNat yet");
+        eprintln!("Skipping: KVM has timing issues with background nc and policy tests");
         return;
     }
 
