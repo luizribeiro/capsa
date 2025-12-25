@@ -186,6 +186,16 @@ impl SwitchPort {
     pub fn id(&self) -> usize {
         self.id
     }
+
+    /// Get a clone of the sender channel for sending frames to the switch.
+    pub fn sender(&self) -> mpsc::Sender<Vec<u8>> {
+        self.tx.clone()
+    }
+
+    /// Consume this port and return the receiver channel for receiving frames from the switch.
+    pub fn into_receiver(self) -> mpsc::Receiver<Vec<u8>> {
+        self.rx.into_inner()
+    }
 }
 
 impl FrameIO for SwitchPort {

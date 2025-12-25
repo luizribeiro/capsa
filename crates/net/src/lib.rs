@@ -9,6 +9,8 @@ mod stack;
 mod switch;
 
 #[cfg(unix)]
+mod bridge;
+#[cfg(unix)]
 mod socketpair;
 
 pub use device::SmoltcpDevice;
@@ -20,5 +22,7 @@ pub use port_forward::{ForwardConfig, PortForwarder};
 pub use stack::{PortForwardRule, StackConfig, UserNatStack};
 pub use switch::{SwitchPort, VirtualSwitch};
 
+#[cfg(unix)]
+pub use bridge::bridge_to_switch;
 #[cfg(unix)]
 pub use socketpair::SocketPairDevice;
