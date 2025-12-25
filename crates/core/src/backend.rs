@@ -5,6 +5,7 @@ use crate::types::{DiskImage, HostPlatform, NetworkMode, ResourceConfig, SharedD
 use crate::vsock::VsockConfig;
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
+use std::os::fd::RawFd;
 use std::path::PathBuf;
 use tokio::io::{AsyncRead, AsyncWrite};
 
@@ -36,6 +37,10 @@ pub struct VmConfig {
     pub console_enabled: bool,
     #[serde(default)]
     pub vsock: VsockConfig,
+    /// Pre-created network guest fd for Cluster mode.
+    /// When set, the backend should use this fd instead of creating its own.
+    #[serde(skip)]
+    pub cluster_network_fd: Option<RawFd>,
 }
 
 pub type ConsoleStream = Box<dyn ConsoleIo + Send>;

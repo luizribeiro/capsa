@@ -58,6 +58,7 @@ impl BootConfigBuilder for LinuxDirectBootConfig {
             network,
             console_enabled,
             vsock,
+            cluster_network_fd: None,
         };
         (config, None)
     }
@@ -169,6 +170,7 @@ impl BootConfigBuilder for UefiBootConfig {
             network,
             console_enabled,
             vsock,
+            cluster_network_fd: None,
         };
         (config, temp_file)
     }
