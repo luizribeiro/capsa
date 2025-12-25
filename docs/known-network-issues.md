@@ -48,7 +48,45 @@ console.exec("wget -T 10 https://example.com -O /dev/null", Duration::from_secs(
 
 ---
 
-## 2. ICMP NAT Not Implemented
+## 2. HTTP Fetch Test Broken on KVM
+
+**Status**: Open
+**Severity**: High
+**Affects**: `test_usernat_http_fetch`
+
+### Description
+
+The `test_usernat_http_fetch` test times out 100% of the time on the Linux KVM backend. The test uses the `exec()` method and always hits the 15-second timeout.
+
+### Reproduction
+
+```bash
+cargo test-linux --package capsa --test network_test test_usernat_http_fetch
+```
+
+### Observations
+
+- Test fails 100% of the time (not flaky - completely broken)
+- Times out at exactly 15 seconds (the configured timeout)
+- Uses `exec()` method with unique marker pattern
+- No policy configured - uses default UserNatConfig
+- Other tests using TCP NAT (like DNS lookup) pass, suggesting the issue may be specific to wget or the exec() method on KVM
+
+### Possible Causes
+
+1. Console `exec()` method broken on KVM (see `docs/console-automation-investigation.md`)
+2. wget hanging or producing unexpected output
+3. Marker pattern not being detected in console output
+
+### Next Steps
+
+1. Run test with `--nocapture` to see raw console output
+2. Compare with macOS backend behavior
+3. Check if the `exec()` marker is being written/detected correctly
+
+---
+
+## 3. ICMP NAT Not Implemented
 
 **Status**: Open (by design, but should be documented)
 **Severity**: Low
