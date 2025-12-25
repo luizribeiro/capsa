@@ -99,9 +99,6 @@ impl<B: BootConfigBuilder> VmBuilder<B, No> {
 
     /// Builds and starts the virtual machine.
     pub async fn build(self) -> Result<VmHandle> {
-        use crate::cluster::NetworkCluster;
-        use std::os::fd::AsRawFd;
-
         let backend = select_backend()?;
         self.validate(backend.capabilities())?;
         self.validate_disk_files()?;
@@ -114,19 +111,7 @@ impl<B: BootConfigBuilder> VmBuilder<B, No> {
 
         let vsock_config = self.vsock.clone();
 
-        // For Cluster mode, create the cluster port before building VmConfig
-        #[cfg(target_os = "macos")]
-        let cluster_port = if let NetworkMode::Cluster(ref cluster_config) = self.network {
-            let cluster = NetworkCluster::get_or_create(&cluster_config.cluster_name);
-            Some(cluster.create_port().await?)
-        } else {
-            None
-        };
-
-        #[cfg(not(target_os = "macos"))]
-        let cluster_port: Option<()> = None;
-
-        let (mut internal_config, temp_file) = self.boot_config.into_vm_config(
+        let (internal_config, temp_file) = self.boot_config.into_vm_config(
             self.disks,
             self.resources.clone(),
             self.shares,
@@ -136,28 +121,7 @@ impl<B: BootConfigBuilder> VmBuilder<B, No> {
             backend.as_ref(),
         );
 
-        // Set the cluster network fd if we have a cluster port
-        #[cfg(target_os = "macos")]
-        if let Some(ref port) = cluster_port {
-            internal_config.cluster_network_fd = Some(port.guest_fd.as_raw_fd());
-        }
-
         let backend_handle = backend.start(&internal_config).await?;
-
-        // Spawn the bridge task for Cluster mode
-        #[cfg(target_os = "macos")]
-        let _cluster_bridge_task = if let Some(port) = cluster_port {
-            use capsa_net::bridge_to_switch;
-
-            // Transfer ownership of host_fd to the bridge task
-            Some(tokio::spawn(async move {
-                if let Err(e) = bridge_to_switch(port.host_fd, port.switch_port).await {
-                    tracing::error!(error = %e, "Cluster bridge error");
-                }
-            }))
-        } else {
-            None
-        };
 
         let mut handle = VmHandle::new(backend_handle, GuestOs::Linux, self.resources)
             .with_vsock_config(&vsock_config);

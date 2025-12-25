@@ -1,15 +1,24 @@
 use super::ExecutionStrategy;
 use crate::backend::macos::pty::Pty;
+use crate::cluster::NetworkCluster;
 use async_trait::async_trait;
 use capsa_apple_vzd_ipc::{PipeTransport, VmHandleId, VmServiceClient};
-use capsa_core::{BackendVmHandle, ConsoleStream, Error, Result, VmConfig};
-use std::os::fd::AsRawFd;
+use capsa_core::{BackendVmHandle, ConsoleStream, Error, NetworkMode, Result, VmConfig};
+use capsa_net::SwitchPort;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::process::Stdio;
 use std::sync::Arc;
 use tarpc::tokio_serde::formats::Bincode;
 use tokio::process::Command;
 use tokio::sync::Mutex;
+use tokio::task::JoinHandle;
 use tokio_util::codec::{Framed, LengthDelimitedCodec};
+
+struct ClusterPortInfo {
+    guest_fd: OwnedFd,
+    host_fd: OwnedFd,
+    switch_port: SwitchPort,
+}
 
 pub struct SubprocessStrategy;
 
@@ -73,30 +82,53 @@ impl ExecutionStrategy for SubprocessStrategy {
             None
         };
 
+        // For Cluster mode, create the cluster port and prepare to pass fd
+        let cluster_port: Option<ClusterPortInfo> =
+            if let NetworkMode::Cluster(ref cluster_config) = config.network {
+                let cluster = NetworkCluster::get_or_create(&cluster_config.cluster_name);
+                let port = cluster.create_port().await?;
+                Some(ClusterPortInfo {
+                    guest_fd: port.guest_fd,
+                    host_fd: port.host_fd,
+                    switch_port: port.switch_port,
+                })
+            } else {
+                None
+            };
+
         let mut cmd = Command::new(&vzd_path);
         cmd.stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit());
 
-        if let Some(ref pty) = pty {
-            let slave_fd = pty.slave.as_raw_fd();
-            // SAFETY: pre_exec runs after fork() but before exec() in the child process.
-            // At this point, the child has a copy of all file descriptors from the parent.
-            // Requirements:
-            // 1. slave_fd is valid because pty.slave is kept alive until spawn() completes
-            // 2. dup2 and close are async-signal-safe and appropriate for use in pre_exec
-            // 3. We duplicate to fd 3 which the vzd subprocess expects for console I/O
-            // 4. After dup2, we close the original slave_fd to avoid leaking it in the child
-            // 5. The parent's copy of slave_fd will be closed when Pty is dropped
-            unsafe {
-                cmd.pre_exec(move || {
+        // Prepare fds for pre_exec
+        let pty_slave_fd = pty.as_ref().map(|p| p.slave.as_raw_fd());
+        let network_guest_fd = cluster_port.as_ref().map(|p| p.guest_fd.as_raw_fd());
+
+        // SAFETY: pre_exec runs after fork() but before exec() in the child process.
+        // At this point, the child has a copy of all file descriptors from the parent.
+        // Requirements:
+        // 1. slave_fd and network_fd are valid because they're kept alive until spawn() completes
+        // 2. dup2 and close are async-signal-safe and appropriate for use in pre_exec
+        // 3. We duplicate to fd 3 (console) and fd 4 (network) which vzd expects
+        // 4. After dup2, we close the original fds to avoid leaking them in the child
+        // 5. The parent's copies will be closed when Pty/ClusterPort are dropped
+        unsafe {
+            cmd.pre_exec(move || {
+                if let Some(slave_fd) = pty_slave_fd {
                     if slave_fd != 3 {
                         nix::unistd::dup2(slave_fd, 3).map_err(std::io::Error::other)?;
                         nix::unistd::close(slave_fd).map_err(std::io::Error::other)?;
                     }
-                    Ok(())
-                });
-            }
+                }
+                if let Some(net_fd) = network_guest_fd {
+                    if net_fd != 4 {
+                        nix::unistd::dup2(net_fd, 4).map_err(std::io::Error::other)?;
+                        nix::unistd::close(net_fd).map_err(std::io::Error::other)?;
+                    }
+                }
+                Ok(())
+            });
         }
 
         let mut child = cmd
@@ -119,11 +151,25 @@ impl ExecutionStrategy for SubprocessStrategy {
             .map_err(|e| Error::StartFailed(format!("RPC call to start VM failed: {}", e)))?
             .map_err(|e| Error::StartFailed(format!("VM subprocess failed to start: {}", e)))?;
 
+        // Spawn the bridge task for Cluster mode
+        let bridge_task = if let Some(port) = cluster_port {
+            use capsa_net::bridge_to_switch;
+
+            Some(tokio::spawn(async move {
+                if let Err(e) = bridge_to_switch(port.host_fd, port.switch_port).await {
+                    tracing::error!(error = %e, "Cluster bridge error");
+                }
+            }))
+        } else {
+            None
+        };
+
         Ok(Box::new(SubprocessVmHandle {
             handle_id,
             client: Arc::new(client),
             _child: Arc::new(Mutex::new(child)),
             pty: pty.map(|p| Mutex::new(Some(p))),
+            _bridge_task: bridge_task,
         }))
     }
 }
@@ -133,6 +179,8 @@ struct SubprocessVmHandle {
     client: Arc<VmServiceClient>,
     _child: Arc<Mutex<tokio::process::Child>>,
     pty: Option<Mutex<Option<Pty>>>,
+    #[allow(dead_code)]
+    _bridge_task: Option<JoinHandle<()>>,
 }
 
 #[async_trait]
