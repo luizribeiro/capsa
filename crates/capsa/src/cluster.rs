@@ -11,11 +11,13 @@ use tracing::info;
 #[cfg(target_os = "macos")]
 use capsa_core::{Error, Result};
 #[cfg(target_os = "macos")]
-use capsa_net::VirtualSwitch;
+use capsa_net::{ClusterStack, ClusterStackConfig, VirtualSwitch};
 #[cfg(target_os = "macos")]
 use nix::libc;
 #[cfg(target_os = "macos")]
 use std::os::fd::OwnedFd;
+#[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Global registry of network clusters.
 static CLUSTERS: OnceLock<Mutex<HashMap<String, Arc<NetworkCluster>>>> = OnceLock::new();
@@ -32,6 +34,8 @@ pub struct NetworkCluster {
     config: NetworkClusterConfig,
     #[cfg(target_os = "macos")]
     switch: VirtualSwitch,
+    #[cfg(target_os = "macos")]
+    dhcp_started: AtomicBool,
 }
 
 impl NetworkCluster {
@@ -41,7 +45,11 @@ impl NetworkCluster {
         let switch = VirtualSwitch::new();
         info!(name = %config.name, subnet = %config.subnet, "Created network cluster");
 
-        let cluster = Arc::new(Self { config, switch });
+        let cluster = Arc::new(Self {
+            config,
+            switch,
+            dhcp_started: AtomicBool::new(false),
+        });
 
         // Register in the global registry
         let mut clusters = clusters().lock().unwrap();
@@ -81,9 +89,13 @@ impl NetworkCluster {
         let switch = VirtualSwitch::new();
         info!(name = %config.name, subnet = %config.subnet, "Created network cluster");
 
-        let cluster = Arc::new(Self { config, switch });
-        clusters.insert(name.to_string(), cluster.clone());
+        let cluster = Arc::new(Self {
+            config,
+            switch,
+            dhcp_started: AtomicBool::new(false),
+        });
 
+        clusters.insert(name.to_string(), cluster.clone());
         cluster
     }
 
@@ -107,6 +119,28 @@ impl NetworkCluster {
         clusters.insert(name.to_string(), cluster.clone());
 
         cluster
+    }
+
+    #[cfg(target_os = "macos")]
+    async fn ensure_dhcp_started(&self) {
+        if self
+            .dhcp_started
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_ok()
+        {
+            let stack_config =
+                ClusterStackConfig::from_subnet(&self.config.subnet, self.config.gateway)
+                    .unwrap_or_default();
+
+            let port = self.switch.create_port().await;
+            let cluster_name = self.config.name.clone();
+
+            tokio::spawn(async move {
+                info!(cluster = %cluster_name, "Started DHCP server for cluster");
+                let stack = ClusterStack::new(port, stack_config);
+                stack.run().await;
+            });
+        }
     }
 
     /// Get the cluster configuration.
@@ -122,6 +156,9 @@ impl NetworkCluster {
     #[cfg(target_os = "macos")]
     pub async fn create_port(&self) -> Result<ClusterPort> {
         use std::os::fd::{FromRawFd, RawFd};
+
+        // Start DHCP server if not already running
+        self.ensure_dhcp_started().await;
 
         let switch_port = self.switch.create_port().await;
         let port_id = switch_port.id();
