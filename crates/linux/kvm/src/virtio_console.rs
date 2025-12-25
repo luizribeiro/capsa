@@ -133,6 +133,14 @@ impl VirtioConsole {
         &self.interrupt_evt
     }
 
+    pub fn enqueue_input(&self, data: &[u8]) {
+        {
+            let mut input = self.input_buffer.lock().unwrap();
+            input.extend(data);
+        }
+        self.process_rx_queue();
+    }
+
     fn signal_used_queue(&self) {
         self.interrupt_status
             .fetch_or(VIRTIO_INT_USED_RING, Ordering::SeqCst);

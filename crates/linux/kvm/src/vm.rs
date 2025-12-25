@@ -2,7 +2,7 @@ use crate::arch::{
     BOOT_PARAMS_ADDR, KERNEL_LOAD_ADDR, RTC_INDEX_PORT, RtcDevice, SERIAL_IRQ, SERIAL_PORT_BASE,
     SERIAL_PORT_END, VIRTIO_CONSOLE_IRQ, VIRTIO_MMIO_BASE, VIRTIO_MMIO_SIZE, VIRTIO_NET_IRQ,
     VIRTIO_NET_MMIO_BASE, create_guest_memory, initrd_load_addr, run_vcpu, setup_boot_params,
-    setup_regs, setup_sregs,
+    setup_mptable, setup_regs, setup_sregs,
 };
 use crate::handle::KvmVmHandle;
 use crate::serial::{SerialDevice, create_console_pipes};
@@ -10,10 +10,13 @@ use crate::virtio_console::VirtioConsole;
 use crate::virtio_net::VirtioNet;
 use capsa_core::{BackendVmHandle, BootMethod, Error, NetworkMode, Result, VmConfig};
 use capsa_net::{SocketPairDevice, StackConfig, UserNatStack};
-use kvm_bindings::kvm_pit_config;
+use kvm_bindings::{
+    KVM_IRQ_ROUTING_IRQCHIP, KVM_IRQCHIP_IOAPIC, kvm_irq_routing_entry, kvm_pit_config,
+};
 use kvm_ioctls::{Kvm, VmFd};
 use linux_loader::loader::KernelLoader;
 use linux_loader::loader::bzimage::BzImage;
+use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::sys::signal::{SaFlags, SigAction, SigHandler, SigSet, Signal, sigaction};
 use std::fs::File;
 use std::io::{Read, Write};
@@ -28,6 +31,41 @@ use vm_device::device_manager::{IoManager, MmioManager, PioManager};
 use vm_memory::{Address, Bytes, GuestAddress, GuestMemory, GuestMemoryMmap, GuestMemoryRegion};
 
 static SIGNAL_HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
+
+const NUM_IOAPIC_PINS: usize = 24;
+
+#[repr(C)]
+struct KvmIrqRouting {
+    nr: u32,
+    flags: u32,
+    entries: [kvm_irq_routing_entry; NUM_IOAPIC_PINS],
+}
+
+fn setup_gsi_routing(vm_fd: &VmFd) -> Result<()> {
+    let mut routing = KvmIrqRouting {
+        nr: NUM_IOAPIC_PINS as u32,
+        flags: 0,
+        entries: [kvm_irq_routing_entry::default(); NUM_IOAPIC_PINS],
+    };
+
+    // Route all GSIs through IOAPIC to match MP table configuration
+    for gsi in 0..NUM_IOAPIC_PINS {
+        routing.entries[gsi].gsi = gsi as u32;
+        routing.entries[gsi].type_ = KVM_IRQ_ROUTING_IRQCHIP;
+        routing.entries[gsi].u.irqchip.irqchip = KVM_IRQCHIP_IOAPIC;
+        routing.entries[gsi].u.irqchip.pin = gsi as u32;
+    }
+
+    let routing_ptr = &routing as *const KvmIrqRouting as *const kvm_bindings::kvm_irq_routing;
+    unsafe {
+        vm_fd
+            .set_gsi_routing(&*routing_ptr)
+            .map_err(|e| Error::StartFailed(format!("failed to set GSI routing: {}", e)))?;
+    }
+
+    tracing::debug!("GSI routing configured for {} IOAPIC pins", NUM_IOAPIC_PINS);
+    Ok(())
+}
 
 /// Installs a no-op SIGUSR1 handler to interrupt blocking vcpu.run() calls.
 ///
@@ -54,7 +92,7 @@ fn install_signal_handler() -> Result<()> {
 }
 
 pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
-    let (kernel_path, initrd_path, cmdline) = match &config.boot {
+    let (kernel_path, initrd_path, mut cmdline) = match &config.boot {
         BootMethod::LinuxDirect {
             kernel,
             initrd,
@@ -67,6 +105,22 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
             ));
         }
     };
+
+    // Add virtio-console MMIO device to cmdline if console is enabled
+    if config.console_enabled {
+        cmdline.push_str(&format!(
+            " virtio_mmio.device=0x{:x}@0x{:x}:{}",
+            VIRTIO_MMIO_SIZE, VIRTIO_MMIO_BASE, VIRTIO_CONSOLE_IRQ
+        ));
+    }
+
+    // Add virtio-net MMIO device to cmdline if UserNat networking is enabled
+    if matches!(&config.network, NetworkMode::UserNat(_)) {
+        cmdline.push_str(&format!(
+            " virtio_mmio.device=0x{:x}@0x{:x}:{}",
+            VIRTIO_MMIO_SIZE, VIRTIO_NET_MMIO_BASE, VIRTIO_NET_IRQ
+        ));
+    }
 
     let cpus = config.resources.cpus;
     let memory_mb = config.resources.memory_mb as u64;
@@ -100,31 +154,24 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
 
     let kvm =
         Kvm::new().map_err(|e| Error::StartFailed(format!("failed to open /dev/kvm: {}", e)))?;
-    let vm_fd = kvm
-        .create_vm()
-        .map_err(|e| Error::StartFailed(format!("failed to create VM: {}", e)))?;
+    let vm_fd = Arc::new(
+        kvm.create_vm()
+            .map_err(|e| Error::StartFailed(format!("failed to create VM: {}", e)))?,
+    );
+    let vm_fd_ref = vm_fd.as_ref();
 
     // Set up IRQ chip (PIC + IOAPIC) - required for x86_64
-    vm_fd
+    vm_fd_ref
         .create_irq_chip()
         .map_err(|e| Error::StartFailed(format!("failed to create IRQ chip: {}", e)))?;
 
-    // Register serial interrupt using irqfd - KVM will inject IRQ when eventfd is signaled
-    if let Some(ref serial) = serial {
-        let evt = serial
-            .lock()
-            .unwrap()
-            .interrupt_evt()
-            .try_clone()
-            .map_err(|e| Error::StartFailed(format!("failed to clone interrupt eventfd: {}", e)))?;
-        vm_fd
-            .register_irqfd(&evt, SERIAL_IRQ)
-            .map_err(|e| Error::StartFailed(format!("failed to register serial irqfd: {}", e)))?;
-    }
+    // Set up GSI routing for IOAPIC
+    // This explicitly routes GSIs to IOAPIC pins, which is required for irqfd to work correctly
+    setup_gsi_routing(vm_fd_ref)?;
 
     // Set up PIT (Programmable Interval Timer)
     let pit_config = kvm_pit_config::default();
-    vm_fd
+    vm_fd_ref
         .create_pit2(pit_config)
         .map_err(|e| Error::StartFailed(format!("failed to create PIT: {}", e)))?;
 
@@ -132,7 +179,7 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         .map_err(|e| Error::StartFailed(format!("failed to create guest memory: {}", e)))?;
     let memory = Arc::new(memory);
 
-    setup_memory_regions(&vm_fd, &memory)?;
+    setup_memory_regions(vm_fd_ref, &memory)?;
 
     let (kernel_entry, kernel_header) = load_kernel(&memory, &kernel_path)?;
     tracing::debug!("Kernel loaded at entry point: 0x{:x}", kernel_entry);
@@ -156,6 +203,12 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
     )
     .map_err(|e| Error::StartFailed(format!("failed to setup boot params: {}", e)))?;
 
+    // Set up MP table for IOAPIC interrupt routing
+    // This is required for Linux to properly handle interrupts from virtio-mmio devices
+    setup_mptable(&memory, cpus as u8)
+        .map_err(|e| Error::StartFailed(format!("failed to setup MP table: {}", e)))?;
+    tracing::debug!("MP table set up for {} CPUs", cpus);
+
     install_signal_handler()?;
 
     let running = Arc::new(AtomicBool::new(true));
@@ -176,6 +229,22 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         "serial device",
     )?;
 
+    // Register irqfd for serial interrupts
+    if let Some(ref serial) = serial {
+        let evt = serial
+            .lock()
+            .unwrap()
+            .interrupt_evt()
+            .try_clone()
+            .map_err(|e| {
+                Error::StartFailed(format!("failed to clone serial interrupt eventfd: {}", e))
+            })?;
+        vm_fd_ref
+            .register_irqfd(&evt, SERIAL_IRQ)
+            .map_err(|e| Error::StartFailed(format!("failed to register serial irqfd: {}", e)))?;
+    }
+    let serial_irq_task: Option<tokio::task::JoinHandle<()>> = None;
+
     // Register RTC device
     register_pio_device(
         &mut io_manager,
@@ -186,7 +255,7 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
     )?;
 
     // Register virtio-console device if console is enabled
-    if let Some(fd) = virtio_console_fd {
+    let virtio_console = if let Some(fd) = virtio_console_fd {
         let writer = ConsolePipeWriter(fd);
         let console = Arc::new(Mutex::new(VirtioConsole::new(Box::new(writer))));
         console.lock().unwrap().set_memory(memory.clone());
@@ -203,7 +272,7 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
                     e
                 ))
             })?;
-        vm_fd
+        vm_fd_ref
             .register_irqfd(&evt, VIRTIO_CONSOLE_IRQ)
             .map_err(|e| {
                 Error::StartFailed(format!("failed to register virtio-console irqfd: {}", e))
@@ -213,13 +282,17 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
             &mut io_manager,
             VIRTIO_MMIO_BASE,
             VIRTIO_MMIO_SIZE,
-            console,
+            console.clone(),
             "virtio-console",
         )?;
-    }
+
+        Some(console)
+    } else {
+        None
+    };
 
     // Set up virtio-net device if UserNat networking is configured
-    let _network_task = if let NetworkMode::UserNat(_) = &config.network {
+    let network_task = if let NetworkMode::UserNat(_) = &config.network {
         // Create socketpair for frame I/O between virtio-net and UserNatStack
         let (host_device, guest_fd) = SocketPairDevice::new().map_err(|e| {
             Error::StartFailed(format!("failed to create network socketpair: {}", e))
@@ -228,21 +301,14 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         // Default MAC address for the guest (52:54:00:xx:xx:xx is QEMU convention)
         let mac = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
 
-        let virtio_net = Arc::new(Mutex::new(VirtioNet::new(guest_fd, mac)));
+        // VirtioNet uses direct interrupt injection via set_irq_line
+        let virtio_net = Arc::new(Mutex::new(VirtioNet::new(
+            guest_fd,
+            mac,
+            vm_fd.clone(),
+            VIRTIO_NET_IRQ,
+        )));
         virtio_net.lock().unwrap().set_memory(memory.clone());
-
-        // Register irqfd for virtio-net interrupts
-        let evt = virtio_net
-            .lock()
-            .unwrap()
-            .interrupt_evt()
-            .try_clone()
-            .map_err(|e| {
-                Error::StartFailed(format!("failed to clone virtio-net interrupt fd: {}", e))
-            })?;
-        vm_fd.register_irqfd(&evt, VIRTIO_NET_IRQ).map_err(|e| {
-            Error::StartFailed(format!("failed to register virtio-net irqfd: {}", e))
-        })?;
 
         register_mmio_device(
             &mut io_manager,
@@ -264,7 +330,7 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
 
         // Spawn a task to poll for incoming frames from the network
         let virtio_net_for_rx = virtio_net.clone();
-        Some(tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let mut interval = tokio::time::interval(std::time::Duration::from_millis(1));
             loop {
                 interval.tick().await;
@@ -272,7 +338,8 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
                     net.poll_rx();
                 }
             }
-        }))
+        });
+        Some(task)
     } else {
         None
     };
@@ -283,7 +350,7 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
     let mut vcpu_thread_ids = Vec::new();
 
     for vcpu_id in 0..cpus {
-        let vcpu = vm_fd
+        let vcpu = vm_fd_ref
             .create_vcpu(vcpu_id as u64)
             .map_err(|e| Error::StartFailed(format!("failed to create vCPU {}: {}", vcpu_id, e)))?;
 
@@ -316,7 +383,15 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
 
     let console_input_task = if let (Some(serial), Some(guest_read)) = (&serial, guest_read) {
         let serial_clone = serial.clone();
+        let virtio_console_clone = virtio_console.clone();
         let running_clone = running.clone();
+
+        // Set the fd to non-blocking mode (required for AsyncFd)
+        let flags = fcntl(guest_read.as_raw_fd(), FcntlArg::F_GETFL)
+            .map_err(|e| Error::StartFailed(format!("failed to get fd flags: {}", e)))?;
+        let flags = OFlag::from_bits_truncate(flags) | OFlag::O_NONBLOCK;
+        fcntl(guest_read.as_raw_fd(), FcntlArg::F_SETFL(flags))
+            .map_err(|e| Error::StartFailed(format!("failed to set fd non-blocking: {}", e)))?;
 
         let reader = std::fs::File::from(guest_read);
         let async_fd = AsyncFd::with_interest(reader, Interest::READABLE)
@@ -344,6 +419,12 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
                         break;
                     }
                     Ok(Ok(n)) => {
+                        // Forward input to virtio-console (primary) and serial (fallback)
+                        if let Some(ref vc) = virtio_console_clone {
+                            if let Ok(vc) = vc.lock() {
+                                vc.enqueue_input(&buf[..n]);
+                            }
+                        }
                         if let Ok(serial) = serial_clone.lock() {
                             serial.enqueue_input(&buf[..n]);
                         }
@@ -370,6 +451,8 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         host_write,
         console_enabled,
         memory,
+        network_task,
+        serial_irq_task,
     )))
 }
 

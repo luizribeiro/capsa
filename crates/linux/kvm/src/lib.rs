@@ -113,31 +113,14 @@ impl HypervisorBackend for KvmBackend {
 
     fn kernel_cmdline_defaults(&self) -> KernelCmdline {
         let mut cmdline = KernelCmdline::new();
-        // Use virtio-console for higher throughput
+        // Use virtio-console (hvc0) for console I/O
         cmdline.console("hvc0");
         cmdline.arg("reboot", "t");
         cmdline.arg("panic", "-1");
-        cmdline.flag("quiet");
-        // virtio-console MMIO device
-        cmdline.arg(
-            "virtio_mmio.device",
-            format!(
-                "0x{:x}@0x{:x}:{}",
-                arch::VIRTIO_MMIO_SIZE,
-                arch::VIRTIO_MMIO_BASE,
-                arch::VIRTIO_CONSOLE_IRQ
-            ),
-        );
-        // virtio-net MMIO device
-        cmdline.arg(
-            "virtio_mmio.device",
-            format!(
-                "0x{:x}@0x{:x}:{}",
-                arch::VIRTIO_MMIO_SIZE,
-                arch::VIRTIO_NET_MMIO_BASE,
-                arch::VIRTIO_NET_IRQ
-            ),
-        );
+        cmdline.flag("threadirqs"); // Use threaded interrupt handlers
+        // Force use of MP tables for interrupt routing (no ACPI in this minimal VMM)
+        cmdline.arg("acpi", "off");
+        // Note: virtio-net is added dynamically in vm.rs when UserNat is enabled
         cmdline
     }
 

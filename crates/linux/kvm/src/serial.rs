@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::io::{self, Write};
 use std::os::fd::OwnedFd;
 use std::sync::{Arc, Mutex};
@@ -35,7 +34,6 @@ impl Trigger for EventFdTrigger {
 
 pub struct SerialDevice {
     serial: Mutex<Serial<EventFdTrigger, NoEvents, Box<dyn Write + Send>>>,
-    input_buffer: Mutex<VecDeque<u8>>,
     interrupt_evt: Arc<EventFd>,
 }
 
@@ -46,7 +44,6 @@ impl SerialDevice {
         let serial = Serial::with_events(trigger, NoEvents, output);
         Self {
             serial: Mutex::new(serial),
-            input_buffer: Mutex::new(VecDeque::new()),
             interrupt_evt,
         }
     }
@@ -56,24 +53,14 @@ impl SerialDevice {
     }
 
     pub fn enqueue_input(&self, data: &[u8]) {
-        let mut input = self.input_buffer.lock().unwrap();
-        input.extend(data);
+        let mut serial = self.serial.lock().unwrap();
+        let _ = serial.enqueue_raw_bytes(data);
     }
 }
 
 impl MutDevicePio for SerialDevice {
     fn pio_read(&mut self, _base: PioAddress, offset: PioAddressOffset, data: &mut [u8]) {
         let mut serial = self.serial.lock().unwrap();
-
-        let mut input = self.input_buffer.lock().unwrap();
-        if !input.is_empty() {
-            let bytes: Vec<u8> = input.drain(..).collect();
-            drop(input);
-            serial.enqueue_raw_bytes(&bytes).ok();
-        } else {
-            drop(input);
-        }
-
         if !data.is_empty() {
             data[0] = serial.read(offset as u8);
         }

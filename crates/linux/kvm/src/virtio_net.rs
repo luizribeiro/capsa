@@ -9,12 +9,12 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+use kvm_ioctls::VmFd;
 use virtio_queue::desc::split::Descriptor;
 use virtio_queue::{Queue, QueueT};
 use vm_device::MutDeviceMmio;
 use vm_device::bus::{MmioAddress, MmioAddressOffset};
 use vm_memory::{Bytes, GuestAddress, GuestMemoryMmap};
-use vmm_sys_util::eventfd::EventFd;
 
 const VIRTIO_ID_NET: u32 = 1;
 
@@ -56,8 +56,9 @@ const VIRTIO_INT_USED_RING: u32 = 1;
 const VIRTIO_F_VERSION_1: u64 = 1 << 32;
 const VIRTIO_NET_F_MAC: u64 = 1 << 5;
 
-// Virtio-net header size (without mergeable buffers)
-const VIRTIO_NET_HDR_SIZE: usize = 10;
+// Virtio-net header size
+// With VIRTIO_F_VERSION_1, the modern header includes num_buffers (12 bytes total)
+const VIRTIO_NET_HDR_SIZE: usize = 12;
 
 struct VirtioQueueState {
     ready: bool,
@@ -65,6 +66,8 @@ struct VirtioQueueState {
     desc_table: u64,
     avail_ring: u64,
     used_ring: u64,
+    next_avail: u16,
+    next_used: u16,
 }
 
 impl Default for VirtioQueueState {
@@ -75,6 +78,8 @@ impl Default for VirtioQueueState {
             desc_table: 0,
             avail_ring: 0,
             used_ring: 0,
+            next_avail: 0,
+            next_used: 0,
         }
     }
 }
@@ -95,7 +100,11 @@ pub struct VirtioNet {
     queues: [VirtioQueueState; 2],
 
     interrupt_status: AtomicU32,
-    interrupt_evt: Arc<EventFd>,
+
+    /// VmFd for direct interrupt injection via set_irq_line
+    vm_fd: Arc<VmFd>,
+    /// IRQ number for this device
+    irq: u32,
 
     /// File descriptor for frame I/O (our end of the socketpair)
     socket_fd: OwnedFd,
@@ -114,7 +123,8 @@ impl VirtioNet {
     ///
     /// The `socket_fd` is our end of a socketpair; the other end should be
     /// passed to the UserNatStack via SocketPairDevice.
-    pub fn new(socket_fd: OwnedFd, mac: [u8; 6]) -> Self {
+    /// The `vm_fd` is used for direct interrupt injection via set_irq_line.
+    pub fn new(socket_fd: OwnedFd, mac: [u8; 6], vm_fd: Arc<VmFd>, irq: u32) -> Self {
         Self {
             device_features: VIRTIO_F_VERSION_1 | VIRTIO_NET_F_MAC,
             driver_features: 0,
@@ -124,7 +134,8 @@ impl VirtioNet {
             queue_sel: 0,
             queues: [VirtioQueueState::default(), VirtioQueueState::default()],
             interrupt_status: AtomicU32::new(0),
-            interrupt_evt: Arc::new(EventFd::new(0).expect("failed to create eventfd")),
+            vm_fd,
+            irq,
             socket_fd,
             mac,
             rx_queue: VecDeque::new(),
@@ -136,14 +147,12 @@ impl VirtioNet {
         self.memory = Some(memory);
     }
 
-    pub fn interrupt_evt(&self) -> &EventFd {
-        &self.interrupt_evt
-    }
-
     fn signal_used_queue(&self) {
         self.interrupt_status
             .fetch_or(VIRTIO_INT_USED_RING, Ordering::SeqCst);
-        let _ = self.interrupt_evt.write(1);
+        // Edge-triggered interrupt: assert then de-assert
+        let _ = self.vm_fd.set_irq_line(self.irq, true);
+        let _ = self.vm_fd.set_irq_line(self.irq, false);
     }
 
     fn is_activated(&self) -> bool {
@@ -203,6 +212,8 @@ impl VirtioNet {
         let _ = queue.try_set_desc_table_address(GuestAddress(queue_state.desc_table));
         let _ = queue.try_set_avail_ring_address(GuestAddress(queue_state.avail_ring));
         let _ = queue.try_set_used_ring_address(GuestAddress(queue_state.used_ring));
+        queue.set_next_avail(queue_state.next_avail);
+        queue.set_next_used(queue_state.next_used);
         queue.set_ready(true);
 
         let mut used_any = false;
@@ -225,7 +236,7 @@ impl VirtioNet {
             // Skip the virtio-net header, send only the ethernet frame
             if frame_data.len() > VIRTIO_NET_HDR_SIZE {
                 let frame = &frame_data[VIRTIO_NET_HDR_SIZE..];
-                let _ = unsafe {
+                unsafe {
                     nix::libc::send(
                         self.socket_fd.as_raw_fd(),
                         frame.as_ptr() as *const _,
@@ -240,6 +251,10 @@ impl VirtioNet {
             }
         }
 
+        // Save the updated queue state for next time
+        self.queues[TX_QUEUE_INDEX].next_avail = queue.next_avail();
+        self.queues[TX_QUEUE_INDEX].next_used = queue.next_used();
+
         if used_any {
             self.signal_used_queue();
         }
@@ -253,11 +268,7 @@ impl VirtioNet {
         };
 
         let queue_state = &self.queues[RX_QUEUE_INDEX];
-        if !queue_state.ready {
-            return;
-        }
-
-        if self.rx_queue.is_empty() {
+        if !queue_state.ready || self.rx_queue.is_empty() {
             return;
         }
 
@@ -265,14 +276,17 @@ impl VirtioNet {
         let _ = queue.try_set_desc_table_address(GuestAddress(queue_state.desc_table));
         let _ = queue.try_set_avail_ring_address(GuestAddress(queue_state.avail_ring));
         let _ = queue.try_set_used_ring_address(GuestAddress(queue_state.used_ring));
+        queue.set_next_avail(queue_state.next_avail);
+        queue.set_next_used(queue_state.next_used);
         queue.set_ready(true);
 
         let mut used_any = false;
 
-        while let Some(mut desc_chain) = queue.pop_descriptor_chain(memory) {
-            let Some(frame) = self.rx_queue.pop_front() else {
+        while !self.rx_queue.is_empty() {
+            let Some(mut desc_chain) = queue.pop_descriptor_chain(memory) else {
                 break;
             };
+            let frame = self.rx_queue.pop_front().unwrap();
 
             let mut written = 0u32;
             let mut frame_offset = 0usize;
@@ -305,6 +319,10 @@ impl VirtioNet {
                 used_any = true;
             }
         }
+
+        // Save the updated queue state for next time
+        self.queues[RX_QUEUE_INDEX].next_avail = queue.next_avail();
+        self.queues[RX_QUEUE_INDEX].next_used = queue.next_used();
 
         if used_any {
             self.signal_used_queue();

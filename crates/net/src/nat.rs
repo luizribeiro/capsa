@@ -187,9 +187,20 @@ impl NatTable {
                 return self.handle_tcp_fin(&key, &tcp_packet).await;
             }
 
+            // Handle data or transition state on ACK
+            let payload = tcp_packet.payload();
+
+            if entry.state == TcpState::SynReceived && ack {
+                // Third leg of handshake - transition to Established
+                entry.state = TcpState::Established;
+                tracing::debug!(
+                    "NAT: TCP {} -> {} connection established",
+                    key.guest_addr,
+                    key.remote_addr
+                );
+            }
+
             if entry.state == TcpState::Established {
-                // Data packet
-                let payload = tcp_packet.payload();
                 if !payload.is_empty() {
                     return self.handle_tcp_data(&key, &tcp_packet).await;
                 }
@@ -343,11 +354,6 @@ impl NatTable {
         let payload = tcp_packet.payload();
         if payload.is_empty() {
             return true;
-        }
-
-        // Update state to Established if we were in SynReceived
-        if entry.state == TcpState::SynReceived {
-            entry.state = TcpState::Established;
         }
 
         // Send data to the forwarding task

@@ -8,7 +8,11 @@ use std::time::Duration;
 
 #[apple_main::harness_test]
 async fn test_vm_boots_successfully() {
-    let vm = default_test_vm().build().await.expect("Failed to build VM");
+    let vm = default_test_vm()
+        .no_network()
+        .build()
+        .await
+        .expect("Failed to build VM");
     let console = vm.console().await.expect("Failed to get console");
 
     console
@@ -23,6 +27,7 @@ async fn test_vm_boots_successfully() {
 async fn test_sequential_vms() {
     for i in 0..2 {
         let vm = test_vm("default")
+            .no_network()
             .build()
             .await
             .unwrap_or_else(|e| panic!("Failed to build VM {}: {}", i, e));

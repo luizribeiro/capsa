@@ -117,11 +117,7 @@ fn boot_config(name: &str) -> LinuxDirectBootConfig {
 /// `nix-build nix/test-vms -A aarch64.combined -o result-vms`
 pub fn test_vm(name: &str) -> LinuxVmBuilder {
     let config = boot_config(name);
-    let builder = Capsa::vm(config).console_enabled();
-    // TODO: Enable networking once KVM backend supports NAT
-    #[cfg(feature = "linux-kvm")]
-    let builder = builder.no_network();
-    builder
+    Capsa::vm(config).console_enabled()
 }
 
 /// Convenience function for the default test VM (with networking).
@@ -134,11 +130,7 @@ pub fn default_test_vm() -> LinuxVmBuilder {
 /// Use this instead of [`test_vm`] when you need to create a VM pool.
 pub fn test_pool(name: &str) -> LinuxVmBuilder<Yes> {
     let config = boot_config(name);
-    let builder = Capsa::pool(config).console_enabled();
-    // TODO: Enable networking once KVM backend supports NAT
-    #[cfg(feature = "linux-kvm")]
-    let builder = builder.no_network();
-    builder
+    Capsa::pool(config).console_enabled()
 }
 
 fn uefi_boot_config(name: &str) -> UefiBootConfig {

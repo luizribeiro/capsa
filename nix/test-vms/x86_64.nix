@@ -25,6 +25,15 @@ let
       # Virtio MMIO transport (used by KVM backend)
       VIRTIO_MMIO = true;
       VIRTIO_MMIO_CMDLINE_DEVICES = true;
+
+      # IOAPIC support for interrupt routing
+      X86_LOCAL_APIC = true;
+      X86_IO_APIC = true;
+      X86_MPPARSE = true;
+
+      # Serial console
+      SERIAL_8250 = true;
+      SERIAL_8250_CONSOLE = true;
     };
   };
 

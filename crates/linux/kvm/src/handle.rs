@@ -21,6 +21,10 @@ pub struct KvmVmHandle {
     console_enabled: bool,
     #[allow(dead_code)]
     memory: Arc<GuestMemoryMmap>, // Keep memory alive for the VM's lifetime
+    #[allow(dead_code)]
+    network_task: Option<TokioJoinHandle<()>>, // Keep network polling task alive
+    #[allow(dead_code)]
+    serial_irq_task: Option<TokioJoinHandle<()>>, // Keep serial IRQ injection task alive
 }
 
 impl KvmVmHandle {
@@ -35,6 +39,8 @@ impl KvmVmHandle {
         console_write_fd: Option<OwnedFd>,
         console_enabled: bool,
         memory: Arc<GuestMemoryMmap>,
+        network_task: Option<TokioJoinHandle<()>>,
+        serial_irq_task: Option<TokioJoinHandle<()>>,
     ) -> Self {
         Self {
             running,
@@ -46,6 +52,8 @@ impl KvmVmHandle {
             console_write_fd: Mutex::new(console_write_fd),
             console_enabled,
             memory,
+            network_task,
+            serial_irq_task,
         }
     }
 }
