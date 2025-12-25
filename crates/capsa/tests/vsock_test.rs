@@ -43,11 +43,16 @@ async fn test_vsock_ping_pong() {
 
         let console = vm.console().await.expect("Failed to get console");
 
-        // Wait for boot and vsock-pong to start
+        // Wait for boot then start vsock-pong
         console
-            .wait_for_timeout("vsock-pong started", Duration::from_secs(30))
+            .wait_for_timeout("Boot successful", Duration::from_secs(30))
             .await
-            .expect("VM did not start vsock-pong");
+            .expect("VM did not boot");
+
+        console
+            .exec("/bin/vsock-pong 1024 &", Duration::from_secs(5))
+            .await
+            .expect("Failed to start vsock-pong");
 
         // Get the vsock socket
         let socket = vm

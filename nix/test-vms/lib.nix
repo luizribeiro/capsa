@@ -64,12 +64,6 @@ if [ -e /dev/vda ]; then
   fi
 fi
 
-if [ -x /bin/vsock-pong ]; then
-  echo "Starting vsock-pong on port 1024..."
-  /bin/vsock-pong 1024 &
-  echo "vsock-pong started in background"
-fi
-
 exec sh
   '';
 
