@@ -1,8 +1,9 @@
-use crate::console;
+use crate::{console, network};
 use capsa_apple_vz::NativeVirtualizationBackend;
 use capsa_apple_vzd_ipc::{RpcResult, VmConfig, VmHandleId, VmService};
 use capsa_core::{BackendVmHandle, HypervisorBackend};
 use std::collections::HashMap;
+use std::os::fd::AsRawFd;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tarpc::context::Context;
@@ -45,9 +46,17 @@ impl VmService for VzdServer {
     async fn start(
         self,
         _: Context,
-        config: VmConfig,
+        mut config: VmConfig,
         _console_socket_path: Option<String>,
     ) -> RpcResult<VmHandleId> {
+        // Check if fd 4 was passed for cluster networking
+        if let Some(network_fd) = network::try_get_network_fd() {
+            config.cluster_network_fd = Some(network_fd.as_raw_fd());
+            // Keep the fd alive for the lifetime of the VM - leak it intentionally
+            // The fd will be used by the backend for network I/O
+            std::mem::forget(network_fd);
+        }
+
         let backend = NativeVirtualizationBackend::new();
         let handle: Box<dyn BackendVmHandle> =
             backend.start(&config).await.map_err(|e| e.to_string())?;

@@ -3,6 +3,7 @@
 //! This binary provides an RPC interface to the NativeVirtualizationBackend.
 
 mod console;
+mod network;
 mod server;
 #[cfg(test)]
 mod tests;
