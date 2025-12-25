@@ -9,12 +9,29 @@
 //! - VMs get IPs via DHCP from the cluster's network
 //! - VMs can ping each other
 //! - VMs can communicate via TCP/UDP
-//!
-//! NOTE: These tests only work with the macos-native backend.
 
 use capsa::test_utils::test_vm;
 use capsa::{NetworkCluster, NetworkClusterConfig, NetworkMode};
 use std::time::Duration;
+
+fn should_skip() -> bool {
+    #[cfg(feature = "linux-kvm")]
+    {
+        eprintln!("Skipping: KVM backend doesn't support Cluster yet");
+        return true;
+    }
+
+    #[cfg(feature = "vfkit")]
+    {
+        eprintln!("Skipping: vfkit backend doesn't support Cluster yet");
+        return true;
+    }
+
+    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    {
+        false
+    }
+}
 
 // =============================================================================
 // Basic Cluster Tests
@@ -23,19 +40,10 @@ use std::time::Duration;
 /// Tests that a single VM can join a cluster and get network configured.
 #[apple_main::harness_test]
 async fn test_cluster_single_vm_boot() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM backend doesn't support Cluster yet");
+    if should_skip() {
         return;
     }
 
-    #[cfg(feature = "vfkit")]
-    {
-        eprintln!("Skipping: vfkit backend doesn't support Cluster yet");
-        return;
-    }
-
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
     {
         // Create a cluster for the test
         let cluster = NetworkCluster::create(NetworkClusterConfig {
@@ -69,19 +77,10 @@ async fn test_cluster_single_vm_boot() {
 /// Tests that two VMs can join the same cluster.
 #[apple_main::harness_test]
 async fn test_cluster_two_vms_boot() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM backend doesn't support Cluster yet");
+    if should_skip() {
         return;
     }
 
-    #[cfg(feature = "vfkit")]
-    {
-        eprintln!("Skipping: vfkit backend doesn't support Cluster yet");
-        return;
-    }
-
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
     {
         // Create a cluster for the test
         let cluster = NetworkCluster::create(NetworkClusterConfig {
@@ -148,19 +147,10 @@ async fn test_cluster_two_vms_boot() {
 /// We get VM1's IP and have VM2 ping it.
 #[apple_main::harness_test]
 async fn test_cluster_vm_to_vm_ping() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM backend doesn't support Cluster yet");
+    if should_skip() {
         return;
     }
 
-    #[cfg(feature = "vfkit")]
-    {
-        eprintln!("Skipping: vfkit backend doesn't support Cluster yet");
-        return;
-    }
-
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
     {
         // Create a cluster for the test
         let cluster = NetworkCluster::create(NetworkClusterConfig {
@@ -231,19 +221,10 @@ async fn test_cluster_vm_to_vm_ping() {
 /// VM1 runs a TCP server, VM2 connects to it.
 #[apple_main::harness_test]
 async fn test_cluster_vm_to_vm_tcp() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM backend doesn't support Cluster yet");
+    if should_skip() {
         return;
     }
 
-    #[cfg(feature = "vfkit")]
-    {
-        eprintln!("Skipping: vfkit backend doesn't support Cluster yet");
-        return;
-    }
-
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
     {
         // Create a cluster for the test
         let cluster = NetworkCluster::create(NetworkClusterConfig {
@@ -315,19 +296,10 @@ async fn test_cluster_vm_to_vm_tcp() {
 /// Tests that three VMs can all communicate on the same cluster.
 #[apple_main::harness_test]
 async fn test_cluster_three_vms() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM backend doesn't support Cluster yet");
+    if should_skip() {
         return;
     }
 
-    #[cfg(feature = "vfkit")]
-    {
-        eprintln!("Skipping: vfkit backend doesn't support Cluster yet");
-        return;
-    }
-
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
     {
         // Create a cluster for the test
         let cluster = NetworkCluster::create(NetworkClusterConfig {
@@ -397,19 +369,10 @@ async fn test_cluster_three_vms() {
 /// Tests that VMs using get_or_create join the same cluster.
 #[apple_main::harness_test]
 async fn test_cluster_get_or_create() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM backend doesn't support Cluster yet");
+    if should_skip() {
         return;
     }
 
-    #[cfg(feature = "vfkit")]
-    {
-        eprintln!("Skipping: vfkit backend doesn't support Cluster yet");
-        return;
-    }
-
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
     {
         // Create cluster via get_or_create (creates it)
         let _cluster1 = NetworkCluster::get_or_create("shared-cluster");
