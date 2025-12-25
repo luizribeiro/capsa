@@ -26,6 +26,7 @@ fn create_config(kernel: PathBuf, initrd: PathBuf, cpus: u32, console_enabled: b
         shares: vec![],
         vsock: VsockConfig::default(),
         console_enabled,
+        cluster_network_fd: None,
     }
 }
 
@@ -182,6 +183,7 @@ async fn test_kvm_uefi_boot_unsupported() {
         shares: vec![],
         vsock: VsockConfig::default(),
         console_enabled: true,
+        cluster_network_fd: None,
     };
 
     let result = backend.start(&config).await;

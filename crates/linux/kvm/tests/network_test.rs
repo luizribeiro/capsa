@@ -46,6 +46,7 @@ fn create_network_config(kernel: PathBuf, initrd: PathBuf) -> VmConfig {
         shares: vec![],
         vsock: VsockConfig::default(),
         console_enabled: true,
+        cluster_network_fd: None,
     }
 }
 

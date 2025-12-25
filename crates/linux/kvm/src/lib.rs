@@ -66,6 +66,7 @@ impl KvmBackend {
                     none: true,
                     nat: false,
                     user_nat: true,
+                    cluster: false,
                 },
                 share_mechanisms: ShareMechanismSupport {
                     virtio_fs: false,

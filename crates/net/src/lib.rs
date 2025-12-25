@@ -14,9 +14,6 @@ mod bridge;
 #[cfg(unix)]
 mod socketpair;
 
-#[cfg(target_os = "linux")]
-mod tap;
-
 pub use cluster_stack::{ClusterStack, ClusterStackConfig};
 pub use device::SmoltcpDevice;
 pub use dhcp::DhcpServer;
