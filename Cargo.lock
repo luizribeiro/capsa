@@ -197,6 +197,7 @@ dependencies = [
  "capsa-apple-vzd-ipc",
  "capsa-core",
  "capsa-linux-kvm",
+ "capsa-net",
  "core-foundation",
  "criterion",
  "dispatch",

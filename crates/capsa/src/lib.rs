@@ -44,6 +44,7 @@
 
 mod backend;
 mod builder;
+mod cluster;
 mod config;
 mod console;
 pub mod guides;
@@ -77,7 +78,8 @@ pub use capsa_core::{
 pub use capsa_core::{MountMode, SharedDir};
 
 // Networking
-pub use capsa_core::NetworkMode;
+pub use capsa_core::{NetworkClusterConfig, NetworkMode};
+pub use cluster::NetworkCluster;
 
 // Vsock (VM sockets for host-guest communication)
 pub use capsa_core::{VsockConfig, VsockPortConfig};

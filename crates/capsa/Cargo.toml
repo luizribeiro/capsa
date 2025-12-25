@@ -26,6 +26,7 @@ nix = { version = "0.29", features = ["process", "signal", "fs", "term"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 capsa-apple-vz = { path = "../apple/vz", optional = true }
+capsa-net = { path = "../net" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 capsa-linux-kvm = { path = "../linux/kvm", optional = true }
