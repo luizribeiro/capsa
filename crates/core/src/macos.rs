@@ -18,7 +18,7 @@ pub fn macos_virtualization_capabilities() -> BackendCapabilities {
             none: true,
             nat: true,
             user_nat: true,
-            cluster: false,
+            cluster: true,
         },
         share_mechanisms: ShareMechanismSupport {
             virtio_fs: true,
@@ -73,10 +73,12 @@ mod tests {
         }
 
         #[test]
-        fn supports_none_and_nat_networking() {
+        fn supports_all_network_modes() {
             let caps = macos_virtualization_capabilities();
             assert!(caps.network_modes.none);
             assert!(caps.network_modes.nat);
+            assert!(caps.network_modes.user_nat);
+            assert!(caps.network_modes.cluster);
         }
 
         #[test]
