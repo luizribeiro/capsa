@@ -4,10 +4,14 @@
 //! patterns and best practices.
 
 use capsa_core::{ConsoleStream, Error, Result};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader};
 use tokio::sync::Mutex;
 use tokio::time::timeout;
+
+/// Global command counter for unique markers.
+static CMD_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// High-level interface for interacting with a VM's serial console.
 ///
@@ -215,6 +219,42 @@ impl VmConsole {
         self.write_line(cmd).await?;
         let output = self.wait_for_timeout(prompt, duration).await?;
         Ok(output)
+    }
+
+    /// Executes a command and waits for it to complete.
+    ///
+    /// Uses a unique marker to reliably detect command completion, avoiding
+    /// the issue where patterns match in command echoes instead of actual output.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use std::time::Duration;
+    /// # async fn example(console: capsa::VmConsole) -> capsa::Result<()> {
+    /// let output = console.exec("echo hello", Duration::from_secs(5)).await?;
+    /// assert!(output.contains("hello"));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn exec(&self, cmd: &str, timeout_duration: Duration) -> Result<String> {
+        let cmd_id = CMD_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let marker = format!("__DONE_{}__", cmd_id);
+
+        // Append marker to command. The marker appears in:
+        // - Command echo: "cmd ; echo __DONE_X__" (marker after "echo ")
+        // - Output: "__DONE_X__" (marker at line start)
+        // By waiting for "\n__DONE_X__", we match output only.
+        let separator = if cmd.trim_end().ends_with('&') {
+            ""
+        } else {
+            " ;"
+        };
+        self.write_line(&format!("{}{} echo {}", cmd, separator, marker))
+            .await?;
+
+        // Wait for marker at start of line (output, not command echo)
+        let pattern = format!("\n{}", marker);
+        self.wait_for_timeout(&pattern, timeout_duration).await
     }
 }
 
