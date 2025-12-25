@@ -2,8 +2,8 @@ use crate::device::SmoltcpDevice;
 use crate::dhcp::DhcpServer;
 use crate::error::NetError;
 use crate::frame_io::FrameIO;
-use crate::nat::{FrameReceiver, NatTable, frame_channel};
-use crate::policy::{PolicyChecker, PolicyResult};
+use crate::nat::{FrameReceiver, NatTable, craft_tcp_rst, frame_channel};
+use crate::policy::{PacketProtocol, PolicyChecker, PolicyResult};
 use crate::port_forward::PortForwarder;
 
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
@@ -11,8 +11,10 @@ use smoltcp::socket::udp::{self, PacketBuffer, PacketMetadata};
 use smoltcp::time::Instant;
 use smoltcp::wire::{
     DhcpPacket, EthernetAddress, EthernetFrame, EthernetProtocol, HardwareAddress, IpAddress,
-    IpCidr, IpEndpoint, Ipv4Address, Ipv4Packet,
+    IpCidr, IpEndpoint, IpProtocol, Ipv4Address, Ipv4Packet, TcpPacket,
 };
+
+use std::net::SocketAddrV4;
 
 use std::net::Ipv4Addr;
 use std::time::Duration;
@@ -231,11 +233,19 @@ impl<F: FrameIO> UserNatStack<F> {
                         match checker.check(&info) {
                             PolicyResult::Deny => {
                                 tracing::debug!(
-                                    "Policy denied: {} -> {}:{}",
+                                    "Policy denied: {:?} {} -> {}:{}",
+                                    info.protocol,
                                     info.src_ip,
                                     info.dst_ip,
                                     info.dst_port.unwrap_or(0)
                                 );
+                                // Send TCP RST for denied TCP SYN to avoid guest waiting for timeout
+                                if info.protocol == PacketProtocol::Tcp {
+                                    let frame_copy = frame.to_vec();
+                                    self.device.discard_rx();
+                                    self.send_rst_for_denied_packet(&frame_copy);
+                                    continue;
+                                }
                                 self.device.discard_rx();
                                 continue;
                             }
@@ -366,6 +376,67 @@ impl<F: FrameIO> UserNatStack<F> {
                     }
                 }
             }
+        }
+    }
+
+    /// Send a TCP RST packet to the guest for a denied connection.
+    /// This allows the guest to fail fast instead of waiting for TCP retransmit timeouts.
+    fn send_rst_for_denied_packet(&mut self, frame: &[u8]) {
+        let Ok(eth_frame) = EthernetFrame::new_checked(frame) else {
+            return;
+        };
+
+        let Ok(ip_packet) = Ipv4Packet::new_checked(eth_frame.payload()) else {
+            return;
+        };
+
+        if ip_packet.next_header() != IpProtocol::Tcp {
+            return;
+        }
+
+        let Ok(tcp_packet) = TcpPacket::new_checked(ip_packet.payload()) else {
+            return;
+        };
+
+        // Only send RST for SYN packets (new connection attempts)
+        if !tcp_packet.syn() || tcp_packet.ack() {
+            return;
+        }
+
+        let guest_mac = eth_frame.src_addr();
+        let src_ip: Ipv4Addr = ip_packet.src_addr();
+        let dst_ip: Ipv4Addr = ip_packet.dst_addr();
+        let guest_addr = SocketAddrV4::new(src_ip, tcp_packet.src_port());
+        let remote_addr = SocketAddrV4::new(dst_ip, tcp_packet.dst_port());
+        let guest_seq = tcp_packet.seq_number().0 as u32;
+
+        // Craft and send RST packet directly through device for immediate delivery
+        if let Some(rst_frame) = craft_tcp_rst(
+            remote_addr,
+            guest_addr,
+            0,
+            guest_seq.wrapping_add(1),
+            EthernetAddress(self.config.gateway_mac),
+            guest_mac,
+        ) {
+            match self.device.send_frame(&rst_frame) {
+                Ok(()) => {
+                    tracing::debug!(
+                        "Sent RST to guest {} for denied connection to {}",
+                        guest_addr,
+                        remote_addr
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("Failed to send RST for denied packet: {}", e);
+                }
+            }
+        } else {
+            tracing::warn!(
+                "Failed to craft RST packet for {} -> {}",
+                guest_addr,
+                remote_addr
+            );
         }
     }
 }

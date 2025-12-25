@@ -695,7 +695,7 @@ fn craft_tcp_fin(
 }
 
 /// Craft a TCP RST frame to send back to guest.
-fn craft_tcp_rst(
+pub(crate) fn craft_tcp_rst(
     src_addr: SocketAddrV4,
     dst_addr: SocketAddrV4,
     seq_num: u32,

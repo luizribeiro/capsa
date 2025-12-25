@@ -33,6 +33,7 @@ impl SocketPairDevice {
         let guest_fd = unsafe { OwnedFd::from_raw_fd(fds[1]) };
 
         set_nonblocking(&host_fd)?;
+        increase_socket_buffer(&host_fd)?;
 
         let fd = AsyncFd::new(host_fd)?;
 
@@ -92,6 +93,25 @@ fn set_nonblocking(fd: &OwnedFd) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     let result = unsafe { libc::fcntl(raw, libc::F_SETFL, flags | libc::O_NONBLOCK) };
+    if result < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+fn increase_socket_buffer(fd: &OwnedFd) -> io::Result<()> {
+    let raw = fd.as_raw_fd();
+    // Use 256KB send buffer to avoid EWOULDBLOCK under parallel load
+    let size: libc::c_int = 256 * 1024;
+    let result = unsafe {
+        libc::setsockopt(
+            raw,
+            libc::SOL_SOCKET,
+            libc::SO_SNDBUF,
+            &size as *const _ as *const libc::c_void,
+            std::mem::size_of_val(&size) as libc::socklen_t,
+        )
+    };
     if result < 0 {
         return Err(io::Error::last_os_error());
     }
