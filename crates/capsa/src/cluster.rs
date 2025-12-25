@@ -8,15 +8,15 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 use tracing::info;
 
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 use capsa_core::{Error, Result};
-#[cfg(target_os = "macos")]
-use capsa_net::{ClusterStack, ClusterStackConfig, VirtualSwitch};
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
+use capsa_net::{ClusterStack, ClusterStackConfig, SwitchPort, VirtualSwitch};
+#[cfg(unix)]
 use nix::libc;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 use std::os::fd::OwnedFd;
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Global registry of network clusters.
@@ -32,15 +32,15 @@ fn clusters() -> &'static Mutex<HashMap<String, Arc<NetworkCluster>>> {
 /// VMs get IP addresses via DHCP from the cluster's DHCP server.
 pub struct NetworkCluster {
     config: NetworkClusterConfig,
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     switch: VirtualSwitch,
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     dhcp_started: AtomicBool,
 }
 
 impl NetworkCluster {
     /// Create a new network cluster with the given configuration.
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     pub fn create(config: NetworkClusterConfig) -> Arc<Self> {
         let switch = VirtualSwitch::new();
         info!(name = %config.name, subnet = %config.subnet, "Created network cluster");
@@ -59,7 +59,7 @@ impl NetworkCluster {
     }
 
     /// Create a new network cluster with the given configuration.
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(unix))]
     pub fn create(config: NetworkClusterConfig) -> Arc<Self> {
         info!(name = %config.name, subnet = %config.subnet, "Created network cluster");
 
@@ -73,7 +73,7 @@ impl NetworkCluster {
     }
 
     /// Get an existing cluster by name, or create it with default config if it doesn't exist.
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     pub fn get_or_create(name: &str) -> Arc<Self> {
         let mut clusters = clusters().lock().unwrap();
 
@@ -100,7 +100,7 @@ impl NetworkCluster {
     }
 
     /// Get an existing cluster by name, or create it with default config if it doesn't exist.
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(not(unix))]
     pub fn get_or_create(name: &str) -> Arc<Self> {
         let mut clusters = clusters().lock().unwrap();
 
@@ -121,7 +121,7 @@ impl NetworkCluster {
         cluster
     }
 
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     async fn ensure_dhcp_started(&self) {
         if self
             .dhcp_started
@@ -153,14 +153,14 @@ impl NetworkCluster {
     /// Returns `(host_fd, guest_fd)` where:
     /// - `host_fd` should be used with `bridge_to_switch` to connect to the switch
     /// - `guest_fd` should be passed to the VM's network device
-    #[cfg(target_os = "macos")]
+    #[cfg(unix)]
     pub async fn create_port(&self) -> Result<ClusterPort> {
         use std::os::fd::{FromRawFd, RawFd};
 
         // Start DHCP server if not already running
         self.ensure_dhcp_started().await;
 
-        let switch_port = self.switch.create_port().await;
+        let switch_port: SwitchPort = self.switch.create_port().await;
         let port_id = switch_port.id();
 
         // Create socketpair for this VM
@@ -196,7 +196,7 @@ impl NetworkCluster {
 }
 
 /// A port on a network cluster for a VM.
-#[cfg(target_os = "macos")]
+#[cfg(unix)]
 pub struct ClusterPort {
     /// Port ID on the switch.
     pub port_id: usize,
@@ -205,7 +205,7 @@ pub struct ClusterPort {
     /// Guest-side file descriptor (for VM network device).
     pub guest_fd: OwnedFd,
     /// The underlying switch port.
-    pub switch_port: capsa_net::SwitchPort,
+    pub switch_port: SwitchPort,
 }
 
 #[cfg(test)]

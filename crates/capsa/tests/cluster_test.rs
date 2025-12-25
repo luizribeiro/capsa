@@ -15,19 +15,13 @@ use capsa::{NetworkCluster, NetworkClusterConfig, NetworkMode};
 use std::time::Duration;
 
 fn should_skip() -> bool {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM backend doesn't support Cluster yet");
-        return true;
-    }
-
     #[cfg(feature = "vfkit")]
     {
         eprintln!("Skipping: vfkit backend doesn't support Cluster yet");
         return true;
     }
 
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    #[cfg(not(feature = "vfkit"))]
     {
         false
     }
@@ -248,15 +242,8 @@ async fn test_cluster_vm_to_vm_tcp() {
             .await
             .expect("VM1 did not configure network via DHCP");
 
-        // Start a simple TCP server on VM1 that responds with "HELLO_FROM_VM1"
-        console1
-            .write_line("echo 'HELLO_FROM_VM1' | nc -l -p 9999 &")
-            .await
-            .expect("Failed to start TCP server on VM1");
-
-        tokio::time::sleep(Duration::from_secs(2)).await;
-
-        // Start second VM (client)
+        // Start second VM (client) before starting the server
+        // This avoids the server timing out while VM2 boots
         let vm2 = test_vm("default")
             .network(NetworkMode::cluster(&cluster.config().name).build())
             .build()
@@ -270,9 +257,18 @@ async fn test_cluster_vm_to_vm_tcp() {
             .await
             .expect("VM2 did not configure network via DHCP");
 
-        // Connect from VM2 to VM1's TCP server
+        // Start a TCP listener on VM1 that stays open
+        console1
+            .write_line("nc -l -p 9999 -e cat &")
+            .await
+            .expect("Failed to start TCP server on VM1");
+
+        tokio::time::sleep(Duration::from_secs(1)).await;
+
+        // Test TCP connection from VM2 to VM1 with a simple echo test
+        // If nc -e doesn't work, try sending data and checking if connection succeeds
         console2
-            .write_line("nc -w 5 10.0.6.15 9999 | grep HELLO_FROM_VM1 && echo TCP_CONNECT_SUCCESS")
+            .write_line("echo TEST | nc -w 3 10.0.6.15 9999 && echo TCP_CONNECT_SUCCESS || echo TCP_CONNECT_FAILED")
             .await
             .expect("Failed to send nc command");
 

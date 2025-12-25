@@ -114,8 +114,11 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         ));
     }
 
-    // Add virtio-net MMIO device to cmdline if UserNat networking is enabled
-    if matches!(&config.network, NetworkMode::UserNat(_)) {
+    // Add virtio-net MMIO device to cmdline if networking is enabled
+    if matches!(
+        &config.network,
+        NetworkMode::UserNat(_) | NetworkMode::Cluster(_)
+    ) {
         cmdline.push_str(&format!(
             " virtio_mmio.device=0x{:x}@0x{:x}:{}",
             VIRTIO_MMIO_SIZE, VIRTIO_NET_MMIO_BASE, VIRTIO_NET_IRQ
@@ -291,57 +294,117 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         None
     };
 
-    // Set up virtio-net device if UserNat networking is configured
-    let network_task = if let NetworkMode::UserNat(_) = &config.network {
-        // Create socketpair for frame I/O between virtio-net and UserNatStack
-        let (host_device, guest_fd) = SocketPairDevice::new().map_err(|e| {
-            Error::StartFailed(format!("failed to create network socketpair: {}", e))
-        })?;
+    // Set up virtio-net device if networking is configured
+    let network_task = match &config.network {
+        NetworkMode::UserNat(_) => {
+            // Create socketpair for frame I/O between virtio-net and UserNatStack
+            let (host_device, guest_fd) = SocketPairDevice::new().map_err(|e| {
+                Error::StartFailed(format!("failed to create network socketpair: {}", e))
+            })?;
 
-        // Default MAC address for the guest (52:54:00:xx:xx:xx is QEMU convention)
-        let mac = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
+            // Default MAC address for the guest (52:54:00:xx:xx:xx is QEMU convention)
+            let mac = [0x52, 0x54, 0x00, 0x12, 0x34, 0x56];
 
-        // VirtioNet uses direct interrupt injection via set_irq_line
-        let virtio_net = Arc::new(Mutex::new(VirtioNet::new(
-            guest_fd,
-            mac,
-            vm_fd.clone(),
-            VIRTIO_NET_IRQ,
-        )));
-        virtio_net.lock().unwrap().set_memory(memory.clone());
+            // VirtioNet uses direct interrupt injection via set_irq_line
+            let virtio_net = Arc::new(Mutex::new(VirtioNet::new(
+                guest_fd,
+                mac,
+                vm_fd.clone(),
+                VIRTIO_NET_IRQ,
+            )));
+            virtio_net.lock().unwrap().set_memory(memory.clone());
 
-        register_mmio_device(
-            &mut io_manager,
-            VIRTIO_NET_MMIO_BASE,
-            VIRTIO_MMIO_SIZE,
-            virtio_net.clone(),
-            "virtio-net",
-        )?;
+            register_mmio_device(
+                &mut io_manager,
+                VIRTIO_NET_MMIO_BASE,
+                VIRTIO_MMIO_SIZE,
+                virtio_net.clone(),
+                "virtio-net",
+            )?;
 
-        tracing::debug!("virtio-net device registered");
+            tracing::debug!("virtio-net device registered for UserNat");
 
-        // Spawn the UserNatStack to handle NAT
-        let stack = UserNatStack::new(host_device, StackConfig::default());
-        tokio::spawn(async move {
-            if let Err(e) = stack.run().await {
-                tracing::error!("UserNat stack error: {:?}", e);
-            }
-        });
-
-        // Spawn a task to poll for incoming frames from the network
-        let virtio_net_for_rx = virtio_net.clone();
-        let task = tokio::spawn(async move {
-            let mut interval = tokio::time::interval(std::time::Duration::from_millis(1));
-            loop {
-                interval.tick().await;
-                if let Ok(mut net) = virtio_net_for_rx.try_lock() {
-                    net.poll_rx();
+            // Spawn the UserNatStack to handle NAT
+            let stack = UserNatStack::new(host_device, StackConfig::default());
+            tokio::spawn(async move {
+                if let Err(e) = stack.run().await {
+                    tracing::error!("UserNat stack error: {:?}", e);
                 }
-            }
-        });
-        Some(task)
-    } else {
-        None
+            });
+
+            // Spawn a task to poll for incoming frames from the network
+            let virtio_net_for_rx = virtio_net.clone();
+            let task = tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_millis(1));
+                loop {
+                    interval.tick().await;
+                    if let Ok(mut net) = virtio_net_for_rx.try_lock() {
+                        net.poll_rx();
+                    }
+                }
+            });
+            Some(task)
+        }
+        NetworkMode::Cluster(_) => {
+            // For Cluster mode, the guest fd is pre-created by the backend wrapper
+            let guest_fd = config.cluster_network_fd.ok_or_else(|| {
+                Error::StartFailed("Cluster mode requires cluster_network_fd to be set".to_string())
+            })?;
+            let guest_fd = unsafe { OwnedFd::from_raw_fd(guest_fd) };
+
+            // Generate unique MAC for cluster mode (VMs need unique MACs for L2 switching)
+            // Use 52:54:00 prefix (QEMU convention) + random bytes
+            let mac = {
+                use std::time::{SystemTime, UNIX_EPOCH};
+                let seed = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|d| d.as_nanos())
+                    .unwrap_or(0) as u64;
+                // Mix in process ID and fd for extra uniqueness
+                let mix = seed ^ (std::process::id() as u64) ^ (guest_fd.as_raw_fd() as u64);
+                [
+                    0x52,
+                    0x54,
+                    0x00,
+                    ((mix >> 16) & 0xFF) as u8,
+                    ((mix >> 8) & 0xFF) as u8,
+                    (mix & 0xFF) as u8,
+                ]
+            };
+
+            let virtio_net = Arc::new(Mutex::new(VirtioNet::new(
+                guest_fd,
+                mac,
+                vm_fd.clone(),
+                VIRTIO_NET_IRQ,
+            )));
+            virtio_net.lock().unwrap().set_memory(memory.clone());
+
+            register_mmio_device(
+                &mut io_manager,
+                VIRTIO_NET_MMIO_BASE,
+                VIRTIO_MMIO_SIZE,
+                virtio_net.clone(),
+                "virtio-net",
+            )?;
+
+            tracing::debug!("virtio-net device registered for Cluster");
+
+            // Spawn a task to poll for incoming frames from the network
+            // (bridge_to_switch is handled by the backend wrapper)
+            let virtio_net_for_rx = virtio_net.clone();
+            let task = tokio::spawn(async move {
+                let mut interval = tokio::time::interval(std::time::Duration::from_millis(1));
+                loop {
+                    interval.tick().await;
+                    if let Ok(mut net) = virtio_net_for_rx.try_lock() {
+                        net.poll_rx();
+                    }
+                }
+            });
+            Some(task)
+        }
+        _ => None,
     };
 
     let io_manager = Arc::new(io_manager);
