@@ -10,29 +10,22 @@
 //! NOTE: These tests work with the macos-native backend. The vfkit backend
 //! has a bug in v0.6.1 where the vsock Unix socket is never created.
 
-#[cfg(not(feature = "linux-kvm"))]
 use capsa::test_utils::test_vm;
-#[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+#[cfg(not(feature = "vfkit"))]
 use std::time::Duration;
-#[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+#[cfg(not(feature = "vfkit"))]
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Tests vsock ping-pong communication between host and guest.
 #[apple_main::harness_test]
 async fn test_vsock_ping_pong() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM backend doesn't support vsock yet");
-        return;
-    }
-
     #[cfg(feature = "vfkit")]
     {
         eprintln!("Skipping: vfkit v0.6.1 has a bug where vsock Unix socket is never created");
         return;
     }
 
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    #[cfg(not(feature = "vfkit"))]
     {
         // Start VM with vsock configured on port 1024
         let vm = test_vm("default")
@@ -94,14 +87,6 @@ async fn test_vsock_ping_pong() {
 
 #[apple_main::harness_test]
 async fn test_vsock_socket_info() {
-    // TODO: KVM backend doesn't support vsock yet
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping test_vsock_socket_info on KVM backend (vsock not yet implemented)");
-        return;
-    }
-
-    #[cfg(not(feature = "linux-kvm"))]
     {
         // Test that VsockSocket provides correct port and path info
         let vm = test_vm("default")
@@ -127,14 +112,6 @@ async fn test_vsock_socket_info() {
 
 #[apple_main::harness_test]
 async fn test_vsock_multiple_ports() {
-    // TODO: KVM backend doesn't support vsock yet
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping test_vsock_multiple_ports on KVM backend (vsock not yet implemented)");
-        return;
-    }
-
-    #[cfg(not(feature = "linux-kvm"))]
     {
         // Test configuring multiple vsock ports
         let vm = test_vm("default")

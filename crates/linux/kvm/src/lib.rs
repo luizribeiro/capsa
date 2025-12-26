@@ -31,7 +31,9 @@ mod handle;
 mod serial;
 mod virtio_console;
 mod virtio_net;
+mod virtio_vsock;
 mod vm;
+mod vsock_bridge;
 
 use async_trait::async_trait;
 use capsa_core::{
@@ -72,7 +74,7 @@ impl KvmBackend {
                     virtio_fs: false,
                     virtio_9p: false,
                 },
-                devices: DeviceSupport { vsock: false },
+                devices: DeviceSupport { vsock: true },
                 max_cpus: None,
                 max_memory_mb: None,
             },

@@ -11,6 +11,14 @@ let
   kernelImage = "bzImage";
   kernelTarget = "bzImage";
 
+  vsockPong = pkgs.pkgsStatic.rustPlatform.buildRustPackage {
+    name = "vsock-pong";
+    src = ../../crates/test-utils/vsock-pong;
+    cargoLock.lockFile = ../../crates/test-utils/vsock-pong/Cargo.lock;
+  };
+
+  extraBinaries = [ "${vsockPong}/bin/vsock-pong" ];
+
   kernel = vmLib.mkKernel {
     name = "x86_64";
     linuxArch = "x86";
@@ -39,6 +47,7 @@ let
 
   initrd = vmLib.mkInitrd {
     console = "hvc0";
+    inherit extraBinaries;
   };
 in
 vmLib.mkCombined {

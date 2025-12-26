@@ -25,6 +25,8 @@ pub struct KvmVmHandle {
     network_task: Option<TokioJoinHandle<()>>, // Keep network polling task alive
     #[allow(dead_code)]
     serial_irq_task: Option<TokioJoinHandle<()>>, // Keep serial IRQ injection task alive
+    #[allow(dead_code)]
+    vsock_task: Option<TokioJoinHandle<()>>, // Keep vsock polling task alive
 }
 
 impl KvmVmHandle {
@@ -41,6 +43,7 @@ impl KvmVmHandle {
         memory: Arc<GuestMemoryMmap>,
         network_task: Option<TokioJoinHandle<()>>,
         serial_irq_task: Option<TokioJoinHandle<()>>,
+        vsock_task: Option<TokioJoinHandle<()>>,
     ) -> Self {
         Self {
             running,
@@ -54,6 +57,7 @@ impl KvmVmHandle {
             memory,
             network_task,
             serial_irq_task,
+            vsock_task,
         }
     }
 }

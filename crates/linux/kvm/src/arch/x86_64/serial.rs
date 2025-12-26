@@ -8,3 +8,6 @@ pub const VIRTIO_CONSOLE_IRQ: u32 = 5;
 
 pub const VIRTIO_NET_MMIO_BASE: u64 = 0xd000_0200;
 pub const VIRTIO_NET_IRQ: u32 = 6;
+
+pub const VIRTIO_VSOCK_MMIO_BASE: u64 = 0xd000_0400;
+pub const VIRTIO_VSOCK_IRQ: u32 = 7;

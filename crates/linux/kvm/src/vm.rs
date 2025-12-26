@@ -1,13 +1,15 @@
 use crate::arch::{
     BOOT_PARAMS_ADDR, KERNEL_LOAD_ADDR, RTC_INDEX_PORT, RtcDevice, SERIAL_IRQ, SERIAL_PORT_BASE,
     SERIAL_PORT_END, VIRTIO_CONSOLE_IRQ, VIRTIO_MMIO_BASE, VIRTIO_MMIO_SIZE, VIRTIO_NET_IRQ,
-    VIRTIO_NET_MMIO_BASE, create_guest_memory, initrd_load_addr, run_vcpu, setup_boot_params,
-    setup_mptable, setup_regs, setup_sregs,
+    VIRTIO_NET_MMIO_BASE, VIRTIO_VSOCK_IRQ, VIRTIO_VSOCK_MMIO_BASE, create_guest_memory,
+    initrd_load_addr, run_vcpu, setup_boot_params, setup_mptable, setup_regs, setup_sregs,
 };
 use crate::handle::KvmVmHandle;
 use crate::serial::{SerialDevice, create_console_pipes};
 use crate::virtio_console::VirtioConsole;
 use crate::virtio_net::VirtioNet;
+use crate::virtio_vsock::VirtioVsock;
+use crate::vsock_bridge::VsockBridge;
 use capsa_core::{BackendVmHandle, BootMethod, Error, NetworkMode, Result, VmConfig};
 use capsa_net::{SocketPairDevice, StackConfig, UserNatStack};
 use kvm_bindings::{
@@ -122,6 +124,15 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         cmdline.push_str(&format!(
             " virtio_mmio.device=0x{:x}@0x{:x}:{}",
             VIRTIO_MMIO_SIZE, VIRTIO_NET_MMIO_BASE, VIRTIO_NET_IRQ
+        ));
+    }
+
+    // Add virtio-vsock MMIO device to cmdline if vsock is enabled
+    let vsock_enabled = config.vsock.is_enabled();
+    if vsock_enabled {
+        cmdline.push_str(&format!(
+            " virtio_mmio.device=0x{:x}@0x{:x}:{}",
+            VIRTIO_MMIO_SIZE, VIRTIO_VSOCK_MMIO_BASE, VIRTIO_VSOCK_IRQ
         ));
     }
 
@@ -394,6 +405,52 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         _ => None,
     };
 
+    // Set up virtio-vsock device if vsock is enabled
+    let vsock_task = if vsock_enabled {
+        // Create channels for device-bridge communication
+        let (device_to_bridge_tx, device_to_bridge_rx) = mpsc::unbounded_channel();
+        let (bridge_to_device_tx, bridge_to_device_rx) = mpsc::unbounded_channel();
+
+        // Create the vsock device
+        let virtio_vsock = Arc::new(Mutex::new(VirtioVsock::new(
+            vm_fd.clone(),
+            VIRTIO_VSOCK_IRQ,
+            device_to_bridge_tx,
+            bridge_to_device_rx,
+        )));
+        virtio_vsock.lock().unwrap().set_memory(memory.clone());
+
+        register_mmio_device(
+            &mut io_manager,
+            VIRTIO_VSOCK_MMIO_BASE,
+            VIRTIO_MMIO_SIZE,
+            virtio_vsock.clone(),
+            "virtio-vsock",
+        )?;
+
+        tracing::debug!("virtio-vsock device registered");
+
+        // Spawn the bridge task
+        let bridge = VsockBridge::new(config.vsock.ports.clone());
+        tokio::spawn(async move {
+            bridge.run(bridge_to_device_tx, device_to_bridge_rx).await;
+        });
+
+        // Spawn a task to poll the vsock device for bridge messages
+        let task = tokio::spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_millis(1));
+            loop {
+                interval.tick().await;
+                if let Ok(mut vsock) = virtio_vsock.try_lock() {
+                    vsock.poll();
+                }
+            }
+        });
+        Some(task)
+    } else {
+        None
+    };
+
     let io_manager = Arc::new(io_manager);
 
     let mut vcpu_handles = Vec::new();
@@ -503,6 +560,7 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         memory,
         network_task,
         serial_irq_task,
+        vsock_task,
     )))
 }
 
