@@ -17,6 +17,15 @@ let
     cargoLock.lockFile = ../../crates/test-utils/vsock-pong/Cargo.lock;
   };
 
+  # Build sandbox binaries from the workspace
+  sandboxBinaries = pkgs.pkgsStatic.rustPlatform.buildRustPackage {
+    name = "capsa-sandbox";
+    src = ../..;
+    cargoLock.lockFile = ../../Cargo.lock;
+    cargoBuildFlags = [ "-p" "capsa-sandbox-init" "-p" "capsa-sandbox-agent" ];
+    doCheck = false;
+  };
+
   extraBinaries = [ "${vsockPong}/bin/vsock-pong" ];
 
   kernel = vmLib.mkKernel {
@@ -53,6 +62,12 @@ let
     console = "hvc0";
     inherit extraBinaries;
   };
+
+  sandboxInitrd = vmLib.mkSandboxInitrd {
+    sandboxInit = "${sandboxBinaries}/bin/capsa-sandbox-init";
+    sandboxAgent = "${sandboxBinaries}/bin/capsa-sandbox-agent";
+    inherit extraBinaries;
+  };
 in
 vmLib.mkCombined {
   name = "x86_64";
@@ -65,6 +80,11 @@ vmLib.mkCombined {
       name = "with-disk";
       inherit kernel kernelImage initrd;
       disk = { sizeMB = 32; };
+    };
+    sandbox = vmLib.mkDirectBootVm {
+      name = "sandbox";
+      inherit kernel kernelImage;
+      initrd = sandboxInitrd;
     };
   };
 }

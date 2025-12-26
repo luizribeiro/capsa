@@ -154,24 +154,66 @@ impl<M> SandboxBuilder<M> {
 }
 
 impl SandboxBuilder<HasMainProcess> {
+    /// Resolves kernel and initrd paths.
+    ///
+    /// Priority:
+    /// 1. Explicit overrides via `.kernel()` / `.initrd()`
+    /// 2. Automatic lookup from test-vms manifest (when test-utils feature enabled)
+    fn resolve_kernel_initrd(&self) -> Result<(PathBuf, PathBuf)> {
+        // Use explicit overrides if provided
+        if let (Some(kernel), Some(initrd)) =
+            (&self.config.kernel_override, &self.config.initrd_override)
+        {
+            return Ok((kernel.clone(), initrd.clone()));
+        }
+
+        // Try automatic lookup from manifest
+        #[cfg(feature = "test-utils")]
+        {
+            if let Some((kernel, initrd)) = self.try_load_from_manifest() {
+                return Ok((kernel, initrd));
+            }
+        }
+
+        Err(Error::InvalidConfig(
+            "sandbox kernel/initrd not found - either use .kernel()/.initrd() or ensure \
+             test-vms are built with 'nix-build nix/test-vms -A x86_64 -o result-vms'"
+                .into(),
+        ))
+    }
+
+    #[cfg(feature = "test-utils")]
+    fn try_load_from_manifest(&self) -> Option<(PathBuf, PathBuf)> {
+        // TODO: For production release, kernel/initrd should be packaged with the binary.
+        // For now, we look for them relative to the crate's manifest directory.
+        let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let result_vms = manifest_dir.parent()?.parent()?.join("result-vms");
+        let manifest_path = result_vms.join("manifest.json");
+
+        let content = std::fs::read_to_string(&manifest_path).ok()?;
+        let manifest: std::collections::HashMap<String, serde_json::Value> =
+            serde_json::from_str(&content).ok()?;
+
+        let sandbox = manifest.get("sandbox")?;
+        let kernel_rel = sandbox.get("kernel")?.as_str()?;
+        let initrd_rel = sandbox.get("initrd")?.as_str()?;
+
+        let kernel = result_vms.join(kernel_rel);
+        let initrd = result_vms.join(initrd_rel);
+
+        if kernel.exists() && initrd.exists() {
+            Some((kernel, initrd))
+        } else {
+            None
+        }
+    }
+
     /// Builds and starts the sandbox VM.
     ///
-    /// This requires specifying a kernel and initrd override until the
-    /// default sandbox kernel/initrd are built.
+    /// Automatically uses the sandbox kernel/initrd from the test-vms manifest
+    /// when available. Use `.kernel()` and `.initrd()` to override.
     pub async fn build(self) -> Result<VmHandle> {
-        let kernel = self.config.kernel_override.clone().ok_or_else(|| {
-            Error::InvalidConfig(
-                "sandbox kernel not specified - use .kernel() until default sandbox is built"
-                    .into(),
-            )
-        })?;
-
-        let initrd = self.config.initrd_override.clone().ok_or_else(|| {
-            Error::InvalidConfig(
-                "sandbox initrd not specified - use .initrd() until default sandbox is built"
-                    .into(),
-            )
-        })?;
+        let (kernel, initrd) = self.resolve_kernel_initrd()?;
 
         let cmdline = self.generate_cmdline();
         let shares = self.generate_shares();

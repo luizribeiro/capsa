@@ -222,6 +222,32 @@ esac
       chmod +x $out/bin/udhcpc-script
     '';
 
+  # Sandbox initrd uses capsa-sandbox-init as PID 1 and includes the agent
+  mkSandboxInitrd = { sandboxInit, sandboxAgent, extraBinaries ? [] }:
+    pkgs.runCommand "sandbox-initrd" {
+      nativeBuildInputs = [ pkgs.cpio pkgs.lz4 ];
+    } ''
+      mkdir -p initrd-root/{bin,dev,proc,sys,etc,tmp,mnt}
+
+      # Busybox for shell access (debugging)
+      cp ${pkgs.pkgsStatic.busybox}/bin/busybox initrd-root/bin/
+      for cmd in ${lib.concatStringsSep " " busyboxCommands}; do
+        ln -s busybox initrd-root/bin/$cmd
+      done
+
+      ${lib.concatMapStringsSep "\n" (bin: "cp ${bin} initrd-root/bin/") extraBinaries}
+
+      # Sandbox init as PID 1
+      cp ${sandboxInit} initrd-root/init
+      chmod +x initrd-root/init
+
+      # Sandbox agent
+      cp ${sandboxAgent} initrd-root/sandbox-agent
+      chmod +x initrd-root/sandbox-agent
+
+      (cd initrd-root && find . | cpio -o -H newc | lz4 -l) > $out
+    '';
+
   mkDirectBootVm = { name, kernel, kernelImage, initrd, disk ? null }:
     let
       manifest = { kernel = "kernel"; initrd = "initrd"; }
@@ -300,6 +326,7 @@ in {
     mkKernel
     mkInitrd
     mkInitramfsDir
+    mkSandboxInitrd
     mkDirectBootVm
     mkUefiVm
     mkCombined;
