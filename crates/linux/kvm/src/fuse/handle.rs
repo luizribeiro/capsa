@@ -364,11 +364,26 @@ mod tests {
 
         let mut table = HandleTable::new();
 
-        for i in 0..MAX_HANDLES {
-            let result = table.open_file(&path, libc::O_RDONLY as u32, i as u64 + 2, false);
-            assert!(result.is_ok(), "failed at {}", i);
+        // Fill the table with dummy directory handles (doesn't consume OS file descriptors)
+        // Use high keys (starting at 1_000_000) to avoid conflicts with next_fh
+        for i in 0..(MAX_HANDLES - 1) {
+            table.handles.insert(
+                1_000_000 + i as u64,
+                Handle {
+                    kind: HandleKind::Dir(vec![]),
+                    ino: i as u64 + 2,
+                    flags: 0,
+                },
+            );
         }
+        assert_eq!(table.handles.len(), MAX_HANDLES - 1);
 
+        // Opening one more file should succeed (at capacity)
+        let result = table.open_file(&path, libc::O_RDONLY as u32, 99998, false);
+        assert!(result.is_ok());
+        assert_eq!(table.handles.len(), MAX_HANDLES);
+
+        // Now at limit - opening another should fail with EMFILE
         let result = table.open_file(&path, libc::O_RDONLY as u32, 99999, false);
         assert_eq!(result, Err(libc::EMFILE));
     }
