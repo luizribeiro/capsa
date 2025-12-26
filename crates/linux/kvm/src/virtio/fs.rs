@@ -1767,4 +1767,270 @@ mod tests {
         // Result length should be capped to MAX_DESCRIPTOR_LEN
         assert!(result.len() <= MAX_DESCRIPTOR_LEN as usize);
     }
+
+    // FUSE handler tests
+
+    fn create_read_only_device(tag: &str) -> (VirtioFs, TempDir) {
+        let tmp_dir = TempDir::new().expect("Failed to create temp dir");
+        let kvm = Kvm::new().expect("Failed to open /dev/kvm");
+        let vm = kvm.create_vm().expect("Failed to create VM");
+        let vm_fd = Arc::new(vm);
+        let device = VirtioFs::new(
+            tmp_dir.path().to_path_buf(),
+            tag.to_string(),
+            true, // read_only
+            vm_fd,
+            8,
+        );
+        (device, tmp_dir)
+    }
+
+    fn build_init_request(major: u32, minor: u32) -> Vec<u8> {
+        let mut data = vec![0u8; 16];
+        data[0..4].copy_from_slice(&major.to_le_bytes());
+        data[4..8].copy_from_slice(&minor.to_le_bytes());
+        data[8..12].copy_from_slice(&(128 * 1024u32).to_le_bytes()); // max_readahead
+        data[12..16].copy_from_slice(&0u32.to_le_bytes()); // flags
+        data
+    }
+
+    fn parse_fuse_out_header(response: &[u8]) -> (u32, i32, u64) {
+        // len, error, unique
+        let len = u32::from_le_bytes(response[0..4].try_into().unwrap());
+        let error = i32::from_le_bytes(response[4..8].try_into().unwrap());
+        let unique = u64::from_le_bytes(response[8..16].try_into().unwrap());
+        (len, error, unique)
+    }
+
+    #[test]
+    fn fuse_init_success() {
+        let (mut device, _tmp) = create_test_device("test");
+
+        let init_body = build_init_request(FUSE_KERNEL_VERSION, FUSE_KERNEL_MINOR_VERSION);
+        let response = device.handle_init(42, &init_body);
+
+        // Parse response header
+        let (len, error, unique) = parse_fuse_out_header(&response);
+        assert_eq!(error, 0, "INIT should succeed");
+        assert_eq!(unique, 42);
+        assert!(len > 16); // Has body
+
+        assert!(device.fuse_initialized);
+    }
+
+    #[test]
+    fn fuse_init_rejects_old_version() {
+        let (mut device, _tmp) = create_test_device("test");
+
+        // Use version 6.x which is too old
+        let init_body = build_init_request(6, 0);
+        let response = device.handle_init(42, &init_body);
+
+        let (_, error, _) = parse_fuse_out_header(&response);
+        assert_eq!(error, -libc::EPROTO, "Should reject old FUSE version");
+
+        assert!(!device.fuse_initialized);
+    }
+
+    #[test]
+    fn fuse_destroy() {
+        let (mut device, _tmp) = create_test_device("test");
+
+        // Initialize first
+        device.fuse_initialized = true;
+
+        let response = device.handle_destroy(42);
+        let (_, error, unique) = parse_fuse_out_header(&response);
+        assert_eq!(error, 0);
+        assert_eq!(unique, 42);
+        assert!(!device.fuse_initialized);
+    }
+
+    #[test]
+    fn fuse_lookup_root() {
+        let (mut device, tmp) = create_test_device("test");
+
+        // Create a file
+        std::fs::write(tmp.path().join("test.txt"), "content").unwrap();
+
+        // Lookup "test.txt" in root (nodeid 1)
+        let response = device.handle_lookup(42, 1, b"test.txt\0");
+
+        let (_, error, unique) = parse_fuse_out_header(&response);
+        assert_eq!(error, 0, "LOOKUP should succeed");
+        assert_eq!(unique, 42);
+    }
+
+    #[test]
+    fn fuse_lookup_nonexistent() {
+        let (mut device, _tmp) = create_test_device("test");
+
+        let response = device.handle_lookup(42, 1, b"nonexistent.txt\0");
+
+        let (_, error, _) = parse_fuse_out_header(&response);
+        assert_eq!(error, -libc::ENOENT, "Should return ENOENT");
+    }
+
+    #[test]
+    fn fuse_getattr_root() {
+        let (mut device, _tmp) = create_test_device("test");
+
+        // Get attributes of root (nodeid 1)
+        let response = device.handle_getattr(42, 1, &[]);
+
+        let (len, error, unique) = parse_fuse_out_header(&response);
+        assert_eq!(error, 0, "GETATTR on root should succeed");
+        assert_eq!(unique, 42);
+        assert!(len > 16); // Has attr body
+    }
+
+    #[test]
+    fn fuse_getattr_invalid_inode() {
+        let (mut device, _tmp) = create_test_device("test");
+
+        // Get attributes of nonexistent inode
+        let response = device.handle_getattr(42, 9999, &[]);
+
+        let (_, error, _) = parse_fuse_out_header(&response);
+        assert_eq!(
+            error,
+            -libc::ENOENT,
+            "Should return ENOENT for invalid inode"
+        );
+    }
+
+    #[test]
+    fn read_only_blocks_mkdir() {
+        let (mut device, _tmp) = create_read_only_device("test");
+
+        // Try to create directory
+        let mut body = vec![0u8; 8]; // FuseMkdirIn
+        body.extend_from_slice(b"newdir\0");
+
+        let response = device.handle_mkdir(42, 1, &body);
+
+        let (_, error, _) = parse_fuse_out_header(&response);
+        assert_eq!(error, -libc::EROFS, "mkdir should fail on read-only share");
+    }
+
+    #[test]
+    fn read_only_blocks_unlink() {
+        let (mut device, tmp) = create_read_only_device("test");
+
+        // Create a file first
+        std::fs::write(tmp.path().join("file.txt"), "content").unwrap();
+
+        let response = device.handle_unlink(42, 1, b"file.txt\0");
+
+        let (_, error, _) = parse_fuse_out_header(&response);
+        assert_eq!(error, -libc::EROFS, "unlink should fail on read-only share");
+    }
+
+    #[test]
+    fn read_only_blocks_rmdir() {
+        let (mut device, tmp) = create_read_only_device("test");
+
+        // Create a directory first
+        std::fs::create_dir(tmp.path().join("subdir")).unwrap();
+
+        let response = device.handle_rmdir(42, 1, b"subdir\0");
+
+        let (_, error, _) = parse_fuse_out_header(&response);
+        assert_eq!(error, -libc::EROFS, "rmdir should fail on read-only share");
+    }
+
+    #[test]
+    fn read_only_blocks_symlink() {
+        let (mut device, _tmp) = create_read_only_device("test");
+
+        let body = b"linkname\0target\0";
+        let response = device.handle_symlink(42, 1, body);
+
+        let (_, error, _) = parse_fuse_out_header(&response);
+        assert_eq!(
+            error,
+            -libc::EROFS,
+            "symlink should fail on read-only share"
+        );
+    }
+
+    #[test]
+    fn read_only_blocks_rename() {
+        let (mut device, tmp) = create_read_only_device("test");
+
+        std::fs::write(tmp.path().join("old.txt"), "content").unwrap();
+
+        // Build rename request: FuseRenameIn (newdir=1) + old_name + new_name
+        let mut body = vec![0u8; 8];
+        body[0..8].copy_from_slice(&1u64.to_le_bytes()); // newdir
+        body.extend_from_slice(b"old.txt\0new.txt\0");
+
+        let response = device.handle_rename(42, 1, &body);
+
+        let (_, error, _) = parse_fuse_out_header(&response);
+        assert_eq!(error, -libc::EROFS, "rename should fail on read-only share");
+    }
+
+    #[test]
+    fn read_only_blocks_setattr() {
+        let (mut device, tmp) = create_read_only_device("test");
+
+        std::fs::write(tmp.path().join("file.txt"), "content").unwrap();
+
+        // Lookup the file to get its inode
+        let lookup_response = device.handle_lookup(1, 1, b"file.txt\0");
+        let (_, lookup_error, _) = parse_fuse_out_header(&lookup_response);
+        assert_eq!(lookup_error, 0, "Lookup should succeed");
+
+        // Extract nodeid from entry response
+        let nodeid = u64::from_le_bytes(lookup_response[16..24].try_into().unwrap());
+
+        // Build setattr request with FATTR_SIZE set
+        let mut body = vec![0u8; 88]; // FuseSetattrIn size
+        body[0..4].copy_from_slice(&FATTR_SIZE.to_le_bytes()); // valid flags
+
+        let response = device.handle_setattr(42, nodeid, &body);
+
+        let (_, error, _) = parse_fuse_out_header(&response);
+        assert_eq!(
+            error,
+            -libc::EROFS,
+            "setattr should fail on read-only share"
+        );
+    }
+
+    #[test]
+    fn read_only_allows_read_operations() {
+        let (mut device, tmp) = create_read_only_device("test");
+
+        // Create test file
+        std::fs::write(tmp.path().join("readable.txt"), "content").unwrap();
+
+        // Lookup should work
+        let response = device.handle_lookup(42, 1, b"readable.txt\0");
+        let (_, error, _) = parse_fuse_out_header(&response);
+        assert_eq!(error, 0, "lookup should work on read-only share");
+
+        // Getattr should work
+        let response = device.handle_getattr(42, 1, &[]);
+        let (_, error, _) = parse_fuse_out_header(&response);
+        assert_eq!(error, 0, "getattr should work on read-only share");
+
+        // Opendir should work
+        let response = device.handle_opendir(42, 1);
+        let (_, error, _) = parse_fuse_out_header(&response);
+        assert_eq!(error, 0, "opendir should work on read-only share");
+    }
+
+    #[test]
+    fn fuse_statfs() {
+        let (mut device, _tmp) = create_test_device("test");
+
+        let response = device.handle_statfs(42, 1);
+
+        let (len, error, unique) = parse_fuse_out_header(&response);
+        assert_eq!(error, 0, "statfs should succeed");
+        assert_eq!(unique, 42);
+        assert!(len > 16); // Has statfs body
+    }
 }
