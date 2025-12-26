@@ -32,6 +32,14 @@ const ICMP_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
 /// Maximum ICMP bindings per guest IP to prevent socket exhaustion.
 const MAX_ICMP_BINDINGS_PER_GUEST: usize = 64;
 
+/// Maximum TCP connections to prevent socket and task exhaustion.
+/// Each connection opens a host socket and spawns a forwarding task.
+const MAX_TCP_CONNECTIONS: usize = 1024;
+
+/// Maximum UDP bindings to prevent socket and task exhaustion.
+/// Each binding opens a host socket and spawns a receive task.
+const MAX_UDP_BINDINGS: usize = 256;
+
 /// Standard Ethernet MTU in bytes.
 const ETHERNET_MTU: usize = 1500;
 
@@ -277,6 +285,28 @@ impl NatTable {
         if self.tcp_connections.contains_key(&key) {
             // Connection already exists, ignore duplicate SYN
             return true;
+        }
+
+        // Reject if connection limit reached
+        if self.tcp_connections.len() >= MAX_TCP_CONNECTIONS {
+            tracing::warn!(
+                "NAT: TCP connection limit reached ({}), rejecting {} -> {}",
+                MAX_TCP_CONNECTIONS,
+                key.guest_addr,
+                key.remote_addr
+            );
+            // Send RST back to guest
+            if let Some(frame) = craft_tcp_rst(
+                key.remote_addr,
+                key.guest_addr,
+                0,
+                guest_isn.wrapping_add(1),
+                self.gateway_mac,
+                guest_mac,
+            ) {
+                let _ = self.tx_to_guest.send(frame).await;
+            }
+            return false;
         }
 
         tracing::debug!(
@@ -526,6 +556,16 @@ impl NatTable {
             entry.last_activity = Instant::now();
             entry.socket.clone()
         } else {
+            // Reject if binding limit reached
+            if self.udp_bindings.len() >= MAX_UDP_BINDINGS {
+                tracing::warn!(
+                    "NAT: UDP binding limit reached ({}), rejecting {}",
+                    MAX_UDP_BINDINGS,
+                    src
+                );
+                return false;
+            }
+
             // Create new socket and spawn receive task
             let socket = match UdpSocket::bind("0.0.0.0:0").await {
                 Ok(s) => Arc::new(s),
