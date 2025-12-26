@@ -58,7 +58,7 @@ const VIRTIO_F_VERSION_1: u64 = 1 << 32;
 // Vsock header size (44 bytes)
 const VSOCK_HDR_SIZE: usize = 44;
 
-use crate::virtio::MAX_DESCRIPTOR_LEN;
+use crate::virtio::{MAX_DESCRIPTOR_LEN, MAX_VSOCK_CONNECTIONS};
 
 // Vsock operation codes
 const VSOCK_OP_REQUEST: u16 = 1;
@@ -441,6 +441,18 @@ impl VirtioVsock {
             peer_port: hdr.src_port,
         };
 
+        // Reject if connection limit reached
+        if self.connections.len() >= MAX_VSOCK_CONNECTIONS {
+            let dst_port = hdr.dst_port;
+            tracing::warn!(
+                "vSock connection limit reached ({}), rejecting connection to port {}",
+                MAX_VSOCK_CONNECTIONS,
+                dst_port
+            );
+            self.send_rst(hdr);
+            return;
+        }
+
         // Notify bridge of new connection
         let _ = self.bridge_tx.send(DeviceToBridge::Connect {
             local_port: hdr.dst_port,
@@ -503,19 +515,7 @@ impl VirtioVsock {
             let _ = self.bridge_tx.send(DeviceToBridge::Shutdown {
                 local_port: hdr.dst_port,
             });
-
-            // Send RST back to confirm
-            let rst = VsockHeader {
-                src_cid: VSOCK_HOST_CID,
-                dst_cid: VSOCK_GUEST_CID,
-                src_port: hdr.dst_port,
-                dst_port: hdr.src_port,
-                type_: VSOCK_TYPE_STREAM,
-                op: VSOCK_OP_RST,
-                ..Default::default()
-            };
-
-            self.rx_queue.push_back(rst.to_bytes().to_vec());
+            self.send_rst(hdr);
         }
     }
 
@@ -565,6 +565,19 @@ impl VirtioVsock {
 
             self.rx_queue.push_back(update.to_bytes().to_vec());
         }
+    }
+
+    fn send_rst(&mut self, hdr: &VsockHeader) {
+        let rst = VsockHeader {
+            src_cid: VSOCK_HOST_CID,
+            dst_cid: VSOCK_GUEST_CID,
+            src_port: hdr.dst_port,
+            dst_port: hdr.src_port,
+            type_: VSOCK_TYPE_STREAM,
+            op: VSOCK_OP_RST,
+            ..Default::default()
+        };
+        self.rx_queue.push_back(rst.to_bytes().to_vec());
     }
 
     /// Process RX queue: host → guest
