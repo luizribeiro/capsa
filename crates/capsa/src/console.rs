@@ -13,6 +13,31 @@ use tokio::time::timeout;
 /// Global command counter for unique markers.
 static CMD_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+/// Marker for detecting exec() command completion.
+///
+/// Uses `X=__DONE_N__` format to avoid false matches when terminal wraps
+/// command echo. The `X=` prefix ensures the pattern `\nX=...` matches only
+/// the actual output, not the echoed command (which would show `"X=...`).
+struct ExecMarker {
+    value: String,
+}
+
+impl ExecMarker {
+    fn new(cmd_id: u64) -> Self {
+        Self {
+            value: format!("X=__DONE_{}__", cmd_id),
+        }
+    }
+
+    fn as_printf_suffix(&self) -> String {
+        format!("printf '\\n{}\\n'", self.value)
+    }
+
+    fn as_pattern(&self) -> String {
+        format!("\n{}", self.value)
+    }
+}
+
 /// High-level interface for interacting with a VM's serial console.
 ///
 /// Obtain via [`VmHandle::console`](crate::VmHandle::console)
@@ -238,26 +263,24 @@ impl VmConsole {
     /// ```
     pub async fn exec(&self, cmd: &str, timeout_duration: Duration) -> Result<String> {
         let cmd_id = CMD_COUNTER.fetch_add(1, Ordering::Relaxed);
-        // Use a distinctive marker format: X=__DONE_N__
-        // When the terminal wraps long commands, the marker might appear at the
-        // start of a line in the command echo. By using format "X=marker", the
-        // command echo shows: echo "X=__DONE_N__" but output shows: X=__DONE_N__
-        // The pattern "\nX=__DONE_N__" matches output but not command echo (which
-        // has a quote before X).
-        let marker = format!("X=__DONE_{}__", cmd_id);
+        let marker = ExecMarker::new(cmd_id);
 
         let separator = if cmd.trim_end().ends_with('&') {
             ""
         } else {
             " ;"
         };
-        // Use printf for consistent output format (no trailing newline issues)
-        self.write_line(&format!("{}{} printf '\\n{}\\n'", cmd, separator, marker))
-            .await?;
 
-        // Wait for marker at start of line (output, not command echo)
-        let pattern = format!("\n{}", marker);
-        self.wait_for_timeout(&pattern, timeout_duration).await
+        self.write_line(&format!(
+            "{}{} {}",
+            cmd,
+            separator,
+            marker.as_printf_suffix()
+        ))
+        .await?;
+
+        self.wait_for_timeout(&marker.as_pattern(), timeout_duration)
+            .await
     }
 }
 
