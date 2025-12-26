@@ -86,6 +86,11 @@ esac
     PRINTK = true;            # kernel logging
     BUG = true;               # BUG()/WARN() support for debugging
 
+    # Timer support (required for alarm(), setitimer(), etc.)
+    TICK_ONESHOT = true;      # one-shot tick mode for hrtimers
+    HIGH_RES_TIMERS = true;   # high-resolution timers (needed for alarm())
+    POSIX_TIMERS = true;      # POSIX timer syscalls
+
     # Binary execution
     BINFMT_ELF = true;        # run ELF binaries (busybox, vsock-pong)
     BINFMT_SCRIPT = true;     # run #! scripts (init, udhcpc-script)

@@ -187,18 +187,23 @@ async fn test_usernat_ping_gateway() {
             .await
             .expect("VM did not configure network via DHCP");
 
-        // Ping the gateway (10.0.2.2 is the default gateway IP)
-        // FIXME: Using -c 1 because -c 3 or higher causes the test to hang.
-        // The VM appears to stop sending pings after receiving the first reply.
-        // This affects both gateway and external pings.
+        // Ping the gateway 3 times to verify ICMP and timer support work correctly
         let output = console
             .exec(
-                "ping -c 1 10.0.2.2 && echo PING_SUCCESS",
+                "ping -c 3 10.0.2.2 && echo GATEWAY_PING_SUCCESS",
                 Duration::from_secs(10),
             )
             .await
             .expect("Ping to gateway failed");
-        assert!(output.contains("PING_SUCCESS"), "Ping should succeed");
+
+        assert!(
+            output.contains("GATEWAY_PING_SUCCESS"),
+            "Ping to gateway should succeed"
+        );
+        assert!(
+            output.contains("3 packets transmitted, 3 packets received"),
+            "All 3 pings should be received"
+        );
 
         vm.kill().await.expect("Failed to kill VM");
     }
@@ -220,13 +225,10 @@ async fn test_usernat_ping_external() {
         let (vm, console) =
             setup_vm_with_dhcp(NetworkMode::UserNat(UserNatConfig::default())).await;
 
-        // Ping Google DNS (tests ICMP NAT to external host)
-        // FIXME: Using -c 1 because -c 3 or higher causes the test to hang.
-        // The VM appears to stop sending pings after receiving the first reply.
-        // This affects both gateway and external pings.
+        // Ping Google DNS 3 times (tests ICMP NAT to external host)
         let output = console
             .exec(
-                "ping -c 1 -W 5 8.8.8.8 && echo EXTERNAL_PING_SUCCESS",
+                "ping -c 3 -W 5 8.8.8.8 && echo EXTERNAL_PING_SUCCESS",
                 Duration::from_secs(15),
             )
             .await
@@ -235,6 +237,10 @@ async fn test_usernat_ping_external() {
         assert!(
             output.contains("EXTERNAL_PING_SUCCESS"),
             "Ping to external host should succeed"
+        );
+        assert!(
+            output.contains("3 packets transmitted, 3 packets received"),
+            "All 3 pings should be received"
         );
 
         vm.kill().await.expect("Failed to kill VM");

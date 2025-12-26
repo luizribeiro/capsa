@@ -32,6 +32,9 @@ let
       VIRTIO_PCI = true;
       VIRTIO_PCI_LIB = true;
 
+      # ARM architecture timer (required for timer interrupts)
+      ARM_ARCH_TIMER = true;
+
       # Disable unused features to reduce kernel size
       IPV6 = false;
     };
@@ -57,6 +60,9 @@ let
       PCI_HOST_GENERIC = true;
       VIRTIO_PCI = true;
       VIRTIO_PCI_LIB = true;
+
+      # ARM architecture timer (required for timer interrupts)
+      ARM_ARCH_TIMER = true;
 
       # EFI stub boot
       EFI = true;
