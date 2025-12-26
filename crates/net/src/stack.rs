@@ -27,6 +27,14 @@ use std::time::Duration;
 /// With 1ms polling intervals, 10000 means every 10 seconds.
 const NAT_CLEANUP_INTERVAL_MS: u32 = 10_000;
 
+/// Parsed DNS query information extracted from a frame.
+struct DnsQueryInfo {
+    guest_mac: EthernetAddress,
+    guest_ip: Ipv4Addr,
+    guest_port: u16,
+    query_bytes: Vec<u8>,
+}
+
 /// Port forwarding rule.
 #[derive(Clone, Debug)]
 pub struct PortForwardRule {
@@ -334,6 +342,8 @@ impl<F: FrameIO> UserNatStack<F> {
             }
 
             // Periodic cleanup of idle NAT entries and expired DNS cache
+            // TODO: Handle RwLock poison gracefully instead of unwrap() to avoid
+            // crashing the network stack if another thread panics while holding the lock.
             cleanup_counter = cleanup_counter.wrapping_add(1);
             if cleanup_counter.is_multiple_of(NAT_CLEANUP_INTERVAL_MS) {
                 self.nat.cleanup();
@@ -500,67 +510,63 @@ impl<F: FrameIO> UserNatStack<F> {
 
     /// Check if a frame is a DNS query to the gateway (UDP port 53).
     fn is_dns_query_to_gateway(&self, frame: &[u8]) -> bool {
+        self.parse_dns_query(frame).is_some()
+    }
+
+    /// Parse a DNS query frame and extract relevant information.
+    fn parse_dns_query(&self, frame: &[u8]) -> Option<DnsQueryInfo> {
         use smoltcp::wire::UdpPacket;
 
-        let Ok(eth_frame) = EthernetFrame::new_checked(frame) else {
-            return false;
-        };
+        let eth_frame = EthernetFrame::new_checked(frame).ok()?;
 
         if eth_frame.ethertype() != EthernetProtocol::Ipv4 {
-            return false;
+            return None;
         }
 
-        let Ok(ip_packet) = Ipv4Packet::new_checked(eth_frame.payload()) else {
-            return false;
-        };
+        let ip_packet = Ipv4Packet::new_checked(eth_frame.payload()).ok()?;
 
         // Must be to gateway
         let dst_ip: Ipv4Addr = ip_packet.dst_addr();
         if dst_ip != self.config.gateway_ip {
-            return false;
+            return None;
         }
 
         // Must be UDP
         if ip_packet.next_header() != IpProtocol::Udp {
-            return false;
+            return None;
         }
 
-        let Ok(udp_packet) = UdpPacket::new_checked(ip_packet.payload()) else {
-            return false;
-        };
+        let udp_packet = UdpPacket::new_checked(ip_packet.payload()).ok()?;
 
         // Must be port 53 (DNS)
-        udp_packet.dst_port() == 53
+        if udp_packet.dst_port() != 53 {
+            return None;
+        }
+
+        Some(DnsQueryInfo {
+            guest_mac: eth_frame.src_addr(),
+            guest_ip: ip_packet.src_addr(),
+            guest_port: udp_packet.src_port(),
+            query_bytes: udp_packet.payload().to_vec(),
+        })
     }
 
     /// Handle a DNS query by forwarding through the DNS proxy.
     async fn handle_dns_query(&mut self, frame: &[u8]) {
-        use smoltcp::wire::UdpPacket;
-
-        let Ok(eth_frame) = EthernetFrame::new_checked(frame) else {
+        let Some(query_info) = self.parse_dns_query(frame) else {
             return;
         };
-
-        let Ok(ip_packet) = Ipv4Packet::new_checked(eth_frame.payload()) else {
-            return;
-        };
-
-        let Ok(udp_packet) = UdpPacket::new_checked(ip_packet.payload()) else {
-            return;
-        };
-
-        let guest_mac = eth_frame.src_addr();
-        let guest_ip: Ipv4Addr = ip_packet.src_addr();
-        let guest_port = udp_packet.src_port();
-        let dns_query = udp_packet.payload();
 
         // Forward query through DNS proxy
-        match self.dns_proxy.handle_query(dns_query).await {
+        match self.dns_proxy.handle_query(&query_info.query_bytes).await {
             Ok(response) => {
                 // Craft and send UDP response frame
-                if let Some(response_frame) =
-                    self.craft_dns_response(guest_mac, guest_ip, guest_port, &response)
-                    && let Err(e) = self.device.send_frame(&response_frame)
+                if let Some(response_frame) = self.craft_dns_response(
+                    query_info.guest_mac,
+                    query_info.guest_ip,
+                    query_info.guest_port,
+                    &response,
+                ) && let Err(e) = self.device.send_frame(&response_frame)
                 {
                     tracing::warn!("Failed to send DNS response: {}", e);
                 }

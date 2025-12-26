@@ -2,6 +2,12 @@
 //!
 //! Used by the policy checker to resolve destination IPs to their
 //! original domain names for domain-based filtering.
+//!
+//! # Security
+//!
+//! TODO: The cache currently trusts DNS responses from the upstream server.
+//! A malicious upstream DNS could poison the cache with false IP→domain mappings.
+//! Consider implementing DNSSEC validation to ensure response authenticity.
 
 use std::collections::HashMap;
 use std::net::Ipv4Addr;

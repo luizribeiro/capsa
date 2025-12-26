@@ -25,10 +25,19 @@ impl DomainPattern {
 
     /// Check if a domain matches this pattern.
     pub fn matches(&self, domain: &str) -> bool {
+        // Validate domain length per DNS spec (max 253 characters)
+        if domain.is_empty() || domain.len() > 253 {
+            return false;
+        }
+
         let domain_lower = domain.to_lowercase();
         match self {
             DomainPattern::Exact(pattern) => domain_lower == *pattern,
             DomainPattern::Wildcard(suffix) => {
+                // Reject empty suffixes (would match everything)
+                if suffix.is_empty() {
+                    return false;
+                }
                 // Must end with ".suffix" (must have at least one subdomain level)
                 domain_lower.ends_with(&format!(".{}", suffix))
             }
@@ -579,5 +588,28 @@ mod tests {
             &policy.rules[2].matcher,
             RuleMatcher::Domain(DomainPattern::Wildcard(s)) if s == "monitor.com"
         ));
+    }
+
+    #[test]
+    fn domain_pattern_rejects_empty_domain() {
+        let pattern = DomainPattern::parse("example.com");
+        assert!(!pattern.matches(""));
+    }
+
+    #[test]
+    fn domain_pattern_rejects_oversized_domain() {
+        let pattern = DomainPattern::parse("example.com");
+        // DNS spec limits domains to 253 characters
+        let long_domain = "a".repeat(254);
+        assert!(!pattern.matches(&long_domain));
+    }
+
+    #[test]
+    fn domain_pattern_empty_wildcard_suffix_never_matches() {
+        // If someone creates a wildcard with empty suffix (pathological case),
+        // it should never match to avoid security issues
+        let pattern = DomainPattern::Wildcard(String::new());
+        assert!(!pattern.matches("anything.com"));
+        assert!(!pattern.matches("evil.example.com"));
     }
 }

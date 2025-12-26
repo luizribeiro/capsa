@@ -4,16 +4,37 @@
 //! caches A/AAAA record responses for domain-based filtering.
 
 use crate::dns_cache::DnsCache;
+use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::net::UdpSocket;
 
 const DNS_TIMEOUT: Duration = Duration::from_secs(5);
-const UPSTREAM_DNS: &str = "8.8.8.8:53";
+const FALLBACK_DNS: &str = "8.8.8.8:53";
+
+/// Read the first nameserver from the system's resolv.conf.
+fn get_system_dns() -> Option<SocketAddr> {
+    let contents = std::fs::read_to_string("/etc/resolv.conf").ok()?;
+
+    for line in contents.lines() {
+        let line = line.trim();
+        if line.starts_with("nameserver") {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 2
+                && let Ok(ip) = parts[1].parse::<std::net::IpAddr>()
+            {
+                return Some(SocketAddr::new(ip, 53));
+            }
+        }
+    }
+
+    None
+}
 
 /// DNS proxy that forwards queries and caches responses.
 pub struct DnsProxy {
     cache: Arc<RwLock<DnsCache>>,
+    upstream_dns: SocketAddr,
 }
 
 /// Errors that can occur during DNS proxy operations.
@@ -48,8 +69,21 @@ impl std::error::Error for DnsError {
 
 impl DnsProxy {
     /// Create a new DNS proxy with the given cache.
+    ///
+    /// Uses the system's DNS server from `/etc/resolv.conf` if available,
+    /// otherwise falls back to Google's public DNS (8.8.8.8).
     pub fn new(cache: Arc<RwLock<DnsCache>>) -> Self {
-        Self { cache }
+        let upstream_dns = get_system_dns().unwrap_or_else(|| {
+            tracing::debug!("Using fallback DNS server: {}", FALLBACK_DNS);
+            FALLBACK_DNS.parse().unwrap()
+        });
+
+        tracing::debug!("DNS proxy using upstream server: {}", upstream_dns);
+
+        Self {
+            cache,
+            upstream_dns,
+        }
     }
 
     /// Handle a DNS query from the guest.
@@ -66,7 +100,7 @@ impl DnsProxy {
             .map_err(DnsError::IoError)?;
 
         socket
-            .send_to(query_bytes, UPSTREAM_DNS)
+            .send_to(query_bytes, self.upstream_dns)
             .await
             .map_err(DnsError::IoError)?;
 
@@ -105,9 +139,8 @@ impl DnsProxy {
 }
 
 /// Build a minimal DNS query packet for a domain.
-/// Used for testing.
 #[cfg(test)]
-fn build_dns_query(domain: &str, query_id: u16) -> Vec<u8> {
+pub(crate) fn build_dns_query(domain: &str, query_id: u16) -> Vec<u8> {
     let mut packet = Vec::new();
 
     // Header
@@ -134,6 +167,7 @@ fn build_dns_query(domain: &str, query_id: u16) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::error::Error;
 
     #[test]
     fn build_dns_query_valid() {
@@ -172,6 +206,126 @@ mod tests {
         assert_eq!(DnsError::Timeout.to_string(), "DNS query timed out");
     }
 
-    // Note: Integration test for actual DNS forwarding requires network access
-    // and is tested in the integration test suite instead.
+    /// Build a minimal DNS response packet with an A record.
+    fn build_dns_response(
+        domain: &str,
+        ip: std::net::Ipv4Addr,
+        ttl: u32,
+        query_id: u16,
+    ) -> Vec<u8> {
+        let mut packet = Vec::new();
+
+        // Header
+        packet.extend_from_slice(&query_id.to_be_bytes()); // ID
+        packet.extend_from_slice(&[0x81, 0x80]); // Flags: response, recursion available
+        packet.extend_from_slice(&[0x00, 0x01]); // QDCOUNT: 1 question
+        packet.extend_from_slice(&[0x00, 0x01]); // ANCOUNT: 1 answer
+        packet.extend_from_slice(&[0x00, 0x00]); // NSCOUNT: 0
+        packet.extend_from_slice(&[0x00, 0x00]); // ARCOUNT: 0
+
+        // Question section (echoed from query)
+        for label in domain.split('.') {
+            packet.push(label.len() as u8);
+            packet.extend_from_slice(label.as_bytes());
+        }
+        packet.push(0x00); // End of domain name
+        packet.extend_from_slice(&[0x00, 0x01]); // QTYPE: A
+        packet.extend_from_slice(&[0x00, 0x01]); // QCLASS: IN
+
+        // Answer section
+        for label in domain.split('.') {
+            packet.push(label.len() as u8);
+            packet.extend_from_slice(label.as_bytes());
+        }
+        packet.push(0x00); // End of domain name
+        packet.extend_from_slice(&[0x00, 0x01]); // TYPE: A
+        packet.extend_from_slice(&[0x00, 0x01]); // CLASS: IN
+        packet.extend_from_slice(&ttl.to_be_bytes()); // TTL
+        packet.extend_from_slice(&[0x00, 0x04]); // RDLENGTH: 4 bytes
+        packet.extend_from_slice(&ip.octets()); // RDATA: IP address
+
+        packet
+    }
+
+    #[test]
+    fn build_dns_response_valid() {
+        let response = build_dns_response(
+            "example.com",
+            std::net::Ipv4Addr::new(93, 184, 216, 34),
+            300,
+            0x1234,
+        );
+        let parsed = dns_parser::Packet::parse(&response);
+        assert!(parsed.is_ok());
+
+        let packet = parsed.unwrap();
+        assert_eq!(packet.header.id, 0x1234);
+        assert_eq!(packet.answers.len(), 1);
+        assert_eq!(packet.answers[0].name.to_string(), "example.com");
+    }
+
+    #[test]
+    fn cache_a_records_from_response() {
+        let cache = Arc::new(RwLock::new(DnsCache::new()));
+        let proxy = DnsProxy::new(cache.clone());
+
+        let response = build_dns_response(
+            "example.com",
+            std::net::Ipv4Addr::new(93, 184, 216, 34),
+            300,
+            0x1234,
+        );
+        let parsed = dns_parser::Packet::parse(&response).unwrap();
+
+        proxy.cache_a_records(&parsed);
+
+        let cache_read = cache.read().unwrap();
+        assert_eq!(
+            cache_read.lookup(std::net::Ipv4Addr::new(93, 184, 216, 34)),
+            Some("example.com")
+        );
+    }
+
+    #[test]
+    fn cache_multiple_a_records() {
+        let cache = Arc::new(RwLock::new(DnsCache::new()));
+        let proxy = DnsProxy::new(cache.clone());
+
+        // Cache two different domains
+        let response1 = build_dns_response(
+            "example.com",
+            std::net::Ipv4Addr::new(93, 184, 216, 34),
+            300,
+            0x1234,
+        );
+        let response2 = build_dns_response(
+            "example.org",
+            std::net::Ipv4Addr::new(93, 184, 216, 35),
+            300,
+            0x1235,
+        );
+
+        proxy.cache_a_records(&dns_parser::Packet::parse(&response1).unwrap());
+        proxy.cache_a_records(&dns_parser::Packet::parse(&response2).unwrap());
+
+        let cache_read = cache.read().unwrap();
+        assert_eq!(
+            cache_read.lookup(std::net::Ipv4Addr::new(93, 184, 216, 34)),
+            Some("example.com")
+        );
+        assert_eq!(
+            cache_read.lookup(std::net::Ipv4Addr::new(93, 184, 216, 35)),
+            Some("example.org")
+        );
+    }
+
+    #[test]
+    fn dns_error_source() {
+        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test");
+        let dns_err = DnsError::IoError(io_err);
+        assert!(dns_err.source().is_some());
+
+        assert!(DnsError::ParseError.source().is_none());
+        assert!(DnsError::Timeout.source().is_none());
+    }
 }
