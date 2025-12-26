@@ -116,9 +116,9 @@ The sandbox uses a separated architecture where init and agent are distinct proc
 #### Creating a Sandbox
 
 ```rust
-// Minimal - uses capsa's default kernel/initrd
-// If no .run() specified, defaults to busybox shell
+// Run a shell - .run() is required
 let vm = Capsa::sandbox()
+    .run("/bin/sh", &[])
     .build()
     .await?;
 
@@ -126,6 +126,7 @@ let vm = Capsa::sandbox()
 let vm = Capsa::sandbox()
     .share("./workspace", "/mnt/workspace", MountMode::ReadWrite)
     .share("./data", "/mnt/data", MountMode::ReadOnly)
+    .run("/bin/sh", &[])
     .build()
     .await?;
 
@@ -135,9 +136,12 @@ let vm = Capsa::sandbox()
     .memory_mb(2048)
     .share("./workspace", "/mnt", MountMode::ReadWrite)
     .network(NetworkMode::UserNat(Default::default()))
+    .run("/mnt/workspace/my-app", &["--config", "/mnt/config.yaml"])
     .build()
     .await?;
 ```
+
+**Note**: `.run()` or `.oci()` is required - there is no default main process.
 
 #### Running a Main Process
 
@@ -206,6 +210,7 @@ This is enforced at compile time using typestate pattern (see Implementation sec
 ```rust
 let vm = Capsa::sandbox()
     .share("./workspace", "/mnt", MountMode::ReadWrite)
+    .run("/bin/sh", &[])
     .build()
     .await?;
 
@@ -253,6 +258,7 @@ console.exec("ls /mnt", timeout).await?;  // Parse output yourself
 // Sandbox - batteries included
 let vm = Capsa::sandbox()
     .share("./workspace", "/mnt", MountMode::ReadWrite)
+    .run("/bin/sh", &[])
     .build()
     .await?;
 
@@ -313,10 +319,9 @@ pub struct CapsaSandboxConfig {
 }
 
 /// What to run as the main process in the sandbox.
+/// One of these MUST be specified - enforced by typestate.
 #[derive(Debug, Clone)]
 pub enum MainProcess {
-    /// No main process specified - init spawns a default shell
-    Default,
     /// Run a specific binary
     Run { path: String, args: Vec<String> },
     /// Run an OCI container
@@ -406,19 +411,22 @@ impl SandboxBuilder<NoMainProcess> {
     }
 }
 
-// .build() is available in both states
-impl<M> SandboxBuilder<M> {
+// .build() is ONLY available after specifying a main process
+impl SandboxBuilder<HasMainProcess> {
     pub async fn build(self) -> Result<SandboxHandle> {
-        // If NoMainProcess, main_process is MainProcess::Default
         // Generate cmdline args, start VM, connect to agent
     }
 }
+
+// Trying to build without .run() or .oci() is a compile error:
+// Capsa::sandbox().share(...).build()  // ERROR: build() not found
 ```
 
 This ensures at compile time:
 - `.run()` and `.oci()` can only be called from `NoMainProcess` state
 - After calling either, the builder moves to `HasMainProcess` state
-- Neither can be called again from `HasMainProcess` state
+- `.build()` only available on `HasMainProcess` - must specify main process
+- Neither `.run()` nor `.oci()` can be called again from `HasMainProcess` state
 
 #### Kernel/Initrd Resolution
 
@@ -484,9 +492,8 @@ fn main() {
     // Spawn agent
     let agent_pid = spawn("/capsa-sandbox-agent", &[]);
 
-    // Spawn main process (if any)
+    // Spawn main process (always specified via .run() or .oci())
     let main_pid = match &config.main_process {
-        MainProcess::Default => spawn("/bin/sh", &[]),
         MainProcess::Run { path, args } => spawn(path, args),
         MainProcess::Oci { image, args } => spawn_oci(image, args),
     };
@@ -745,7 +752,7 @@ in {
 1. Create `crates/sandbox/init/` crate
 2. Implement cmdline parsing (`capsa.mount=tag:path`, `capsa.run=path:arg1:arg2`)
 3. Implement virtiofs mounting
-4. Implement main process spawning via `.run()` (defaults to `/bin/sh` if not specified)
+4. Implement main process spawning via `capsa.run=` cmdline arg
 5. Implement signal handling (forward SIGTERM to main process)
 6. Implement zombie reaping (SIGCHLD handler)
 7. Implement shutdown logic (exit when main process exits)
@@ -853,23 +860,27 @@ The sandbox is the ONLY place where `.share()` is honest.
 
 Default for sandbox shares: `squash_to_root()` (guest sees root ownership).
 
+## Design Decisions
+
+1. **RPC framework**: Use **tarpc** (consistent with other parts of capsa)
+
+2. **Vsock port**: Fixed at **52** (defined as `const AGENT_VSOCK_PORT: u32 = 52`)
+
+3. **Kernel version**: Use same kernel as `test-vm.nix` (iterate later)
+
+4. **Architecture support**: Both **x86_64 and aarch64** (aarch64 testing on macOS host)
+
+5. **Console access**: **Enabled** - sandbox exposes console for debugging
+
+6. **OCI runtime**: **Deferred** - in-depth analysis during Phase 6 implementation
+
+7. **Container image storage**: Images stored **in VM**; users can use virtiofs share for host-side caching
+
+8. **Main process requirement**: **Explicit `.run()` required** - no default shell
+
 ## Open Questions
 
-1. **RPC serialization**: serde + bincode? postcard? Custom framing?
-
-2. **Vsock port**: Fixed (52) or configurable?
-
-3. **Kernel version**: Track latest stable? LTS? Configurable?
-
-4. **Architecture support**: x86_64 only initially? aarch64?
-
-5. **Console access**: Should sandbox also expose console for debugging?
-
-6. **OCI runtime**: crun (lightweight)? runc? youki (Rust)?
-
-7. **Container image storage**: Where to cache pulled images? Host-side or in VM?
-
-8. **Default main process**: `/bin/sh` or should we require explicit `.run()`?
+1. **Agent-to-init shutdown signaling**: Signal? Unix socket? Shared file?
 
 ## Summary
 
