@@ -27,6 +27,7 @@
 //! ```
 
 mod arch;
+mod fuse;
 mod handle;
 mod serial;
 mod virtio;
@@ -69,7 +70,7 @@ impl KvmBackend {
                     cluster: true,
                 },
                 share_mechanisms: ShareMechanismSupport {
-                    virtio_fs: false,
+                    virtio_fs: true,
                     virtio_9p: false,
                 },
                 devices: DeviceSupport { vsock: true },

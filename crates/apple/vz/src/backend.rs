@@ -229,7 +229,8 @@ mod tests {
             assert!(!caps.image_formats.qcow2);
             assert!(caps.network_modes.none);
             assert!(caps.network_modes.nat);
-            assert!(caps.share_mechanisms.virtio_fs);
+            // TODO: Update when virtio-fs is implemented for macOS
+            assert!(!caps.share_mechanisms.virtio_fs);
             assert!(!caps.share_mechanisms.virtio_9p);
             assert!(caps.max_cpus.is_none());
             assert!(caps.max_memory_mb.is_none());

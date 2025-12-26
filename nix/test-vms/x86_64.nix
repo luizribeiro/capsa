@@ -42,6 +42,10 @@ let
       # Serial console
       SERIAL_8250 = true;
       SERIAL_8250_CONSOLE = true;
+
+      # Virtio-fs support
+      FUSE_FS = true;
+      VIRTIO_FS = true;
     };
   };
 

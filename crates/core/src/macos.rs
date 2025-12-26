@@ -20,8 +20,10 @@ pub fn macos_virtualization_capabilities() -> BackendCapabilities {
             user_nat: true,
             cluster: true,
         },
+        // TODO: Implement virtio-fs using VZVirtioFileSystemDeviceConfiguration
+        // and VZSharedDirectory from Apple's Virtualization.framework
         share_mechanisms: ShareMechanismSupport {
-            virtio_fs: true,
+            virtio_fs: false,
             virtio_9p: false,
         },
         devices: DeviceSupport { vsock: true },
@@ -82,9 +84,10 @@ mod tests {
         }
 
         #[test]
-        fn supports_virtio_fs_not_9p() {
+        fn no_share_mechanisms_yet() {
+            // TODO: Update when virtio-fs is implemented
             let caps = macos_virtualization_capabilities();
-            assert!(caps.share_mechanisms.virtio_fs);
+            assert!(!caps.share_mechanisms.virtio_fs);
             assert!(!caps.share_mechanisms.virtio_9p);
         }
 

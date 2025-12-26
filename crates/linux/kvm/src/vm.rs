@@ -1,14 +1,17 @@
 use crate::arch::{
     BOOT_PARAMS_ADDR, KERNEL_LOAD_ADDR, RTC_INDEX_PORT, RtcDevice, SERIAL_IRQ, SERIAL_PORT_BASE,
-    SERIAL_PORT_END, VIRTIO_CONSOLE_IRQ, VIRTIO_MMIO_BASE, VIRTIO_MMIO_SIZE, VIRTIO_NET_IRQ,
-    VIRTIO_NET_MMIO_BASE, VIRTIO_VSOCK_IRQ, VIRTIO_VSOCK_MMIO_BASE, create_guest_memory,
-    initrd_load_addr, run_vcpu, setup_boot_params, setup_mptable, setup_regs, setup_sregs,
+    SERIAL_PORT_END, VIRTIO_CONSOLE_IRQ, VIRTIO_FS_IRQ, VIRTIO_FS_MMIO_BASE, VIRTIO_MMIO_BASE,
+    VIRTIO_MMIO_SIZE, VIRTIO_NET_IRQ, VIRTIO_NET_MMIO_BASE, VIRTIO_VSOCK_IRQ,
+    VIRTIO_VSOCK_MMIO_BASE, create_guest_memory, initrd_load_addr, run_vcpu, setup_boot_params,
+    setup_mptable, setup_regs, setup_sregs,
 };
 use crate::handle::KvmVmHandle;
 use crate::serial::{SerialDevice, create_console_pipes};
-use crate::virtio::{VirtioConsole, VirtioNet, VirtioVsock};
+use crate::virtio::{VirtioConsole, VirtioFs, VirtioNet, VirtioVsock};
 use crate::vsock_bridge::VsockBridge;
-use capsa_core::{BackendVmHandle, BootMethod, Error, NetworkMode, Result, VmConfig};
+use capsa_core::{
+    BackendVmHandle, BootMethod, Error, MountMode, NetworkMode, Result, ShareMechanism, VmConfig,
+};
 use capsa_net::{SocketPairDevice, StackConfig, UserNatStack};
 use kvm_bindings::{
     KVM_IRQ_ROUTING_IRQCHIP, KVM_IRQCHIP_IOAPIC, kvm_irq_routing_entry, kvm_pit_config,
@@ -131,6 +134,16 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
         cmdline.push_str(&format!(
             " virtio_mmio.device=0x{:x}@0x{:x}:{}",
             VIRTIO_MMIO_SIZE, VIRTIO_VSOCK_MMIO_BASE, VIRTIO_VSOCK_IRQ
+        ));
+    }
+
+    // Add virtio-fs MMIO devices to cmdline for each shared directory
+    for (i, _share) in config.shares.iter().enumerate() {
+        let base = VIRTIO_FS_MMIO_BASE + (i as u64 * VIRTIO_MMIO_SIZE);
+        let irq = VIRTIO_FS_IRQ + i as u32;
+        cmdline.push_str(&format!(
+            " virtio_mmio.device=0x{:x}@0x{:x}:{}",
+            VIRTIO_MMIO_SIZE, base, irq
         ));
     }
 
@@ -448,6 +461,45 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
     } else {
         None
     };
+
+    // Set up virtio-fs devices for each shared directory
+    for (i, share) in config.shares.iter().enumerate() {
+        let base = VIRTIO_FS_MMIO_BASE + (i as u64 * VIRTIO_MMIO_SIZE);
+        let irq = VIRTIO_FS_IRQ + i as u32;
+
+        let tag = match &share.mechanism {
+            ShareMechanism::VirtioFs(cfg) => {
+                cfg.tag.clone().unwrap_or_else(|| format!("share{}", i))
+            }
+            _ => format!("share{}", i),
+        };
+
+        let read_only = matches!(share.mode, MountMode::ReadOnly);
+
+        let virtio_fs = Arc::new(Mutex::new(VirtioFs::new(
+            share.host_path.clone(),
+            tag.clone(),
+            read_only,
+            vm_fd.clone(),
+            irq,
+        )));
+        virtio_fs.lock().unwrap().set_memory(memory.clone());
+
+        register_mmio_device(
+            &mut io_manager,
+            base,
+            VIRTIO_MMIO_SIZE,
+            virtio_fs,
+            &format!("virtio-fs-{}", tag),
+        )?;
+
+        tracing::debug!(
+            "virtio-fs device '{}' registered for {} ({})",
+            tag,
+            share.host_path.display(),
+            if read_only { "read-only" } else { "read-write" }
+        );
+    }
 
     let io_manager = Arc::new(io_manager);
 

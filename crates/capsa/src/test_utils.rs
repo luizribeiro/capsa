@@ -59,10 +59,10 @@ fn load_manifest() -> &'static VmManifest {
                 if paths.initrd.is_relative() {
                     paths.initrd = result_vms.join(&paths.initrd);
                 }
-                if let Some(disk) = &paths.disk {
-                    if disk.is_relative() {
-                        paths.disk = Some(result_vms.join(disk));
-                    }
+                if let Some(disk) = &paths.disk
+                    && disk.is_relative()
+                {
+                    paths.disk = Some(result_vms.join(disk));
                 }
             }
 

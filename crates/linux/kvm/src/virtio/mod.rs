@@ -4,12 +4,15 @@
 //! - `console`: Virtio console for guest I/O
 //! - `net`: Virtio network device for guest networking
 //! - `vsock`: Virtio socket device for host-guest communication
+//! - `fs`: Virtio filesystem device for shared directories
 
 mod console;
+mod fs;
 mod net;
 mod vsock;
 
 pub use console::VirtioConsole;
+pub use fs::VirtioFs;
 pub use net::VirtioNet;
 pub use vsock::{BridgeToDevice, DeviceToBridge, VirtioVsock};
 

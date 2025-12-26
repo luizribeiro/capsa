@@ -1324,8 +1324,8 @@ mod tests {
 
         // Verify IP header
         let ip = Ipv4Packet::new_checked(eth.payload()).unwrap();
-        assert_eq!(Ipv4Addr::from(ip.src_addr()), *src.ip());
-        assert_eq!(Ipv4Addr::from(ip.dst_addr()), *dst.ip());
+        assert_eq!(ip.src_addr(), *src.ip());
+        assert_eq!(ip.dst_addr(), *dst.ip());
 
         // Verify UDP header
         let udp = UdpPacket::new_checked(ip.payload()).unwrap();
@@ -1412,8 +1412,8 @@ mod tests {
 
         // Verify IP header
         let ip = Ipv4Packet::new_checked(eth.payload()).unwrap();
-        assert_eq!(Ipv4Addr::from(ip.src_addr()), src_ip);
-        assert_eq!(Ipv4Addr::from(ip.dst_addr()), dst_ip);
+        assert_eq!(ip.src_addr(), src_ip);
+        assert_eq!(ip.dst_addr(), dst_ip);
         assert_eq!(ip.next_header(), IpProtocol::Icmp);
 
         // Verify ICMP header

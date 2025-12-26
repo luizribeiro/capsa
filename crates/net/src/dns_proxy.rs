@@ -312,7 +312,7 @@ mod tests {
 
     #[test]
     fn dns_error_source() {
-        let io_err = std::io::Error::new(std::io::ErrorKind::Other, "test");
+        let io_err = std::io::Error::other("test");
         let dns_err = DnsError::IoError(io_err);
         assert!(dns_err.source().is_some());
 

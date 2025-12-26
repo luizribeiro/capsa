@@ -618,7 +618,7 @@ async fn test_policy_console_only() {
             let output = console
                 .exec(&format!("echo TEST_{}", i), Duration::from_secs(5))
                 .await
-                .expect(&format!("Console command {} should work", i));
+                .unwrap_or_else(|_| panic!("Console command {} should work", i));
             assert!(
                 output.contains(&format!("TEST_{}", i)),
                 "Output should contain TEST_{}",
