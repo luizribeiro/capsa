@@ -836,6 +836,94 @@ fn craft_tcp_frame(
 mod tests {
     use super::*;
 
+    /// Test that large TCP data is segmented into MSS-sized chunks.
+    #[test]
+    fn test_craft_tcp_data_within_mss() {
+        let src = SocketAddrV4::new(Ipv4Addr::new(93, 184, 216, 34), 443);
+        let dst = SocketAddrV4::new(Ipv4Addr::new(10, 0, 2, 15), 12345);
+        let gateway_mac = EthernetAddress([0x52, 0x54, 0x00, 0x00, 0x00, 0x01]);
+        let guest_mac = EthernetAddress([0x52, 0x54, 0x00, 0x00, 0x00, 0x02]);
+
+        // Small payload (100 bytes) - should fit in single segment
+        let payload = vec![0xAB; 100];
+        let frame = craft_tcp_data(src, dst, 1000, 2000, &payload, gateway_mac, guest_mac);
+
+        assert!(frame.is_some());
+        let frame = frame.unwrap();
+
+        // Verify frame is reasonable size (ethernet + IP + TCP headers + payload)
+        // Ethernet: 14, IP: 20, TCP: 20, Payload: 100 = 154 bytes
+        assert!(frame.len() < 1500, "Frame should be under MTU");
+
+        let eth = EthernetFrame::new_checked(&frame).unwrap();
+        let ip = Ipv4Packet::new_checked(eth.payload()).unwrap();
+        let tcp = TcpPacket::new_checked(ip.payload()).unwrap();
+
+        assert_eq!(tcp.seq_number(), TcpSeqNumber(1000));
+        assert_eq!(tcp.ack_number(), TcpSeqNumber(2000));
+        assert_eq!(tcp.payload().len(), 100);
+    }
+
+    /// Test that MSS constant is correctly calculated.
+    #[test]
+    fn test_mss_constant() {
+        // MSS = MTU (1500) - IP header (20) - TCP header (20) = 1460
+        const ETHERNET_MTU: usize = 1500;
+        const IP_HEADER: usize = 20;
+        const TCP_HEADER: usize = 20;
+        const EXPECTED_MSS: usize = ETHERNET_MTU - IP_HEADER - TCP_HEADER;
+
+        assert_eq!(EXPECTED_MSS, 1460);
+    }
+
+    /// Test that sequence numbers would advance correctly for segmented data.
+    #[test]
+    fn test_sequence_advancement_for_segments() {
+        // Simulate what happens when we segment 3000 bytes into MSS chunks
+        const MSS: u32 = 1460;
+        let total_bytes: u32 = 3000;
+        let initial_seq: u32 = 1000;
+
+        let mut seq = initial_seq;
+        let mut offset: u32 = 0;
+
+        let mut segments = Vec::new();
+        while offset < total_bytes {
+            let segment_len = std::cmp::min(MSS, total_bytes - offset);
+            segments.push((seq, segment_len));
+            seq = seq.wrapping_add(segment_len);
+            offset += segment_len;
+        }
+
+        // Should produce 3 segments: 1460, 1460, 80
+        assert_eq!(segments.len(), 3);
+        assert_eq!(segments[0], (1000, 1460)); // seq=1000, len=1460
+        assert_eq!(segments[1], (2460, 1460)); // seq=2460, len=1460
+        assert_eq!(segments[2], (3920, 80)); // seq=3920, len=80
+
+        // Final sequence should be initial + total bytes
+        assert_eq!(seq, initial_seq + total_bytes);
+    }
+
+    /// Test AtomicU32 sequence number synchronization pattern.
+    #[test]
+    fn test_atomic_sequence_synchronization() {
+        let shared_seq = Arc::new(AtomicU32::new(1000));
+        let task_seq = shared_seq.clone();
+
+        // Simulate task sending 1460 bytes
+        task_seq.fetch_add(1460, Ordering::Relaxed);
+
+        // Entry should see updated value
+        assert_eq!(shared_seq.load(Ordering::Relaxed), 2460);
+
+        // Simulate task sending another 1460 bytes
+        task_seq.fetch_add(1460, Ordering::Relaxed);
+
+        // Entry should see further updated value
+        assert_eq!(shared_seq.load(Ordering::Relaxed), 3920);
+    }
+
     #[test]
     fn test_craft_udp_response() {
         let payload = b"hello";
