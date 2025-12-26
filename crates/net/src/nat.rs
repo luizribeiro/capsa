@@ -320,13 +320,14 @@ impl NatTable {
                                 const MAX_SEGMENT_SIZE: usize = 1460;
                                 let data = &buf[..n];
                                 let mut offset = 0;
+                                let mut send_failed = false;
 
                                 while offset < data.len() {
                                     let end = (offset + MAX_SEGMENT_SIZE).min(data.len());
                                     let segment = &data[offset..end];
                                     let our_seq = our_seq_for_task.load(Ordering::Relaxed);
 
-                                    if let Some(frame) = craft_tcp_data(
+                                    match craft_tcp_data(
                                         remote_addr,
                                         guest_addr,
                                         our_seq,
@@ -335,12 +336,29 @@ impl NatTable {
                                         gateway_mac,
                                         guest_mac,
                                     ) {
-                                        if tx_to_guest.send(frame).await.is_err() {
+                                        Some(frame) => {
+                                            if tx_to_guest.send(frame).await.is_err() {
+                                                send_failed = true;
+                                                break;
+                                            }
+                                            our_seq_for_task
+                                                .fetch_add(segment.len() as u32, Ordering::Relaxed);
+                                        }
+                                        None => {
+                                            tracing::error!(
+                                                "NAT: Failed to craft TCP segment for {} -> {}",
+                                                guest_addr,
+                                                remote_addr
+                                            );
+                                            send_failed = true;
                                             break;
                                         }
-                                        our_seq_for_task.fetch_add(segment.len() as u32, Ordering::Relaxed);
                                     }
                                     offset = end;
+                                }
+
+                                if send_failed {
+                                    break;
                                 }
                             }
                             Err(_) => {
