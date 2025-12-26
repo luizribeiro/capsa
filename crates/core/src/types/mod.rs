@@ -6,8 +6,8 @@ mod share;
 pub use cluster::{NetworkClusterBuilder, NetworkClusterConfig};
 pub use disk::{DiskImage, ImageFormat};
 pub use network::{
-    ClusterPortConfig, NetworkMode, NetworkPolicy, PolicyAction, PolicyRule, PortForward, Protocol,
-    RuleMatcher, UserNatConfig, UserNatConfigBuilder,
+    ClusterPortConfig, DomainPattern, NetworkMode, NetworkPolicy, PolicyAction, PolicyRule,
+    PortForward, Protocol, RuleMatcher, UserNatConfig, UserNatConfigBuilder,
 };
 pub use share::{MountMode, ShareMechanism, SharedDir, Virtio9pConfig, VirtioFsConfig};
 

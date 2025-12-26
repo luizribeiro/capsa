@@ -1,5 +1,50 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use std::net::Ipv4Addr;
+
+/// Pattern for matching domain names in network policies.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum DomainPattern {
+    /// Exact match: "api.anthropic.com"
+    Exact(String),
+    /// Wildcard match: "*.github.com" matches "api.github.com"
+    /// Does NOT match "github.com" itself (must have subdomain)
+    Wildcard(String),
+}
+
+impl DomainPattern {
+    /// Parse a pattern string into a DomainPattern.
+    /// Patterns starting with "*." are treated as wildcards.
+    pub fn parse(pattern: &str) -> Self {
+        if let Some(suffix) = pattern.strip_prefix("*.") {
+            DomainPattern::Wildcard(suffix.to_lowercase())
+        } else {
+            DomainPattern::Exact(pattern.to_lowercase())
+        }
+    }
+
+    /// Check if a domain matches this pattern.
+    pub fn matches(&self, domain: &str) -> bool {
+        let domain_lower = domain.to_lowercase();
+        match self {
+            DomainPattern::Exact(pattern) => domain_lower == *pattern,
+            DomainPattern::Wildcard(suffix) => {
+                // Must end with ".suffix" (must have at least one subdomain level)
+                domain_lower.ends_with(&format!(".{}", suffix))
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for DomainPattern {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        Ok(DomainPattern::parse(&s))
+    }
+}
 
 /// Network protocol for port forwarding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -45,8 +90,8 @@ pub enum RuleMatcher {
     PortRange { start: u16, end: u16 },
     /// Match traffic by protocol
     Protocol(Protocol),
-    /// Match DNS queries for domain (requires DNS interception)
-    Domain(String),
+    /// Match traffic to domain (requires DNS interception for IP→domain lookup)
+    Domain(DomainPattern),
     /// All matchers must match
     All(Vec<RuleMatcher>),
 }
@@ -150,6 +195,33 @@ impl NetworkPolicy {
     /// Add a custom rule.
     pub fn rule(mut self, action: PolicyAction, matcher: RuleMatcher) -> Self {
         self.rules.push(PolicyRule { action, matcher });
+        self
+    }
+
+    /// Add a rule to allow traffic to a domain.
+    pub fn allow_domain(mut self, pattern: &str) -> Self {
+        self.rules.push(PolicyRule {
+            action: PolicyAction::Allow,
+            matcher: RuleMatcher::Domain(DomainPattern::parse(pattern)),
+        });
+        self
+    }
+
+    /// Add a rule to deny traffic to a domain.
+    pub fn deny_domain(mut self, pattern: &str) -> Self {
+        self.rules.push(PolicyRule {
+            action: PolicyAction::Deny,
+            matcher: RuleMatcher::Domain(DomainPattern::parse(pattern)),
+        });
+        self
+    }
+
+    /// Add a rule to log traffic to a domain (continues evaluation).
+    pub fn log_domain(mut self, pattern: &str) -> Self {
+        self.rules.push(PolicyRule {
+            action: PolicyAction::Log,
+            matcher: RuleMatcher::Domain(DomainPattern::parse(pattern)),
+        });
         self
     }
 }
@@ -413,5 +485,99 @@ mod tests {
             }
             _ => panic!("Expected UserNat"),
         }
+    }
+
+    #[test]
+    fn domain_pattern_parse_exact() {
+        let pattern = DomainPattern::parse("api.anthropic.com");
+        assert!(matches!(pattern, DomainPattern::Exact(_)));
+        if let DomainPattern::Exact(s) = pattern {
+            assert_eq!(s, "api.anthropic.com");
+        }
+    }
+
+    #[test]
+    fn domain_pattern_parse_wildcard() {
+        let pattern = DomainPattern::parse("*.github.com");
+        assert!(matches!(pattern, DomainPattern::Wildcard(_)));
+        if let DomainPattern::Wildcard(s) = pattern {
+            assert_eq!(s, "github.com");
+        }
+    }
+
+    #[test]
+    fn domain_pattern_parse_lowercases() {
+        let exact = DomainPattern::parse("API.Anthropic.COM");
+        if let DomainPattern::Exact(s) = exact {
+            assert_eq!(s, "api.anthropic.com");
+        }
+
+        let wildcard = DomainPattern::parse("*.GITHUB.COM");
+        if let DomainPattern::Wildcard(s) = wildcard {
+            assert_eq!(s, "github.com");
+        }
+    }
+
+    #[test]
+    fn domain_pattern_exact_match() {
+        let pattern = DomainPattern::parse("api.anthropic.com");
+        assert!(pattern.matches("api.anthropic.com"));
+        assert!(pattern.matches("API.ANTHROPIC.COM"));
+        assert!(pattern.matches("Api.Anthropic.Com"));
+        assert!(!pattern.matches("other.anthropic.com"));
+        assert!(!pattern.matches("evil.com"));
+        assert!(!pattern.matches("api.anthropic.com.evil.com"));
+    }
+
+    #[test]
+    fn domain_pattern_wildcard_match() {
+        let pattern = DomainPattern::parse("*.github.com");
+        assert!(pattern.matches("api.github.com"));
+        assert!(pattern.matches("raw.github.com"));
+        assert!(pattern.matches("deep.sub.github.com"));
+        assert!(pattern.matches("API.GITHUB.COM"));
+        assert!(!pattern.matches("github.com"));
+        assert!(!pattern.matches("evil-github.com"));
+        assert!(!pattern.matches("notgithub.com"));
+    }
+
+    #[test]
+    fn domain_pattern_serde_roundtrip() {
+        let exact = DomainPattern::parse("example.com");
+        let json = serde_json::to_string(&exact).unwrap();
+        assert_eq!(json, "\"example.com\"");
+        let parsed: DomainPattern = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed, exact);
+
+        let wildcard = DomainPattern::parse("*.example.com");
+        let json = serde_json::to_string(&wildcard).unwrap();
+        assert_eq!(json, "\"example.com\"");
+        let parsed: DomainPattern = serde_json::from_str("\"*.example.com\"").unwrap();
+        assert_eq!(parsed, wildcard);
+    }
+
+    #[test]
+    fn network_policy_domain_builders() {
+        let policy = NetworkPolicy::deny_all()
+            .allow_domain("api.anthropic.com")
+            .deny_domain("*.evil.com")
+            .log_domain("*.monitor.com");
+
+        assert_eq!(policy.rules.len(), 3);
+        assert_eq!(policy.rules[0].action, PolicyAction::Allow);
+        assert!(matches!(
+            &policy.rules[0].matcher,
+            RuleMatcher::Domain(DomainPattern::Exact(s)) if s == "api.anthropic.com"
+        ));
+        assert_eq!(policy.rules[1].action, PolicyAction::Deny);
+        assert!(matches!(
+            &policy.rules[1].matcher,
+            RuleMatcher::Domain(DomainPattern::Wildcard(s)) if s == "evil.com"
+        ));
+        assert_eq!(policy.rules[2].action, PolicyAction::Log);
+        assert!(matches!(
+            &policy.rules[2].matcher,
+            RuleMatcher::Domain(DomainPattern::Wildcard(s)) if s == "monitor.com"
+        ));
     }
 }

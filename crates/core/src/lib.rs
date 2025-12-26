@@ -21,7 +21,7 @@ pub use capabilities::{
 pub use error::{Error, Result};
 pub use macos::{DEFAULT_ROOT_DEVICE, macos_cmdline_defaults, macos_virtualization_capabilities};
 pub use types::{
-    ClusterPortConfig, DiskImage, GuestOs, HostPlatform, ImageFormat, MountMode,
+    ClusterPortConfig, DiskImage, DomainPattern, GuestOs, HostPlatform, ImageFormat, MountMode,
     NetworkClusterBuilder, NetworkClusterConfig, NetworkMode, NetworkPolicy, PolicyAction,
     PolicyRule, PortForward, Protocol, ResourceConfig, RuleMatcher, ShareMechanism, SharedDir,
     UserNatConfig, UserNatConfigBuilder, Virtio9pConfig, VirtioFsConfig,
