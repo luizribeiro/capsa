@@ -82,6 +82,12 @@ pub struct PortForward {
     pub guest_port: u16,
 }
 
+impl PortForward {
+    pub fn is_tcp(&self) -> bool {
+        self.protocol == Protocol::Tcp
+    }
+}
+
 /// Action to take when a policy rule matches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]

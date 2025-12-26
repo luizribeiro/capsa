@@ -35,14 +35,6 @@ struct DnsQueryInfo {
     query_bytes: Vec<u8>,
 }
 
-/// Port forwarding rule.
-#[derive(Clone, Debug)]
-pub struct PortForwardRule {
-    pub host_port: u16,
-    pub guest_port: u16,
-    pub is_tcp: bool,
-}
-
 /// Configuration for the userspace NAT stack.
 #[derive(Clone, Debug)]
 pub struct StackConfig {
@@ -57,7 +49,7 @@ pub struct StackConfig {
     /// MAC address for the gateway interface
     pub gateway_mac: [u8; 6],
     /// Port forwarding rules
-    pub port_forwards: Vec<PortForwardRule>,
+    pub port_forwards: Vec<capsa_core::PortForward>,
     /// Network filtering policy
     pub policy: Option<capsa_core::NetworkPolicy>,
 }
@@ -84,23 +76,13 @@ impl From<&capsa_core::UserNatConfig> for StackConfig {
             .and_then(|(_, p)| p.parse().ok())
             .unwrap_or(24);
 
-        let port_forwards = config
-            .port_forwards
-            .iter()
-            .map(|pf| PortForwardRule {
-                host_port: pf.host_port,
-                guest_port: pf.guest_port,
-                is_tcp: pf.protocol == capsa_core::Protocol::Tcp,
-            })
-            .collect();
-
         Self {
             gateway_ip: config.gateway,
             subnet_prefix,
             dhcp_range_start: config.dhcp_start,
             dhcp_range_end: config.dhcp_end,
             gateway_mac: [0x52, 0x54, 0x00, 0x00, 0x00, 0x01],
-            port_forwards,
+            port_forwards: config.port_forwards.clone(),
             policy: config.policy.clone(),
         }
     }
@@ -223,7 +205,7 @@ impl<F: FrameIO> UserNatStack<F> {
         // Start port forward listeners
         if let Some(ref mut pf) = self.port_forwarder {
             for rule in &self.config.port_forwards {
-                if rule.is_tcp {
+                if rule.is_tcp() {
                     if let Err(e) = pf.start_tcp_forward(rule.host_port, rule.guest_port).await {
                         tracing::warn!(
                             "Failed to start TCP port forward {}:{}: {}",
@@ -684,10 +666,10 @@ mod tests {
         assert_eq!(stack_config.port_forwards.len(), 2);
         assert_eq!(stack_config.port_forwards[0].host_port, 8080);
         assert_eq!(stack_config.port_forwards[0].guest_port, 80);
-        assert!(stack_config.port_forwards[0].is_tcp);
+        assert!(stack_config.port_forwards[0].is_tcp());
         assert_eq!(stack_config.port_forwards[1].host_port, 5353);
         assert_eq!(stack_config.port_forwards[1].guest_port, 53);
-        assert!(!stack_config.port_forwards[1].is_tcp);
+        assert!(!stack_config.port_forwards[1].is_tcp());
 
         assert!(stack_config.policy.is_some());
         assert_eq!(

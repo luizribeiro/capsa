@@ -25,7 +25,7 @@ pub use error::NetError;
 pub use frame_io::FrameIO;
 pub use policy::{PacketInfo, PacketProtocol, PolicyChecker, PolicyResult};
 pub use port_forward::{ForwardConfig, PortForwarder};
-pub use stack::{PortForwardRule, StackConfig, UserNatStack};
+pub use stack::{StackConfig, UserNatStack};
 pub use switch::{SwitchPort, VirtualSwitch};
 
 #[cfg(unix)]
