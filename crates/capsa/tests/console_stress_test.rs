@@ -7,10 +7,9 @@
 //! exec() method properly synchronizes command execution, solving the serial
 //! console timing issues documented in docs/console-automation-investigation.md.
 
-#[cfg(not(feature = "linux-kvm"))]
 use capsa::test_utils::test_vm;
-#[cfg(not(feature = "linux-kvm"))]
 use std::time::Duration;
+use tokio::time::sleep;
 
 /// Simple test to verify exec works.
 #[apple_main::harness_test]
@@ -151,6 +150,87 @@ async fn test_exec_variable_output() {
 
         vm.kill().await.expect("Failed to kill VM");
     }
+}
+
+/// Diagnostic test to investigate fork/exec behavior on different backends.
+///
+/// This test explores known issues with command execution:
+/// - macOS: Pipes hang but subshell workaround `(cmd | cmd)` works
+/// - KVM: ALL forked commands hang (not just pipes)
+///
+/// See docs/known-issues.md for details.
+///
+/// Run with: cargo test test_exec_pipe_diagnostic --features <backend> -- --nocapture
+#[apple_main::harness_test]
+async fn test_exec_pipe_diagnostic() {
+    #[cfg(feature = "linux-kvm")]
+    eprintln!("Running on KVM backend - known issue: all fork-requiring commands fail");
+    #[cfg(not(feature = "linux-kvm"))]
+    eprintln!("Running on macOS backend - known issue: pipe commands hang");
+
+    let vm = test_vm("default")
+        .no_network()
+        .build()
+        .await
+        .expect("Failed to build VM");
+    let console = vm.console().await.expect("Failed to get console");
+
+    console
+        .wait_for_timeout("Boot successful", Duration::from_secs(30))
+        .await
+        .expect("VM did not boot");
+
+    // Test 1: Shell builtin (no fork) - should work on all backends
+    eprintln!("\n[1] Testing shell builtin (echo)...");
+    match console
+        .exec("echo builtin_test", Duration::from_secs(5))
+        .await
+    {
+        Ok(_) => eprintln!("    ✓ Shell builtin works"),
+        Err(e) => eprintln!("    ✗ Shell builtin FAILED: {}", e),
+    }
+
+    // Test 2: Subshell (requires fork)
+    eprintln!("\n[2] Testing subshell (echo in parentheses)...");
+    match console
+        .exec("(echo subshell_test)", Duration::from_secs(5))
+        .await
+    {
+        Ok(_) => eprintln!("    ✓ Subshell works"),
+        Err(e) => eprintln!("    ✗ Subshell FAILED: {}", e),
+    }
+
+    // Interrupt any hung state
+    console.send_interrupt().await.ok();
+    sleep(Duration::from_millis(100)).await;
+
+    // Test 3: Simple pipe
+    eprintln!("\n[3] Testing simple pipe (echo | cat)...");
+    match console
+        .exec("echo pipe_test | cat", Duration::from_secs(5))
+        .await
+    {
+        Ok(_) => eprintln!("    ✓ Pipe works"),
+        Err(e) => eprintln!("    ✗ Pipe FAILED: {}", e),
+    }
+
+    // Interrupt any hung state
+    console.send_interrupt().await.ok();
+    sleep(Duration::from_millis(100)).await;
+
+    // Test 4: External command (requires exec)
+    eprintln!("\n[4] Testing external command (ls /)...");
+    match console.exec("ls /", Duration::from_secs(5)).await {
+        Ok(_) => eprintln!("    ✓ External command works"),
+        Err(e) => eprintln!("    ✗ External command FAILED: {}", e),
+    }
+
+    // Clean up
+    console.send_interrupt().await.ok();
+    sleep(Duration::from_millis(100)).await;
+
+    vm.kill().await.expect("Failed to kill VM");
+    eprintln!("\nTest complete. See docs/known-issues.md for issue details.");
 }
 
 /// Tests mixed execution times.
