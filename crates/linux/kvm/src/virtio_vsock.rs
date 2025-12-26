@@ -58,7 +58,7 @@ const VIRTIO_F_VERSION_1: u64 = 1 << 32;
 // Vsock header size (44 bytes)
 const VSOCK_HDR_SIZE: usize = 44;
 
-use crate::virtio::{MAX_DESCRIPTOR_LEN, MAX_VSOCK_CONNECTIONS};
+use crate::virtio::{MAX_DESCRIPTOR_LEN, MAX_VSOCK_CONNECTIONS, validate_queue_addresses};
 
 // Vsock operation codes
 const VSOCK_OP_REQUEST: u16 = 1;
@@ -702,6 +702,20 @@ impl VirtioVsock {
                 self.current_queue_mut().size = val as u16;
             }
             VIRTIO_MMIO_QUEUE_READY => {
+                if val == 1 {
+                    let q = self.current_queue();
+                    if let Some(ref memory) = self.memory
+                        && !validate_queue_addresses(
+                            memory,
+                            q.desc_table,
+                            q.avail_ring,
+                            q.used_ring,
+                            q.size,
+                        )
+                    {
+                        return;
+                    }
+                }
                 self.current_queue_mut().ready = val == 1;
             }
             VIRTIO_MMIO_QUEUE_NOTIFY => {

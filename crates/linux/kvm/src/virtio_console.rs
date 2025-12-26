@@ -61,7 +61,7 @@ const VIRTIO_INT_USED_RING: u32 = 1;
 // Virtio feature bits
 const VIRTIO_F_VERSION_1: u64 = 1 << 32;
 
-use crate::virtio::MAX_DESCRIPTOR_LEN;
+use crate::virtio::{MAX_DESCRIPTOR_LEN, validate_queue_addresses};
 
 /// State for a single virtio queue
 struct VirtioQueueState {
@@ -349,6 +349,20 @@ impl VirtioConsole {
                 self.current_queue_mut().size = val as u16;
             }
             VIRTIO_MMIO_QUEUE_READY => {
+                if val == 1 {
+                    let q = self.current_queue();
+                    if let Some(ref memory) = self.memory
+                        && !validate_queue_addresses(
+                            memory,
+                            q.desc_table,
+                            q.avail_ring,
+                            q.used_ring,
+                            q.size,
+                        )
+                    {
+                        return;
+                    }
+                }
                 self.current_queue_mut().ready = val == 1;
             }
             VIRTIO_MMIO_QUEUE_NOTIFY => {

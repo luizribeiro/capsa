@@ -60,7 +60,7 @@ const VIRTIO_NET_F_MAC: u64 = 1 << 5;
 // With VIRTIO_F_VERSION_1, the modern header includes num_buffers (12 bytes total)
 const VIRTIO_NET_HDR_SIZE: usize = 12;
 
-use crate::virtio::MAX_DESCRIPTOR_LEN;
+use crate::virtio::{MAX_DESCRIPTOR_LEN, validate_queue_addresses};
 
 struct VirtioQueueState {
     ready: bool,
@@ -392,6 +392,20 @@ impl VirtioNet {
                 self.current_queue_mut().size = val as u16;
             }
             VIRTIO_MMIO_QUEUE_READY => {
+                if val == 1 {
+                    let q = self.current_queue();
+                    if let Some(ref memory) = self.memory
+                        && !validate_queue_addresses(
+                            memory,
+                            q.desc_table,
+                            q.avail_ring,
+                            q.used_ring,
+                            q.size,
+                        )
+                    {
+                        return;
+                    }
+                }
                 self.current_queue_mut().ready = val == 1;
             }
             VIRTIO_MMIO_QUEUE_NOTIFY => {
