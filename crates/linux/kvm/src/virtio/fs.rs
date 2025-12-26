@@ -160,6 +160,58 @@ impl VirtioFs {
         let _ = self.vm_fd.set_irq_line(self.irq, false);
     }
 
+    fn collect_pending_requests(
+        memory: &GuestMemoryMmap,
+        desc_table: u64,
+        avail_ring: u64,
+        queue_size: u16,
+        next_avail: &mut u16,
+    ) -> Vec<(u16, Vec<u8>)> {
+        let mut requests = Vec::new();
+
+        loop {
+            let avail_idx: u16 = memory
+                .read_obj(GuestAddress(avail_ring + 2))
+                .unwrap_or(*next_avail);
+            if *next_avail == avail_idx {
+                break;
+            }
+
+            let desc_idx_addr = avail_ring + 4 + ((*next_avail as u64 % queue_size as u64) * 2);
+            let desc_idx: u16 = memory.read_obj(GuestAddress(desc_idx_addr)).unwrap_or(0);
+
+            let request_data =
+                Self::read_descriptor_chain(memory, desc_table, queue_size, desc_idx);
+            requests.push((desc_idx, request_data));
+
+            *next_avail = next_avail.wrapping_add(1);
+        }
+
+        requests
+    }
+
+    fn write_used_entry(
+        memory: &GuestMemoryMmap,
+        used_ring: u64,
+        queue_size: u16,
+        next_used: &mut u16,
+        desc_idx: u16,
+        response_len: u32,
+    ) {
+        let used_entry_addr = used_ring + 4 + ((*next_used as u64 % queue_size as u64) * 8);
+        memory
+            .write_obj(desc_idx as u32, GuestAddress(used_entry_addr))
+            .ok();
+        memory
+            .write_obj(response_len, GuestAddress(used_entry_addr + 4))
+            .ok();
+
+        *next_used = next_used.wrapping_add(1);
+        memory
+            .write_obj(*next_used, GuestAddress(used_ring + 2))
+            .ok();
+    }
+
     fn process_request_queue(&mut self) {
         let memory = match &self.memory {
             Some(m) => m.clone(),
@@ -171,7 +223,6 @@ impl VirtioFs {
             return;
         }
 
-        // Copy queue state to avoid borrowing self
         let desc_table = queue_state.desc_table;
         let avail_ring = queue_state.avail_ring;
         let used_ring = queue_state.used_ring;
@@ -179,59 +230,31 @@ impl VirtioFs {
         let mut next_avail = queue_state.next_avail;
         let mut next_used = queue_state.next_used;
 
-        // Collect all requests first
-        let mut requests_to_process: Vec<(u16, Vec<u8>)> = Vec::new();
+        let requests = Self::collect_pending_requests(
+            &memory,
+            desc_table,
+            avail_ring,
+            queue_size,
+            &mut next_avail,
+        );
 
-        loop {
-            let avail_idx: u16 = memory
-                .read_obj(GuestAddress(avail_ring + 2))
-                .unwrap_or(next_avail);
-            if next_avail == avail_idx {
-                break;
-            }
-
-            let desc_idx_addr = avail_ring + 4 + ((next_avail as u64 % queue_size as u64) * 2);
-            let desc_idx: u16 = memory.read_obj(GuestAddress(desc_idx_addr)).unwrap_or(0);
-
-            // Read the request data from descriptor chain
-            let request_data =
-                Self::read_descriptor_chain(&memory, desc_table, queue_size, desc_idx);
-            requests_to_process.push((desc_idx, request_data));
-
-            next_avail = next_avail.wrapping_add(1);
-        }
-
-        if requests_to_process.is_empty() {
+        if requests.is_empty() {
             return;
         }
 
-        // Process each request and collect responses
-        let mut responses: Vec<(u16, Vec<u8>)> = Vec::new();
-        for (desc_idx, request_data) in requests_to_process {
+        for (desc_idx, request_data) in requests {
             let response = self.handle_fuse_request(&request_data);
-            responses.push((desc_idx, response));
-        }
-
-        // Write responses back to guest
-        for (desc_idx, response) in responses {
             Self::write_response_to_chain(&memory, desc_table, queue_size, desc_idx, &response);
-
-            let response_len = response.len() as u32;
-            let used_entry_addr = used_ring + 4 + ((next_used as u64 % queue_size as u64) * 8);
-            memory
-                .write_obj(desc_idx as u32, GuestAddress(used_entry_addr))
-                .ok();
-            memory
-                .write_obj(response_len, GuestAddress(used_entry_addr + 4))
-                .ok();
-
-            next_used = next_used.wrapping_add(1);
-            memory
-                .write_obj(next_used, GuestAddress(used_ring + 2))
-                .ok();
+            Self::write_used_entry(
+                &memory,
+                used_ring,
+                queue_size,
+                &mut next_used,
+                desc_idx,
+                response.len() as u32,
+            );
         }
 
-        // Update queue state
         self.queues[REQUEST_QUEUE_INDEX].next_avail = next_avail;
         self.queues[REQUEST_QUEUE_INDEX].next_used = next_used;
 
@@ -1163,60 +1186,110 @@ impl VirtioFs {
         }
     }
 
+    fn set_queue_addr_low(addr: &mut u64, val: u32) {
+        *addr = (*addr & 0xFFFF_FFFF_0000_0000) | (val as u64);
+    }
+
+    fn set_queue_addr_high(addr: &mut u64, val: u32) {
+        *addr = (*addr & 0x0000_0000_FFFF_FFFF) | ((val as u64) << 32);
+    }
+
+    fn write_feature_config(&mut self, offset: u64, val: u32) -> bool {
+        match offset {
+            VIRTIO_MMIO_DEVICE_FEATURES_SEL => self.device_features_sel = val,
+            VIRTIO_MMIO_DRIVER_FEATURES_SEL => self.driver_features_sel = val,
+            VIRTIO_MMIO_DRIVER_FEATURES => {
+                if self.driver_features_sel == 0 {
+                    Self::set_queue_addr_low(&mut self.driver_features, val);
+                } else {
+                    Self::set_queue_addr_high(&mut self.driver_features, val);
+                }
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn write_queue_config(&mut self, offset: u64, val: u32) -> bool {
+        let queue_idx = self.queue_sel as usize;
+        if queue_idx >= NUM_QUEUES {
+            return matches!(
+                offset,
+                VIRTIO_MMIO_QUEUE_SEL
+                    | VIRTIO_MMIO_QUEUE_NUM
+                    | VIRTIO_MMIO_QUEUE_READY
+                    | VIRTIO_MMIO_QUEUE_DESC_LOW
+                    | VIRTIO_MMIO_QUEUE_DESC_HIGH
+                    | VIRTIO_MMIO_QUEUE_AVAIL_LOW
+                    | VIRTIO_MMIO_QUEUE_AVAIL_HIGH
+                    | VIRTIO_MMIO_QUEUE_USED_LOW
+                    | VIRTIO_MMIO_QUEUE_USED_HIGH
+            );
+        }
+
+        match offset {
+            VIRTIO_MMIO_QUEUE_SEL => self.queue_sel = val,
+            VIRTIO_MMIO_QUEUE_NUM => self.queues[queue_idx].size = val as u16,
+            VIRTIO_MMIO_QUEUE_READY => self.handle_queue_ready(queue_idx, val),
+            VIRTIO_MMIO_QUEUE_DESC_LOW => {
+                Self::set_queue_addr_low(&mut self.queues[queue_idx].desc_table, val)
+            }
+            VIRTIO_MMIO_QUEUE_DESC_HIGH => {
+                Self::set_queue_addr_high(&mut self.queues[queue_idx].desc_table, val)
+            }
+            VIRTIO_MMIO_QUEUE_AVAIL_LOW => {
+                Self::set_queue_addr_low(&mut self.queues[queue_idx].avail_ring, val)
+            }
+            VIRTIO_MMIO_QUEUE_AVAIL_HIGH => {
+                Self::set_queue_addr_high(&mut self.queues[queue_idx].avail_ring, val)
+            }
+            VIRTIO_MMIO_QUEUE_USED_LOW => {
+                Self::set_queue_addr_low(&mut self.queues[queue_idx].used_ring, val)
+            }
+            VIRTIO_MMIO_QUEUE_USED_HIGH => {
+                Self::set_queue_addr_high(&mut self.queues[queue_idx].used_ring, val)
+            }
+            _ => return false,
+        }
+        true
+    }
+
+    fn handle_queue_ready(&mut self, queue_idx: usize, val: u32) {
+        let queue = &mut self.queues[queue_idx];
+        if val == 1 {
+            if let Some(memory) = &self.memory {
+                if validate_queue_addresses(
+                    memory,
+                    queue.desc_table,
+                    queue.avail_ring,
+                    queue.used_ring,
+                    queue.size,
+                ) {
+                    queue.ready = true;
+                } else {
+                    tracing::warn!("virtio-fs: invalid queue addresses, not setting ready");
+                }
+            }
+        } else {
+            queue.ready = false;
+        }
+    }
+
     fn handle_mmio_write(&mut self, offset: u64, data: &[u8]) {
         if data.len() < 4 {
             return;
         }
         let val = u32::from_le_bytes(data[..4].try_into().unwrap_or_default());
 
+        if self.write_feature_config(offset, val) {
+            return;
+        }
+
+        if self.write_queue_config(offset, val) {
+            return;
+        }
+
         match offset {
-            VIRTIO_MMIO_DEVICE_FEATURES_SEL => {
-                self.device_features_sel = val;
-            }
-            VIRTIO_MMIO_DRIVER_FEATURES_SEL => {
-                self.driver_features_sel = val;
-            }
-            VIRTIO_MMIO_DRIVER_FEATURES => {
-                if self.driver_features_sel == 0 {
-                    self.driver_features =
-                        (self.driver_features & 0xFFFF_FFFF_0000_0000) | (val as u64);
-                } else {
-                    self.driver_features =
-                        (self.driver_features & 0x0000_0000_FFFF_FFFF) | ((val as u64) << 32);
-                }
-            }
-            VIRTIO_MMIO_QUEUE_SEL => {
-                self.queue_sel = val;
-            }
-            VIRTIO_MMIO_QUEUE_NUM => {
-                if (self.queue_sel as usize) < NUM_QUEUES {
-                    self.queues[self.queue_sel as usize].size = val as u16;
-                }
-            }
-            VIRTIO_MMIO_QUEUE_READY => {
-                if (self.queue_sel as usize) < NUM_QUEUES {
-                    let queue = &mut self.queues[self.queue_sel as usize];
-                    if val == 1 {
-                        if let Some(memory) = &self.memory {
-                            if validate_queue_addresses(
-                                memory,
-                                queue.desc_table,
-                                queue.avail_ring,
-                                queue.used_ring,
-                                queue.size,
-                            ) {
-                                queue.ready = true;
-                            } else {
-                                tracing::warn!(
-                                    "virtio-fs: invalid queue addresses, not setting ready"
-                                );
-                            }
-                        }
-                    } else {
-                        queue.ready = false;
-                    }
-                }
-            }
             VIRTIO_MMIO_QUEUE_NOTIFY => {
                 if val == REQUEST_QUEUE_INDEX as u32 {
                     self.process_request_queue();
@@ -1231,45 +1304,6 @@ impl VirtioFs {
                     self.queues = Default::default();
                     self.driver_features = 0;
                     self.fuse_initialized = false;
-                }
-            }
-            VIRTIO_MMIO_QUEUE_DESC_LOW => {
-                if (self.queue_sel as usize) < NUM_QUEUES {
-                    let queue = &mut self.queues[self.queue_sel as usize];
-                    queue.desc_table = (queue.desc_table & 0xFFFF_FFFF_0000_0000) | (val as u64);
-                }
-            }
-            VIRTIO_MMIO_QUEUE_DESC_HIGH => {
-                if (self.queue_sel as usize) < NUM_QUEUES {
-                    let queue = &mut self.queues[self.queue_sel as usize];
-                    queue.desc_table =
-                        (queue.desc_table & 0x0000_0000_FFFF_FFFF) | ((val as u64) << 32);
-                }
-            }
-            VIRTIO_MMIO_QUEUE_AVAIL_LOW => {
-                if (self.queue_sel as usize) < NUM_QUEUES {
-                    let queue = &mut self.queues[self.queue_sel as usize];
-                    queue.avail_ring = (queue.avail_ring & 0xFFFF_FFFF_0000_0000) | (val as u64);
-                }
-            }
-            VIRTIO_MMIO_QUEUE_AVAIL_HIGH => {
-                if (self.queue_sel as usize) < NUM_QUEUES {
-                    let queue = &mut self.queues[self.queue_sel as usize];
-                    queue.avail_ring =
-                        (queue.avail_ring & 0x0000_0000_FFFF_FFFF) | ((val as u64) << 32);
-                }
-            }
-            VIRTIO_MMIO_QUEUE_USED_LOW => {
-                if (self.queue_sel as usize) < NUM_QUEUES {
-                    let queue = &mut self.queues[self.queue_sel as usize];
-                    queue.used_ring = (queue.used_ring & 0xFFFF_FFFF_0000_0000) | (val as u64);
-                }
-            }
-            VIRTIO_MMIO_QUEUE_USED_HIGH => {
-                if (self.queue_sel as usize) < NUM_QUEUES {
-                    let queue = &mut self.queues[self.queue_sel as usize];
-                    queue.used_ring =
-                        (queue.used_ring & 0x0000_0000_FFFF_FFFF) | ((val as u64) << 32);
                 }
             }
             _ => {}
