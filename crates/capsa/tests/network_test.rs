@@ -863,3 +863,290 @@ async fn test_port_forward_with_policy() {
         vm.kill().await.expect("Failed to kill VM");
     }
 }
+
+// =============================================================================
+// Domain-Based Policy Tests
+// =============================================================================
+
+/// Tests that exact domain matching works.
+///
+/// With deny_all + allow_domain("example.com"):
+/// - HTTPS to example.com should work
+/// - HTTPS to other domains should be blocked
+#[apple_main::harness_test]
+async fn test_policy_allow_domain_exact() {
+    #[cfg(feature = "vfkit")]
+    {
+        eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
+        return;
+    }
+
+    #[cfg(not(feature = "vfkit"))]
+    {
+        // Policy: deny all except example.com (DNS is allowed via our proxy)
+        let policy = NetworkPolicy::deny_all().allow_domain("example.com");
+
+        let (vm, console) =
+            setup_vm_with_dhcp(NetworkMode::user_nat().policy(policy).build()).await;
+
+        // HTTPS to example.com should work
+        let output = console
+            .exec(
+                "wget -T 15 -q https://example.com -O /dev/null && echo DOMAIN_ALLOWED",
+                Duration::from_secs(20),
+            )
+            .await
+            .expect("HTTPS to example.com should be allowed");
+        assert!(
+            output.contains("DOMAIN_ALLOWED"),
+            "Traffic to example.com should be allowed"
+        );
+
+        // HTTPS to other domains should be blocked
+        let output = console
+            .exec(
+                "wget -T 5 -q https://httpbin.org/get -O /dev/null 2>&1 || echo OTHER_DOMAIN_BLOCKED",
+                Duration::from_secs(10),
+            )
+            .await
+            .expect("HTTPS to other domain check failed");
+        assert!(
+            output.contains("OTHER_DOMAIN_BLOCKED"),
+            "Traffic to other domains should be blocked"
+        );
+
+        vm.kill().await.expect("Failed to kill VM");
+    }
+}
+
+/// Tests that wildcard domain matching works.
+///
+/// With deny_all + allow_domain("*.example.com"):
+/// - Traffic to subdomain.example.com should work
+/// - Traffic to example.com (base domain) should be blocked
+#[apple_main::harness_test]
+async fn test_policy_allow_domain_wildcard() {
+    #[cfg(feature = "vfkit")]
+    {
+        eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
+        return;
+    }
+
+    #[cfg(not(feature = "vfkit"))]
+    {
+        // Policy: deny all except *.example.com subdomains
+        let policy = NetworkPolicy::deny_all().allow_domain("*.example.com");
+
+        let (vm, console) =
+            setup_vm_with_dhcp(NetworkMode::user_nat().policy(policy).build()).await;
+
+        // Traffic to www.example.com (subdomain) should work
+        let output = console
+            .exec(
+                "wget -T 15 -q https://www.example.com -O /dev/null && echo SUBDOMAIN_ALLOWED",
+                Duration::from_secs(20),
+            )
+            .await
+            .expect("HTTPS to www.example.com should be allowed");
+        assert!(
+            output.contains("SUBDOMAIN_ALLOWED"),
+            "Traffic to subdomain should be allowed"
+        );
+
+        // Traffic to example.com (base domain, not a subdomain) should be blocked
+        let output = console
+            .exec(
+                "wget -T 5 -q https://example.com -O /dev/null 2>&1 || echo BASE_DOMAIN_BLOCKED",
+                Duration::from_secs(10),
+            )
+            .await
+            .expect("HTTPS to base domain check failed");
+        assert!(
+            output.contains("BASE_DOMAIN_BLOCKED"),
+            "Traffic to base domain should be blocked (wildcard only matches subdomains)"
+        );
+
+        vm.kill().await.expect("Failed to kill VM");
+    }
+}
+
+/// Tests combining domain and port rules.
+///
+/// With deny_all + allow(example.com AND port 443):
+/// - HTTPS to example.com should work
+/// - HTTP to example.com should be blocked (wrong port)
+#[apple_main::harness_test]
+async fn test_policy_domain_with_port() {
+    #[cfg(feature = "vfkit")]
+    {
+        eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
+        return;
+    }
+
+    #[cfg(not(feature = "vfkit"))]
+    {
+        use capsa_core::{PolicyAction, RuleMatcher};
+
+        // Policy: deny all except (example.com AND port 443)
+        let policy = NetworkPolicy::deny_all().rule(
+            PolicyAction::Allow,
+            RuleMatcher::All(vec![
+                RuleMatcher::Domain(capsa_core::DomainPattern::parse("example.com")),
+                RuleMatcher::Port(443),
+            ]),
+        );
+
+        let (vm, console) =
+            setup_vm_with_dhcp(NetworkMode::user_nat().policy(policy).build()).await;
+
+        // HTTPS to example.com should work (matches domain AND port 443)
+        let output = console
+            .exec(
+                "wget -T 15 -q https://example.com -O /dev/null && echo HTTPS_DOMAIN_ALLOWED",
+                Duration::from_secs(20),
+            )
+            .await
+            .expect("HTTPS to example.com should be allowed");
+        assert!(
+            output.contains("HTTPS_DOMAIN_ALLOWED"),
+            "HTTPS to example.com should be allowed"
+        );
+
+        // HTTP to example.com should be blocked (wrong port)
+        let output = console
+            .exec(
+                "wget -T 5 -q http://example.com -O /dev/null 2>&1 || echo HTTP_DOMAIN_BLOCKED",
+                Duration::from_secs(10),
+            )
+            .await
+            .expect("HTTP to example.com check failed");
+        assert!(
+            output.contains("HTTP_DOMAIN_BLOCKED"),
+            "HTTP to example.com should be blocked (port 80 not allowed)"
+        );
+
+        vm.kill().await.expect("Failed to kill VM");
+    }
+}
+
+/// Tests that Log action is non-terminal (logs but continues evaluation).
+///
+/// With deny_all + log(all) + allow_port(443):
+/// - HTTPS should work (log matches, continues, allow_port matches)
+/// - HTTP should be blocked (log matches, continues, no other match, deny)
+#[apple_main::harness_test]
+async fn test_policy_log_then_allow() {
+    #[cfg(feature = "vfkit")]
+    {
+        eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
+        return;
+    }
+
+    #[cfg(not(feature = "vfkit"))]
+    {
+        use capsa_core::{PolicyAction, RuleMatcher};
+
+        // Policy: deny_all, log everything, then allow port 443
+        let policy = NetworkPolicy::deny_all()
+            .rule(PolicyAction::Log, RuleMatcher::Any)
+            .allow_port(443);
+
+        let (vm, console) =
+            setup_vm_with_dhcp(NetworkMode::user_nat().policy(policy).build()).await;
+
+        // HTTPS should work (Log is non-terminal, then allow_port(443) matches)
+        let output = console
+            .exec(
+                "wget -T 15 -q https://example.com -O /dev/null && echo HTTPS_AFTER_LOG",
+                Duration::from_secs(20),
+            )
+            .await
+            .expect("HTTPS should be allowed after log");
+        assert!(
+            output.contains("HTTPS_AFTER_LOG"),
+            "HTTPS should be allowed (log is non-terminal)"
+        );
+
+        // HTTP should be blocked (Log matches, continues, no allow match, default deny)
+        let output = console
+            .exec(
+                "wget -T 5 -q http://example.com -O /dev/null 2>&1 || echo HTTP_BLOCKED_AFTER_LOG",
+                Duration::from_secs(10),
+            )
+            .await
+            .expect("HTTP should be blocked after log");
+        assert!(
+            output.contains("HTTP_BLOCKED_AFTER_LOG"),
+            "HTTP should be blocked (log continues, then default deny)"
+        );
+
+        vm.kill().await.expect("Failed to kill VM");
+    }
+}
+
+/// Tests mixing IP-based and domain-based rules.
+///
+/// With deny_all + allow_ip(8.8.8.8) + allow_domain("example.com"):
+/// - DNS to 8.8.8.8 should work (IP rule)
+/// - HTTPS to example.com should work (domain rule)
+/// - HTTPS to other domains should be blocked
+#[apple_main::harness_test]
+async fn test_policy_mixed_ip_and_domain() {
+    #[cfg(feature = "vfkit")]
+    {
+        eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
+        return;
+    }
+
+    #[cfg(not(feature = "vfkit"))]
+    {
+        // Policy: deny all except 8.8.8.8 (IP) and example.com (domain)
+        let policy = NetworkPolicy::deny_all()
+            .allow_ip(Ipv4Addr::new(8, 8, 8, 8))
+            .allow_domain("example.com");
+
+        let (vm, console) =
+            setup_vm_with_dhcp(NetworkMode::user_nat().policy(policy).build()).await;
+
+        // DNS to 8.8.8.8 should work (IP-based rule)
+        let output = console
+            .exec(
+                "nslookup example.com 8.8.8.8 && echo IP_RULE_WORKS",
+                Duration::from_secs(10),
+            )
+            .await
+            .expect("DNS to 8.8.8.8 should work");
+        assert!(
+            output.contains("IP_RULE_WORKS"),
+            "IP-based allow rule should work"
+        );
+
+        // HTTPS to example.com should work (domain-based rule)
+        let output = console
+            .exec(
+                "wget -T 15 -q https://example.com -O /dev/null && echo DOMAIN_RULE_WORKS",
+                Duration::from_secs(20),
+            )
+            .await
+            .expect("HTTPS to example.com should work");
+        assert!(
+            output.contains("DOMAIN_RULE_WORKS"),
+            "Domain-based allow rule should work"
+        );
+
+        // DNS to 1.1.1.1 should be blocked (not in allowed IPs or domains)
+        let output = console
+            .exec(
+                "nslookup example.com 1.1.1.1 2>&1 || echo OTHER_IP_BLOCKED",
+                Duration::from_secs(10),
+            )
+            .await
+            .expect("DNS to 1.1.1.1 check failed");
+        assert!(
+            output.contains("OTHER_IP_BLOCKED"),
+            "Traffic to other IPs should be blocked"
+        );
+
+        vm.kill().await.expect("Failed to kill VM");
+    }
+}
