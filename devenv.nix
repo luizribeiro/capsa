@@ -6,7 +6,9 @@
   languages.rust.enable = true;
   languages.rust.channel = "nightly";
 
-  packages = lib.optionals pkgs.stdenv.isDarwin [
+  packages = [
+    pkgs.cargo-modules
+  ] ++ lib.optionals pkgs.stdenv.isDarwin [
     pkgs.vfkit
   ];
 
