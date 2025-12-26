@@ -257,19 +257,13 @@ async fn test_usernat_ping_external() {
 /// Starts a simple TCP echo server in the guest, then connects from host.
 #[apple_main::harness_test]
 async fn test_port_forward_tcp() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM has timing issues with background nc processes in tests");
-        return;
-    }
-
     #[cfg(feature = "vfkit")]
     {
         eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
         return;
     }
 
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    #[cfg(not(feature = "vfkit"))]
     {
         let vm = test_vm("default")
             .network(NetworkMode::user_nat().forward_tcp(18080, 8080).build())
@@ -310,19 +304,13 @@ async fn test_port_forward_tcp() {
 /// Sets up port forwarding: host:15353 → guest:5353
 #[apple_main::harness_test]
 async fn test_port_forward_udp() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM has timing issues with background nc processes in tests");
-        return;
-    }
-
     #[cfg(feature = "vfkit")]
     {
         eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
         return;
     }
 
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    #[cfg(not(feature = "vfkit"))]
     {
         let vm = test_vm("default")
             .network(NetworkMode::user_nat().forward_udp(15353, 5353).build())
@@ -411,19 +399,13 @@ async fn test_port_forward_multiple() {
 /// - HTTP requests should fail (port 80 blocked)
 #[apple_main::harness_test]
 async fn test_policy_deny_all_allow_dns() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM has timing issues with wget timeouts in policy tests");
-        return;
-    }
-
     #[cfg(feature = "vfkit")]
     {
         eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
         return;
     }
 
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    #[cfg(not(feature = "vfkit"))]
     {
         // Policy: deny all except DNS
         let policy = NetworkPolicy::deny_all().allow_dns();
@@ -476,19 +458,13 @@ async fn test_policy_deny_all_allow_dns() {
 /// - HTTP (port 80) should be blocked
 #[apple_main::harness_test]
 async fn test_policy_allow_https_only() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM has timing issues with wget timeouts in policy tests");
-        return;
-    }
-
     #[cfg(feature = "vfkit")]
     {
         eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
         return;
     }
 
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    #[cfg(not(feature = "vfkit"))]
     {
         // Policy: deny all except HTTPS and DNS
         let policy = NetworkPolicy::deny_all().allow_dns().allow_https();
@@ -550,19 +526,13 @@ async fn test_policy_allow_https_only() {
 /// Note: Uses DNS lookup instead of ping since ICMP NAT isn't implemented.
 #[apple_main::harness_test]
 async fn test_policy_allow_specific_ip() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM has timing issues with wget timeouts in policy tests");
-        return;
-    }
-
     #[cfg(feature = "vfkit")]
     {
         eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
         return;
     }
 
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    #[cfg(not(feature = "vfkit"))]
     {
         // Policy: deny all except specific IP (Google DNS)
         let policy = NetworkPolicy::deny_all().allow_ip(Ipv4Addr::new(8, 8, 8, 8));
@@ -767,19 +737,13 @@ async fn test_policy_allow_all() {
 /// - HTTP (port 80) should be blocked
 #[apple_main::harness_test]
 async fn test_policy_deny_specific_port() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM has timing issues with wget timeouts in policy tests");
-        return;
-    }
-
     #[cfg(feature = "vfkit")]
     {
         eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
         return;
     }
 
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    #[cfg(not(feature = "vfkit"))]
     {
         // Policy: allow all but deny port 80
         let policy = NetworkPolicy::allow_all().deny_port(80);
@@ -834,19 +798,13 @@ async fn test_policy_deny_specific_port() {
 /// Port forwards should work even with a restrictive policy.
 #[apple_main::harness_test]
 async fn test_port_forward_with_policy() {
-    #[cfg(feature = "linux-kvm")]
-    {
-        eprintln!("Skipping: KVM has timing issues with background nc and policy tests");
-        return;
-    }
-
     #[cfg(feature = "vfkit")]
     {
         eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
         return;
     }
 
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    #[cfg(not(feature = "vfkit"))]
     {
         // Policy: deny all outbound except DNS
         let policy = NetworkPolicy::deny_all().allow_dns();
