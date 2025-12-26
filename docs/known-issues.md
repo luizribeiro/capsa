@@ -37,7 +37,43 @@ If the issue reoccurs, document the specific reproduction conditions.
 
 ---
 
-## 2. KVM Console: Fork/Exec Fails (All Non-Builtin Commands)
+## 2. ~~KVM Console: Character Duplication~~ RESOLVED
+
+**Status**: Resolved
+**Discovered**: 2025-12-25
+**Resolved**: 2025-12-25
+**Backend**: Linux (KVM)
+
+### Original Issue
+
+Console output showed each character/line repeated ~80 times:
+```
+sh: sh: sh: sh: ... (77 times)
+can't access tty; job control turned off (repeated)
+~ # ~ # ~ # ~ # ... (80 times)
+```
+
+### Root Cause
+
+The virtio-console queue handling in `virtio_console.rs` was recreating the
+Queue object on each operation without preserving the `next_avail` and
+`next_used` indices. This caused the same descriptors to be processed
+multiple times, resulting in duplicate output.
+
+### Fix
+
+Added `next_avail` and `next_used` fields to `VirtioQueueState` and
+save/restore them after each queue operation (commit fbf8b8e).
+
+### Test
+
+```bash
+cargo test-linux --test console_stress_test test_kvm_no_character_duplication -- --nocapture
+```
+
+---
+
+## 3. KVM Console: Fork/Exec Fails (All Non-Builtin Commands)
 
 **Status**: Under investigation
 **Discovered**: 2025-12-25
@@ -80,49 +116,18 @@ console.exec("ls", Duration::from_secs(5)).await              // Timeout
 3. **Shell becomes unresponsive**: After a fork-requiring command, the shell
    stops responding entirely.
 
-4. **Separate character duplication bug**: Console output shows massive
-   character duplication (each char repeated ~80 times), suggesting a
-   virtio-console queue handling issue.
-
 ### Root Cause Theories
 
 1. **Console FD inheritance**: Child processes may not properly inherit
    the virtio-console file descriptors, causing their stdout to go nowhere.
 
-2. **Virtio-console queue corruption**: The queue handling in
-   `virtio_console.rs` recreates the Queue object on each operation,
-   potentially losing state.
-
-3. **IRQ delivery issues**: The irqfd mechanism for virtio-console
+2. **IRQ delivery issues**: The irqfd mechanism for virtio-console
    interrupts may not be working correctly, preventing the guest from
    receiving completion notifications.
 
-4. **Input duplication**: Console input is sent to BOTH virtio-console
-   AND serial (`vm.rs:487-494`), which may cause issues if the guest
-   reads from both.
-
-### Character Duplication Sub-Issue
-
-The console output shows each character/line repeated ~80 times:
-```
-sh: sh: sh: sh: ... (77 times)
-can't access tty; job control turned off (repeated)
-~ # ~ # ~ # ~ # ... (80 times)
-```
-
-This is likely caused by:
-- Virtio queue being processed multiple times
-- Or multiple interrupt deliveries for the same data
-
 ### Next Steps
 
-1. **Fix input duplication**: Remove the duplicate input to serial device
-   when virtio-console is the primary console
-
-2. **Debug virtio-console queue handling**: Add logging to track queue
-   indices and ensure proper used ring updates
-
-3. **Check FD inheritance**: Verify that child processes can write to
+1. **Check FD inheritance**: Verify that child processes can write to
    the console by testing with explicit `/dev/hvc0` writes
 
-4. **Review irqfd setup**: Ensure interrupt delivery is working correctly
+2. **Review irqfd setup**: Ensure interrupt delivery is working correctly

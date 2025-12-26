@@ -15,7 +15,7 @@ use tokio::time::sleep;
 /// Tests that KVM virtio-console output is not duplicated.
 ///
 /// This test verifies the fix for the character duplication bug where each
-/// output line was repeated ~80 times due to improper virtio queue state
+/// output line was repeated many times due to improper virtio queue state
 /// tracking. The fix saves and restores next_avail/next_used indices.
 #[apple_main::harness_test]
 async fn test_kvm_no_character_duplication() {
@@ -35,30 +35,22 @@ async fn test_kvm_no_character_duplication() {
         let console = vm.console().await.expect("Failed to get console");
 
         // Wait for boot to complete
-        let initial_output = console
+        console
             .wait_for_timeout("Boot successful", Duration::from_secs(30))
             .await
             .expect("VM did not boot");
 
-        // Wait a bit for any duplicated output to arrive
-        sleep(Duration::from_millis(100)).await;
+        let marker = "DUPTEST_XYZ_9876";
+        let output = console
+            .exec(&format!("echo {}", marker), Duration::from_secs(5))
+            .await
+            .expect("Failed to exec echo command");
 
-        // Read any remaining output
-        let remaining = console.read_available().await.unwrap_or_default();
-        let full_output = format!("{}{}", initial_output, remaining);
-
-        // The character duplication bug causes massive output bloat:
-        // - Without fix: ~18KB of output (each byte processed multiple times)
-        // - With fix: ~800 bytes of output
-        // We check the output length as a simple, robust indicator.
-        let len = full_output.len();
-        assert!(
-            len < 5000,
-            "Possible character duplication: output is {} bytes (expected < 2000). \
-             With the queue state bug, each output byte is processed multiple times, \
-             causing massive output bloat. Sample: {:?}",
-            len,
-            &full_output[..std::cmp::min(300, full_output.len())]
+        let exact_matches = output.lines().filter(|line| line.trim() == marker).count();
+        assert_eq!(
+            exact_matches, 1,
+            "Character duplication detected: marker '{}' appeared {} times. Output: {:?}",
+            marker, exact_matches, output
         );
 
         vm.kill().await.expect("Failed to kill VM");
