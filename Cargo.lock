@@ -331,6 +331,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "capsa-sandbox-init"
+version = "0.1.0"
+dependencies = [
+ "nix",
+]
+
+[[package]]
 name = "capsa-sandbox-protocol"
 version = "0.1.0"
 dependencies = [
