@@ -1286,3 +1286,218 @@ impl MutDeviceMmio for VirtioFs {
         self.handle_mmio_write(offset, data);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use kvm_ioctls::Kvm;
+    use tempfile::TempDir;
+
+    fn create_test_device(tag: &str) -> (VirtioFs, TempDir) {
+        let tmp_dir = TempDir::new().expect("Failed to create temp dir");
+        let kvm = Kvm::new().expect("Failed to open /dev/kvm");
+        let vm = kvm.create_vm().expect("Failed to create VM");
+        let vm_fd = Arc::new(vm);
+        let device = VirtioFs::new(
+            tmp_dir.path().to_path_buf(),
+            tag.to_string(),
+            false,
+            vm_fd,
+            8,
+        );
+        (device, tmp_dir)
+    }
+
+    fn read_u32(device: &VirtioFs, offset: u64) -> u32 {
+        let mut data = [0u8; 4];
+        device.handle_mmio_read(offset, &mut data);
+        u32::from_le_bytes(data)
+    }
+
+    fn write_u32(device: &mut VirtioFs, offset: u64, val: u32) {
+        device.handle_mmio_write(offset, &val.to_le_bytes());
+    }
+
+    #[test]
+    fn mmio_magic_version_device_id() {
+        let (device, _tmp) = create_test_device("test");
+
+        assert_eq!(
+            read_u32(&device, VIRTIO_MMIO_MAGIC),
+            VIRTIO_MMIO_MAGIC_VALUE
+        );
+        assert_eq!(read_u32(&device, VIRTIO_MMIO_VERSION), 2);
+        assert_eq!(read_u32(&device, VIRTIO_MMIO_DEVICE_ID), VIRTIO_ID_FS);
+        assert_eq!(read_u32(&device, VIRTIO_MMIO_VENDOR_ID), 0x554d4551);
+    }
+
+    #[test]
+    fn config_read_tag_byte_by_byte() {
+        let (device, _tmp) = create_test_device("share0");
+
+        // Read tag one byte at a time (this is what the kernel does)
+        let mut tag_bytes = Vec::new();
+        for i in 0..FS_TAG_SIZE {
+            let mut byte = [0u8; 1];
+            device.handle_mmio_read(VIRTIO_MMIO_CONFIG + i as u64, &mut byte);
+            tag_bytes.push(byte[0]);
+        }
+
+        // Verify tag contents
+        let tag_str = std::str::from_utf8(&tag_bytes[..6]).unwrap();
+        assert_eq!(tag_str, "share0");
+
+        // Rest should be null padding
+        for &b in &tag_bytes[6..] {
+            assert_eq!(b, 0);
+        }
+    }
+
+    #[test]
+    fn config_read_tag_four_bytes() {
+        let (device, _tmp) = create_test_device("share0");
+
+        // Read tag in 4-byte chunks
+        let mut tag_bytes = Vec::new();
+        for i in (0..FS_TAG_SIZE).step_by(4) {
+            let mut chunk = [0u8; 4];
+            device.handle_mmio_read(VIRTIO_MMIO_CONFIG + i as u64, &mut chunk);
+            tag_bytes.extend_from_slice(&chunk);
+        }
+
+        let tag_str = std::str::from_utf8(&tag_bytes[..6]).unwrap();
+        assert_eq!(tag_str, "share0");
+    }
+
+    #[test]
+    fn config_read_tag_two_bytes() {
+        let (device, _tmp) = create_test_device("ab");
+
+        // Read first two bytes
+        let mut chunk = [0u8; 2];
+        device.handle_mmio_read(VIRTIO_MMIO_CONFIG, &mut chunk);
+        assert_eq!(&chunk, b"ab");
+    }
+
+    #[test]
+    fn config_read_num_request_queues() {
+        let (device, _tmp) = create_test_device("test");
+
+        // num_request_queues is at offset 36 (after the 36-byte tag)
+        let num_queues = read_u32(&device, VIRTIO_MMIO_CONFIG + FS_TAG_SIZE as u64);
+        assert_eq!(num_queues, 1);
+    }
+
+    #[test]
+    fn config_read_num_request_queues_byte_by_byte() {
+        let (device, _tmp) = create_test_device("test");
+
+        // Read num_request_queues byte by byte
+        let mut bytes = [0u8; 4];
+        for i in 0..4 {
+            let mut byte = [0u8; 1];
+            device.handle_mmio_read(VIRTIO_MMIO_CONFIG + FS_TAG_SIZE as u64 + i, &mut byte);
+            bytes[i as usize] = byte[0];
+        }
+        let num_queues = u32::from_le_bytes(bytes);
+        assert_eq!(num_queues, 1);
+    }
+
+    #[test]
+    fn feature_negotiation() {
+        let (mut device, _tmp) = create_test_device("test");
+
+        // Read device features (low 32 bits)
+        write_u32(&mut device, VIRTIO_MMIO_DEVICE_FEATURES_SEL, 0);
+        let features_low = read_u32(&device, VIRTIO_MMIO_DEVICE_FEATURES);
+        assert_eq!(features_low, 0); // VERSION_1 is in high bits
+
+        // Read device features (high 32 bits)
+        write_u32(&mut device, VIRTIO_MMIO_DEVICE_FEATURES_SEL, 1);
+        let features_high = read_u32(&device, VIRTIO_MMIO_DEVICE_FEATURES);
+        assert_eq!(features_high, 1); // VERSION_1 = bit 32 = bit 0 of high word
+
+        // Driver acknowledges VERSION_1
+        write_u32(&mut device, VIRTIO_MMIO_DRIVER_FEATURES_SEL, 1);
+        write_u32(&mut device, VIRTIO_MMIO_DRIVER_FEATURES, 1);
+        assert_eq!(device.driver_features, VIRTIO_F_VERSION_1);
+    }
+
+    #[test]
+    fn queue_configuration() {
+        let (mut device, _tmp) = create_test_device("test");
+
+        // Check queue num max
+        assert_eq!(
+            read_u32(&device, VIRTIO_MMIO_QUEUE_NUM_MAX),
+            QUEUE_SIZE as u32
+        );
+
+        // Select queue 0
+        write_u32(&mut device, VIRTIO_MMIO_QUEUE_SEL, 0);
+        assert_eq!(device.queue_sel, 0);
+
+        // Queue should not be ready initially
+        assert_eq!(read_u32(&device, VIRTIO_MMIO_QUEUE_READY), 0);
+
+        // Select queue 1 (request queue)
+        write_u32(&mut device, VIRTIO_MMIO_QUEUE_SEL, 1);
+        assert_eq!(device.queue_sel, 1);
+    }
+
+    #[test]
+    fn device_status_lifecycle() {
+        let (mut device, _tmp) = create_test_device("test");
+
+        // Initial status is 0
+        assert_eq!(read_u32(&device, VIRTIO_MMIO_STATUS), 0);
+
+        // Write ACKNOWLEDGE (1)
+        write_u32(&mut device, VIRTIO_MMIO_STATUS, 1);
+        assert_eq!(device.device_status, 1);
+
+        // Write DRIVER (2)
+        write_u32(&mut device, VIRTIO_MMIO_STATUS, 3);
+        assert_eq!(device.device_status, 3);
+
+        // Reset by writing 0
+        write_u32(&mut device, VIRTIO_MMIO_STATUS, 0);
+        assert_eq!(device.device_status, 0);
+        assert!(!device.fuse_initialized);
+    }
+
+    #[test]
+    fn long_tag_truncation() {
+        // Tag longer than what we store should be handled gracefully
+        let (device, _tmp) = create_test_device("this_is_a_very_long_tag_name_that_exceeds_limit");
+
+        let mut tag_bytes = Vec::new();
+        for i in 0..FS_TAG_SIZE {
+            let mut byte = [0u8; 1];
+            device.handle_mmio_read(VIRTIO_MMIO_CONFIG + i as u64, &mut byte);
+            tag_bytes.push(byte[0]);
+        }
+
+        // Should contain the beginning of the tag (up to 36 bytes)
+        let expected = "this_is_a_very_long_tag_name_that_ex";
+        assert_eq!(std::str::from_utf8(&tag_bytes[..36]).unwrap(), expected);
+    }
+
+    #[test]
+    fn interrupt_status_and_ack() {
+        let (mut device, _tmp) = create_test_device("test");
+
+        // Set interrupt status directly
+        device
+            .interrupt_status
+            .store(VIRTIO_INT_USED_RING, Ordering::SeqCst);
+        assert_eq!(
+            read_u32(&device, VIRTIO_MMIO_INTERRUPT_STATUS),
+            VIRTIO_INT_USED_RING
+        );
+
+        // Acknowledge interrupt
+        write_u32(&mut device, VIRTIO_MMIO_INTERRUPT_ACK, VIRTIO_INT_USED_RING);
+        assert_eq!(read_u32(&device, VIRTIO_MMIO_INTERRUPT_STATUS), 0);
+    }
+}
