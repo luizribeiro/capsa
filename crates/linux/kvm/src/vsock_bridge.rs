@@ -3,7 +3,7 @@
 //! This module bridges vsock connections to Unix domain sockets,
 //! allowing host applications to communicate with guest applications.
 
-use crate::virtio_vsock::{BridgeToDevice, DeviceToBridge};
+use crate::virtio::{BridgeToDevice, DeviceToBridge};
 use capsa_core::VsockPortConfig;
 use std::collections::HashMap;
 use std::path::PathBuf;

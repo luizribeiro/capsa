@@ -1,4 +1,17 @@
-//! Shared constants and utilities for virtio device implementations.
+//! Virtio device implementations.
+//!
+//! This module provides virtio-based devices for the KVM backend:
+//! - `console`: Virtio console for guest I/O
+//! - `net`: Virtio network device for guest networking
+//! - `vsock`: Virtio socket device for host-guest communication
+
+mod console;
+mod net;
+mod vsock;
+
+pub use console::VirtioConsole;
+pub use net::VirtioNet;
+pub use vsock::{BridgeToDevice, DeviceToBridge, VirtioVsock};
 
 use vm_memory::{GuestAddress, GuestMemory, GuestMemoryMmap};
 

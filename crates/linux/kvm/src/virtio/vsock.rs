@@ -58,7 +58,7 @@ const VIRTIO_F_VERSION_1: u64 = 1 << 32;
 // Vsock header size (44 bytes)
 const VSOCK_HDR_SIZE: usize = 44;
 
-use crate::virtio::{MAX_DESCRIPTOR_LEN, MAX_VSOCK_CONNECTIONS, validate_queue_addresses};
+use super::{MAX_DESCRIPTOR_LEN, MAX_VSOCK_CONNECTIONS, validate_queue_addresses};
 
 // Vsock operation codes
 const VSOCK_OP_REQUEST: u16 = 1;

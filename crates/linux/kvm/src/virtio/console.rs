@@ -1,13 +1,12 @@
-//! Virtio network device implementation.
+//! Virtio console device implementation.
 //!
-//! Provides network connectivity using virtio-net over MMIO transport.
-//! Frames are exchanged via a socketpair, with one end going to the
-//! UserNatStack for NAT processing.
+//! Provides a high-performance console using virtio queues instead of
+//! legacy 8250 UART emulation. Uses MMIO transport for simplicity.
 
 use std::collections::VecDeque;
-use std::os::fd::{AsRawFd, OwnedFd};
-use std::sync::Arc;
+use std::io::Write;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
 use kvm_ioctls::VmFd;
 use virtio_queue::desc::split::Descriptor;
@@ -16,13 +15,17 @@ use vm_device::MutDeviceMmio;
 use vm_device::bus::{MmioAddress, MmioAddressOffset};
 use vm_memory::{Bytes, GuestAddress, GuestMemoryMmap};
 
-const VIRTIO_ID_NET: u32 = 1;
+// Virtio device type for console
+const VIRTIO_ID_CONSOLE: u32 = 3;
 
+// Queue indices
 const RX_QUEUE_INDEX: usize = 0;
 const TX_QUEUE_INDEX: usize = 1;
+
+// Queue size (number of descriptors)
 const QUEUE_SIZE: u16 = 256;
 
-// Virtio MMIO register offsets
+// Virtio MMIO register offsets (virtio 1.0+ modern layout)
 const VIRTIO_MMIO_MAGIC: u64 = 0x00;
 const VIRTIO_MMIO_VERSION: u64 = 0x04;
 const VIRTIO_MMIO_DEVICE_ID: u64 = 0x08;
@@ -45,23 +48,22 @@ const VIRTIO_MMIO_QUEUE_AVAIL_LOW: u64 = 0x90;
 const VIRTIO_MMIO_QUEUE_AVAIL_HIGH: u64 = 0x94;
 const VIRTIO_MMIO_QUEUE_USED_LOW: u64 = 0xa0;
 const VIRTIO_MMIO_QUEUE_USED_HIGH: u64 = 0xa4;
-const VIRTIO_MMIO_CONFIG: u64 = 0x100;
 
-const VIRTIO_MMIO_MAGIC_VALUE: u32 = 0x74726976;
+// Virtio MMIO magic value
+const VIRTIO_MMIO_MAGIC_VALUE: u32 = 0x74726976; // "virt"
 
+// Virtio device status bits
 const VIRTIO_STATUS_DRIVER_OK: u32 = 4;
+
+// Interrupt status bits
 const VIRTIO_INT_USED_RING: u32 = 1;
 
 // Virtio feature bits
 const VIRTIO_F_VERSION_1: u64 = 1 << 32;
-const VIRTIO_NET_F_MAC: u64 = 1 << 5;
 
-// Virtio-net header size
-// With VIRTIO_F_VERSION_1, the modern header includes num_buffers (12 bytes total)
-const VIRTIO_NET_HDR_SIZE: usize = 12;
+use super::{MAX_DESCRIPTOR_LEN, validate_queue_addresses};
 
-use crate::virtio::{MAX_DESCRIPTOR_LEN, validate_queue_addresses};
-
+/// State for a single virtio queue
 struct VirtioQueueState {
     ready: bool,
     size: u16,
@@ -86,49 +88,42 @@ impl Default for VirtioQueueState {
     }
 }
 
-/// Virtio network device using MMIO transport.
-///
-/// Uses a socketpair for frame I/O:
-/// - Guest TX queue → write to socketpair → UserNatStack
-/// - UserNatStack → write to socketpair → Guest RX queue
-pub struct VirtioNet {
+/// Virtio console device using MMIO transport
+pub struct VirtioConsole {
+    // Device configuration
     device_features: u64,
     driver_features: u64,
     device_features_sel: u32,
     driver_features_sel: u32,
     device_status: u32,
 
+    // Queue state
     queue_sel: u32,
     queues: [VirtioQueueState; 2],
 
+    // Interrupt handling
     interrupt_status: AtomicU32,
-
     /// VmFd for direct interrupt injection via set_irq_line
     vm_fd: Arc<VmFd>,
     /// IRQ number for this device
     irq: u32,
 
-    /// File descriptor for frame I/O (our end of the socketpair)
-    socket_fd: OwnedFd,
+    // Console I/O
+    output: Mutex<Box<dyn Write + Send>>,
+    input_buffer: Mutex<VecDeque<u8>>,
 
-    /// MAC address for the device
-    mac: [u8; 6],
-
-    /// Pending frames received from the network (to be delivered to guest)
-    rx_queue: VecDeque<Vec<u8>>,
-
+    // Guest memory (set after VM memory is created)
     memory: Option<Arc<GuestMemoryMmap>>,
 }
 
-impl VirtioNet {
-    /// Create a new virtio-net device.
+impl VirtioConsole {
+    /// Create a new virtio-console device.
     ///
-    /// The `socket_fd` is our end of a socketpair; the other end should be
-    /// passed to the UserNatStack via SocketPairDevice.
     /// The `vm_fd` is used for direct interrupt injection via set_irq_line.
-    pub fn new(socket_fd: OwnedFd, mac: [u8; 6], vm_fd: Arc<VmFd>, irq: u32) -> Self {
+    /// The `irq` is the IRQ number for this device (typically 5).
+    pub fn new(output: Box<dyn Write + Send>, vm_fd: Arc<VmFd>, irq: u32) -> Self {
         Self {
-            device_features: VIRTIO_F_VERSION_1 | VIRTIO_NET_F_MAC,
+            device_features: VIRTIO_F_VERSION_1, // Required for virtio 1.0+
             driver_features: 0,
             device_features_sel: 0,
             driver_features_sel: 0,
@@ -138,15 +133,22 @@ impl VirtioNet {
             interrupt_status: AtomicU32::new(0),
             vm_fd,
             irq,
-            socket_fd,
-            mac,
-            rx_queue: VecDeque::new(),
+            output: Mutex::new(output),
+            input_buffer: Mutex::new(VecDeque::new()),
             memory: None,
         }
     }
 
     pub fn set_memory(&mut self, memory: Arc<GuestMemoryMmap>) {
         self.memory = Some(memory);
+    }
+
+    pub fn enqueue_input(&mut self, data: &[u8]) {
+        {
+            let mut input = self.input_buffer.lock().unwrap();
+            input.extend(data);
+        }
+        self.process_rx_queue();
     }
 
     fn signal_used_queue(&self) {
@@ -169,36 +171,7 @@ impl VirtioNet {
         &mut self.queues[self.queue_sel as usize]
     }
 
-    /// Try to receive frames from the socketpair (non-blocking).
-    pub fn poll_rx(&mut self) {
-        let mut buf = [0u8; 1514 + VIRTIO_NET_HDR_SIZE];
-        loop {
-            let n = unsafe {
-                nix::libc::recv(
-                    self.socket_fd.as_raw_fd(),
-                    buf.as_mut_ptr() as *mut _,
-                    buf.len(),
-                    nix::libc::MSG_DONTWAIT,
-                )
-            };
-
-            if n <= 0 {
-                break;
-            }
-
-            // Frame received - add virtio-net header and queue it
-            let mut frame_with_hdr = vec![0u8; VIRTIO_NET_HDR_SIZE + n as usize];
-            frame_with_hdr[VIRTIO_NET_HDR_SIZE..].copy_from_slice(&buf[..n as usize]);
-            self.rx_queue.push_back(frame_with_hdr);
-        }
-
-        // Try to deliver queued frames to guest
-        if !self.rx_queue.is_empty() {
-            self.process_rx_queue();
-        }
-    }
-
-    /// Process TX queue: guest → network
+    /// Process the transmit queue (guest -> device)
     fn process_tx_queue(&mut self) {
         let memory = match &self.memory {
             Some(m) => m.as_ref(),
@@ -218,10 +191,11 @@ impl VirtioNet {
         queue.set_next_used(queue_state.next_used);
         queue.set_ready(true);
 
+        let mut output = self.output.lock().unwrap();
         let mut used_any = false;
 
         while let Some(mut desc_chain) = queue.pop_descriptor_chain(memory) {
-            let mut frame_data = Vec::new();
+            let mut len = 0u32;
 
             for desc in desc_chain.by_ref() {
                 let desc: Descriptor = desc;
@@ -232,38 +206,26 @@ impl VirtioNet {
                 let capped_len = std::cmp::min(desc.len(), MAX_DESCRIPTOR_LEN) as usize;
                 let mut buf = vec![0u8; capped_len];
                 if memory.read_slice(&mut buf, desc.addr()).is_ok() {
-                    frame_data.extend_from_slice(&buf);
+                    let _ = output.write_all(&buf);
+                    len += capped_len as u32;
                 }
             }
 
-            // Skip the virtio-net header, send only the ethernet frame
-            if frame_data.len() > VIRTIO_NET_HDR_SIZE {
-                let frame = &frame_data[VIRTIO_NET_HDR_SIZE..];
-                unsafe {
-                    nix::libc::send(
-                        self.socket_fd.as_raw_fd(),
-                        frame.as_ptr() as *const _,
-                        frame.len(),
-                        0,
-                    )
-                };
-            }
-
-            if queue.add_used(memory, desc_chain.head_index(), 0).is_ok() {
+            if queue.add_used(memory, desc_chain.head_index(), len).is_ok() {
                 used_any = true;
             }
         }
 
-        // Save the updated queue state for next time
         self.queues[TX_QUEUE_INDEX].next_avail = queue.next_avail();
         self.queues[TX_QUEUE_INDEX].next_used = queue.next_used();
 
         if used_any {
+            let _ = output.flush();
             self.signal_used_queue();
         }
     }
 
-    /// Process RX queue: network → guest
+    /// Process the receive queue (device -> guest)
     fn process_rx_queue(&mut self) {
         let memory = match &self.memory {
             Some(m) => m.as_ref(),
@@ -271,7 +233,12 @@ impl VirtioNet {
         };
 
         let queue_state = &self.queues[RX_QUEUE_INDEX];
-        if !queue_state.ready || self.rx_queue.is_empty() {
+        if !queue_state.ready {
+            return;
+        }
+
+        let mut input = self.input_buffer.lock().unwrap();
+        if input.is_empty() {
             return;
         }
 
@@ -285,14 +252,12 @@ impl VirtioNet {
 
         let mut used_any = false;
 
-        while !self.rx_queue.is_empty() {
-            let Some(mut desc_chain) = queue.pop_descriptor_chain(memory) else {
+        while let Some(mut desc_chain) = queue.pop_descriptor_chain(memory) {
+            if input.is_empty() {
                 break;
-            };
-            let frame = self.rx_queue.pop_front().unwrap();
+            }
 
             let mut written = 0u32;
-            let mut frame_offset = 0usize;
 
             for desc in desc_chain.by_ref() {
                 let desc: Descriptor = desc;
@@ -300,18 +265,14 @@ impl VirtioNet {
                     continue;
                 }
 
-                let remaining = frame.len().saturating_sub(frame_offset);
-                if remaining == 0 {
+                let to_write = std::cmp::min(desc.len() as usize, input.len());
+                if to_write == 0 {
                     break;
                 }
 
-                let to_write = std::cmp::min(desc.len() as usize, remaining);
-                if memory
-                    .write_slice(&frame[frame_offset..frame_offset + to_write], desc.addr())
-                    .is_ok()
-                {
-                    written += to_write as u32;
-                    frame_offset += to_write;
+                let data: Vec<u8> = input.drain(..to_write).collect();
+                if memory.write_slice(&data, desc.addr()).is_ok() {
+                    written += data.len() as u32;
                 }
             }
 
@@ -323,7 +284,6 @@ impl VirtioNet {
             }
         }
 
-        // Save the updated queue state for next time
         self.queues[RX_QUEUE_INDEX].next_avail = queue.next_avail();
         self.queues[RX_QUEUE_INDEX].next_used = queue.next_used();
 
@@ -335,9 +295,9 @@ impl VirtioNet {
     fn handle_mmio_read(&self, offset: u64, data: &mut [u8]) {
         let val: u32 = match offset {
             VIRTIO_MMIO_MAGIC => VIRTIO_MMIO_MAGIC_VALUE,
-            VIRTIO_MMIO_VERSION => 2,
-            VIRTIO_MMIO_DEVICE_ID => VIRTIO_ID_NET,
-            VIRTIO_MMIO_VENDOR_ID => 0x554d4551,
+            VIRTIO_MMIO_VERSION => 2, // virtio 1.0+
+            VIRTIO_MMIO_DEVICE_ID => VIRTIO_ID_CONSOLE,
+            VIRTIO_MMIO_VENDOR_ID => 0x554d4551, // "QEMU" for compatibility
             VIRTIO_MMIO_DEVICE_FEATURES => {
                 if self.device_features_sel == 0 {
                     self.device_features as u32
@@ -346,18 +306,15 @@ impl VirtioNet {
                 }
             }
             VIRTIO_MMIO_QUEUE_NUM_MAX => QUEUE_SIZE as u32,
-            VIRTIO_MMIO_QUEUE_READY => u32::from(self.current_queue().ready),
+            VIRTIO_MMIO_QUEUE_READY => {
+                if self.current_queue().ready {
+                    1
+                } else {
+                    0
+                }
+            }
             VIRTIO_MMIO_INTERRUPT_STATUS => self.interrupt_status.load(Ordering::SeqCst),
             VIRTIO_MMIO_STATUS => self.device_status,
-            // Device config: MAC address at offset 0x100
-            o if (VIRTIO_MMIO_CONFIG..VIRTIO_MMIO_CONFIG + 6).contains(&o) => {
-                let idx = (o - VIRTIO_MMIO_CONFIG) as usize;
-                if !data.is_empty() && idx < 6 {
-                    data[0] = self.mac[idx];
-                    return;
-                }
-                0
-            }
             _ => 0,
         };
 
@@ -457,7 +414,7 @@ impl VirtioNet {
     }
 }
 
-impl MutDeviceMmio for VirtioNet {
+impl MutDeviceMmio for VirtioConsole {
     fn mmio_read(&mut self, _base: MmioAddress, offset: MmioAddressOffset, data: &mut [u8]) {
         self.handle_mmio_read(offset, data);
     }

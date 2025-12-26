@@ -6,9 +6,7 @@ use crate::arch::{
 };
 use crate::handle::KvmVmHandle;
 use crate::serial::{SerialDevice, create_console_pipes};
-use crate::virtio_console::VirtioConsole;
-use crate::virtio_net::VirtioNet;
-use crate::virtio_vsock::VirtioVsock;
+use crate::virtio::{VirtioConsole, VirtioNet, VirtioVsock};
 use crate::vsock_bridge::VsockBridge;
 use capsa_core::{BackendVmHandle, BootMethod, Error, NetworkMode, Result, VmConfig};
 use capsa_net::{SocketPairDevice, StackConfig, UserNatStack};
