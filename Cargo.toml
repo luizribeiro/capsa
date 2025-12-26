@@ -9,6 +9,7 @@ members = [
     "crates/apple/vzd",
     "crates/apple/vzd-ipc",
     "crates/linux/kvm",
+    "crates/sandbox/protocol",
 ]
 
 [workspace.package]

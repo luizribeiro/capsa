@@ -1,0 +1,13 @@
+[package]
+name = "capsa-sandbox-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Shared types and RPC service definition for capsa sandbox agent"
+
+[dependencies]
+serde = { workspace = true }
+tarpc = { version = "0.35", features = ["serde1", "tokio1", "serde-transport", "serde-transport-bincode"] }
+
+[dev-dependencies]
+serde_json = "1.0"
