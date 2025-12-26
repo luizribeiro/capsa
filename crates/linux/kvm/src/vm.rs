@@ -484,10 +484,10 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
                     }
                     Ok(Ok(n)) => {
                         // Forward input to virtio-console (primary) and serial (fallback)
-                        if let Some(ref vc) = virtio_console_clone {
-                            if let Ok(vc) = vc.lock() {
-                                vc.enqueue_input(&buf[..n]);
-                            }
+                        if let Some(ref vc) = virtio_console_clone
+                            && let Ok(mut vc) = vc.lock()
+                        {
+                            vc.enqueue_input(&buf[..n]);
                         }
                         if let Ok(serial) = serial_clone.lock() {
                             serial.enqueue_input(&buf[..n]);

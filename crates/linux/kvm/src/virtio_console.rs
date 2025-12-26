@@ -68,6 +68,8 @@ struct VirtioQueueState {
     desc_table: u64,
     avail_ring: u64,
     used_ring: u64,
+    next_avail: u16,
+    next_used: u16,
 }
 
 impl Default for VirtioQueueState {
@@ -78,6 +80,8 @@ impl Default for VirtioQueueState {
             desc_table: 0,
             avail_ring: 0,
             used_ring: 0,
+            next_avail: 0,
+            next_used: 0,
         }
     }
 }
@@ -133,7 +137,7 @@ impl VirtioConsole {
         &self.interrupt_evt
     }
 
-    pub fn enqueue_input(&self, data: &[u8]) {
+    pub fn enqueue_input(&mut self, data: &[u8]) {
         {
             let mut input = self.input_buffer.lock().unwrap();
             input.extend(data);
@@ -160,7 +164,7 @@ impl VirtioConsole {
     }
 
     /// Process the transmit queue (guest -> device)
-    fn process_tx_queue(&self) {
+    fn process_tx_queue(&mut self) {
         let memory = match &self.memory {
             Some(m) => m.as_ref(),
             None => return,
@@ -175,6 +179,8 @@ impl VirtioConsole {
         let _ = queue.try_set_desc_table_address(GuestAddress(queue_state.desc_table));
         let _ = queue.try_set_avail_ring_address(GuestAddress(queue_state.avail_ring));
         let _ = queue.try_set_used_ring_address(GuestAddress(queue_state.used_ring));
+        queue.set_next_avail(queue_state.next_avail);
+        queue.set_next_used(queue_state.next_used);
         queue.set_ready(true);
 
         let mut output = self.output.lock().unwrap();
@@ -201,6 +207,9 @@ impl VirtioConsole {
             }
         }
 
+        self.queues[TX_QUEUE_INDEX].next_avail = queue.next_avail();
+        self.queues[TX_QUEUE_INDEX].next_used = queue.next_used();
+
         if used_any {
             let _ = output.flush();
             self.signal_used_queue();
@@ -208,7 +217,7 @@ impl VirtioConsole {
     }
 
     /// Process the receive queue (device -> guest)
-    fn process_rx_queue(&self) {
+    fn process_rx_queue(&mut self) {
         let memory = match &self.memory {
             Some(m) => m.as_ref(),
             None => return,
@@ -228,6 +237,8 @@ impl VirtioConsole {
         let _ = queue.try_set_desc_table_address(GuestAddress(queue_state.desc_table));
         let _ = queue.try_set_avail_ring_address(GuestAddress(queue_state.avail_ring));
         let _ = queue.try_set_used_ring_address(GuestAddress(queue_state.used_ring));
+        queue.set_next_avail(queue_state.next_avail);
+        queue.set_next_used(queue_state.next_used);
         queue.set_ready(true);
 
         let mut used_any = false;
@@ -263,6 +274,9 @@ impl VirtioConsole {
                 used_any = true;
             }
         }
+
+        self.queues[RX_QUEUE_INDEX].next_avail = queue.next_avail();
+        self.queues[RX_QUEUE_INDEX].next_used = queue.next_used();
 
         if used_any {
             self.signal_used_queue();

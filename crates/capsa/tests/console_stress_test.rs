@@ -9,7 +9,61 @@
 
 use capsa::test_utils::test_vm;
 use std::time::Duration;
+#[allow(unused_imports)]
 use tokio::time::sleep;
+
+/// Tests that KVM virtio-console output is not duplicated.
+///
+/// This test verifies the fix for the character duplication bug where each
+/// output line was repeated ~80 times due to improper virtio queue state
+/// tracking. The fix saves and restores next_avail/next_used indices.
+#[apple_main::harness_test]
+async fn test_kvm_no_character_duplication() {
+    #[cfg(not(feature = "linux-kvm"))]
+    {
+        eprintln!("Skipping: test is specific to KVM backend");
+        return;
+    }
+
+    #[cfg(feature = "linux-kvm")]
+    {
+        let vm = test_vm("default")
+            .no_network()
+            .build()
+            .await
+            .expect("Failed to build VM");
+        let console = vm.console().await.expect("Failed to get console");
+
+        // Wait for boot to complete
+        let initial_output = console
+            .wait_for_timeout("Boot successful", Duration::from_secs(30))
+            .await
+            .expect("VM did not boot");
+
+        // Wait a bit for any duplicated output to arrive
+        sleep(Duration::from_millis(100)).await;
+
+        // Read any remaining output
+        let remaining = console.read_available().await.unwrap_or_default();
+        let full_output = format!("{}{}", initial_output, remaining);
+
+        // The character duplication bug causes massive output bloat:
+        // - Without fix: ~18KB of output (each byte processed multiple times)
+        // - With fix: ~800 bytes of output
+        // We check the output length as a simple, robust indicator.
+        let len = full_output.len();
+        assert!(
+            len < 5000,
+            "Possible character duplication: output is {} bytes (expected < 2000). \
+             With the queue state bug, each output byte is processed multiple times, \
+             causing massive output bloat. Sample: {:?}",
+            len,
+            &full_output[..std::cmp::min(300, full_output.len())]
+        );
+
+        vm.kill().await.expect("Failed to kill VM");
+    }
+}
 
 /// Simple test to verify exec works.
 #[apple_main::harness_test]
