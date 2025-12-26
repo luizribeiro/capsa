@@ -725,10 +725,9 @@ impl NatTable {
                                 icmp_data,
                                 gateway_mac,
                                 guest_mac,
-                            ) {
-                                if tx.send(frame).await.is_err() {
-                                    break;
-                                }
+                            ) && tx.send(frame).await.is_err()
+                            {
+                                break;
                             }
                         }
                         Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {

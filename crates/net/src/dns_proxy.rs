@@ -13,22 +13,13 @@ const DNS_TIMEOUT: Duration = Duration::from_secs(5);
 const FALLBACK_DNS: &str = "8.8.8.8:53";
 
 /// Read the first nameserver from the system's resolv.conf.
+///
+/// TODO: Support multiple DNS servers with failover when the primary is unavailable.
 fn get_system_dns() -> Option<SocketAddr> {
-    let contents = std::fs::read_to_string("/etc/resolv.conf").ok()?;
-
-    for line in contents.lines() {
-        let line = line.trim();
-        if line.starts_with("nameserver") {
-            let parts: Vec<&str> = line.split_whitespace().collect();
-            if parts.len() >= 2
-                && let Ok(ip) = parts[1].parse::<std::net::IpAddr>()
-            {
-                return Some(SocketAddr::new(ip, 53));
-            }
-        }
-    }
-
-    None
+    let contents = std::fs::read("/etc/resolv.conf").ok()?;
+    let config = resolv_conf::Config::parse(&contents).ok()?;
+    let nameserver = config.nameservers.first()?;
+    Some(SocketAddr::new(nameserver.into(), 53))
 }
 
 /// DNS proxy that forwards queries and caches responses.
