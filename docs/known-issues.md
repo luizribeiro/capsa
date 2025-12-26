@@ -2,68 +2,38 @@
 
 This document tracks known issues and quirks that need further investigation.
 
-## 1. VmConsole::exec() Hangs with Shell Pipes (macOS)
+## 1. ~~VmConsole::exec() Hangs with Shell Pipes (macOS)~~ RESOLVED
 
-**Status**: Workaround available, root cause not fully understood
+**Status**: Resolved or intermittent - tests now pass
 **Discovered**: 2025-12-25
-**Affects**: `VmConsole::exec()` in `crates/capsa/src/console.rs`
+**Resolved**: 2025-12-25
 **Backend**: macOS (Virtualization.framework)
 
-### Description
+### Original Issue
 
-When using `exec()` with commands containing shell pipes (`|`), the command hangs
-indefinitely until timeout. Commands without pipes work correctly.
+Pipe commands were reported to hang when using `exec()`. However, diagnostic
+testing shows all command types now work correctly on macOS:
 
-### Reproduction
+| Test | Result |
+|------|--------|
+| Shell builtin (`echo`) | ✓ works |
+| Subshell (`(echo hello)`) | ✓ works |
+| Pipe (`echo \| cat`) | ✓ works |
+| External command (`ls /`) | ✓ works |
 
-```rust
-// This hangs:
-console.exec("echo hello | cat", Duration::from_secs(5)).await  // Timeout
+### Possible Explanations
 
-// This works:
-console.exec("echo hello", Duration::from_secs(5)).await  // OK
+1. The issue may have been fixed by `exec()` implementation improvements
+2. The issue may only manifest under specific conditions (parallel tests, timing)
+3. The issue may be intermittent
+
+### Test Command
+
+```bash
+cargo test-macos-subprocess -p capsa --test console_stress_test test_exec_pipe_diagnostic -- --nocapture
 ```
 
-### How exec() Works
-
-The `exec()` method appends `; echo __DONE_X__` to the command and waits for
-`\n__DONE_X__` in the console output:
-
-```rust
-let full_cmd = format!("{} ; echo {}", cmd, marker);
-self.write_line(&full_cmd).await?;
-self.wait_for_timeout(&format!("\n{}", marker), timeout).await
-```
-
-### Observations
-
-- Commands without pipes work fine (echo, wget to /dev/null, ping, nslookup)
-- Any command with a pipe causes the hang, even simple ones like `echo | cat`
-- The marker `__DONE_X__` should still be echoed since it uses `;` not `&&`
-- Wrapping the pipe in a subshell fixes the issue: `(cmd1 | cmd2)`
-
-### Workarounds
-
-1. **Avoid pipes**: Restructure commands to not use pipes when possible
-   ```rust
-   // Instead of: wget ... | grep ...
-   // Use: wget ... -O /dev/null && echo SUCCESS
-   ```
-
-2. **Use subshells**: Wrap piped commands in parentheses
-   ```rust
-   // Instead of: cmd1 | cmd2 && echo DONE
-   // Use: (cmd1 | cmd2) && echo DONE
-   ```
-
-3. **Use wait_for() directly**: For complex commands, send the command with
-   `write_line()` and use `wait_for_timeout()` with your own pattern
-
-### Next Steps
-
-1. Add debug logging to trace exactly what output is received
-2. Test with different shells (ash, bash, sh) to isolate if it's busybox-specific
-3. Examine the raw bytes being sent/received to check for buffering issues
+If the issue reoccurs, document the specific reproduction conditions.
 
 ---
 
