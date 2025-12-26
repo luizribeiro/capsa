@@ -29,6 +29,7 @@
 mod arch;
 mod handle;
 mod serial;
+mod virtio;
 mod virtio_console;
 mod virtio_net;
 mod virtio_vsock;

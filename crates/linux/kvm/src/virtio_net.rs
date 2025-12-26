@@ -60,6 +60,8 @@ const VIRTIO_NET_F_MAC: u64 = 1 << 5;
 // With VIRTIO_F_VERSION_1, the modern header includes num_buffers (12 bytes total)
 const VIRTIO_NET_HDR_SIZE: usize = 12;
 
+use crate::virtio::MAX_DESCRIPTOR_LEN;
+
 struct VirtioQueueState {
     ready: bool,
     size: u16,
@@ -227,7 +229,8 @@ impl VirtioNet {
                     continue;
                 }
 
-                let mut buf = vec![0u8; desc.len() as usize];
+                let capped_len = std::cmp::min(desc.len(), MAX_DESCRIPTOR_LEN) as usize;
+                let mut buf = vec![0u8; capped_len];
                 if memory.read_slice(&mut buf, desc.addr()).is_ok() {
                     frame_data.extend_from_slice(&buf);
                 }

@@ -61,6 +61,8 @@ const VIRTIO_INT_USED_RING: u32 = 1;
 // Virtio feature bits
 const VIRTIO_F_VERSION_1: u64 = 1 << 32;
 
+use crate::virtio::MAX_DESCRIPTOR_LEN;
+
 /// State for a single virtio queue
 struct VirtioQueueState {
     ready: bool,
@@ -201,10 +203,11 @@ impl VirtioConsole {
                     continue;
                 }
 
-                let mut buf = vec![0u8; desc.len() as usize];
+                let capped_len = std::cmp::min(desc.len(), MAX_DESCRIPTOR_LEN) as usize;
+                let mut buf = vec![0u8; capped_len];
                 if memory.read_slice(&mut buf, desc.addr()).is_ok() {
                     let _ = output.write_all(&buf);
-                    len += desc.len();
+                    len += capped_len as u32;
                 }
             }
 

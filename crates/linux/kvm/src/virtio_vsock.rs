@@ -58,6 +58,8 @@ const VIRTIO_F_VERSION_1: u64 = 1 << 32;
 // Vsock header size (44 bytes)
 const VSOCK_HDR_SIZE: usize = 44;
 
+use crate::virtio::MAX_DESCRIPTOR_LEN;
+
 // Vsock operation codes
 const VSOCK_OP_REQUEST: u16 = 1;
 const VSOCK_OP_RESPONSE: u16 = 2;
@@ -380,7 +382,8 @@ impl VirtioVsock {
                     continue;
                 }
 
-                let mut buf = vec![0u8; desc.len() as usize];
+                let capped_len = std::cmp::min(desc.len(), MAX_DESCRIPTOR_LEN) as usize;
+                let mut buf = vec![0u8; capped_len];
                 if memory.read_slice(&mut buf, desc.addr()).is_ok() {
                     packet_data.extend_from_slice(&buf);
                 }
