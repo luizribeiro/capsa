@@ -36,9 +36,9 @@ impl DhcpServer {
     ) -> Self {
         let mask = prefix_to_mask(subnet_prefix);
 
+        // Point DNS to the gateway (our DNS proxy)
         let mut dns_servers = HeaplessVec::new();
-        dns_servers.push(Ipv4Address::new(8, 8, 8, 8)).ok();
-        dns_servers.push(Ipv4Address::new(8, 8, 4, 4)).ok();
+        dns_servers.push(gateway).ok();
 
         Self {
             server_ip: gateway,

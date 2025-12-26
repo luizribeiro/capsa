@@ -1,6 +1,7 @@
 use crate::device::SmoltcpDevice;
 use crate::dhcp::DhcpServer;
 use crate::dns_cache::DnsCache;
+use crate::dns_proxy::DnsProxy;
 use crate::error::NetError;
 use crate::frame_io::FrameIO;
 use crate::nat::{FrameReceiver, NatTable, craft_tcp_rst, frame_channel};
@@ -103,6 +104,7 @@ impl From<&capsa_core::UserNatConfig> for StackConfig {
 /// - ARP (automatic via smoltcp)
 /// - ICMP echo (automatic via smoltcp)
 /// - DHCP server
+/// - DNS proxy (for domain-based filtering)
 /// - TCP NAT (connection tracking + forwarding)
 /// - UDP NAT (connection tracking + forwarding)
 /// - Port forwarding (host → guest)
@@ -114,6 +116,8 @@ pub struct UserNatStack<F: FrameIO> {
     dhcp_handle: SocketHandle,
     dhcp_server: DhcpServer,
     config: StackConfig,
+    dns_cache: Arc<RwLock<DnsCache>>,
+    dns_proxy: DnsProxy,
     nat: NatTable,
     nat_rx: FrameReceiver,
     port_forwarder: Option<PortForwarder>,
@@ -176,8 +180,11 @@ impl<F: FrameIO> UserNatStack<F> {
             ))
         };
 
-        // Create DNS cache and policy checker if policy is configured
+        // Create DNS cache and proxy for domain-based filtering
         let dns_cache = Arc::new(RwLock::new(DnsCache::new()));
+        let dns_proxy = DnsProxy::new(dns_cache.clone());
+
+        // Create policy checker if policy is configured
         let policy_checker = config
             .policy
             .as_ref()
@@ -190,6 +197,8 @@ impl<F: FrameIO> UserNatStack<F> {
             dhcp_handle,
             dhcp_server,
             config,
+            dns_cache,
+            dns_proxy,
             nat,
             nat_rx,
             port_forwarder,
@@ -257,6 +266,14 @@ impl<F: FrameIO> UserNatStack<F> {
                     continue;
                 }
 
+                // Check if this is a DNS query to the gateway (intercept for domain filtering)
+                if self.is_dns_query_to_gateway(frame) {
+                    let frame_copy = frame.to_vec();
+                    self.device.discard_rx();
+                    self.handle_dns_query(&frame_copy).await;
+                    continue;
+                }
+
                 // Check if destined for external IP
                 if self.is_external_destination(frame) {
                     // Apply network policy if configured
@@ -316,10 +333,11 @@ impl<F: FrameIO> UserNatStack<F> {
                 }
             }
 
-            // Periodic cleanup of idle NAT entries
+            // Periodic cleanup of idle NAT entries and expired DNS cache
             cleanup_counter = cleanup_counter.wrapping_add(1);
             if cleanup_counter.is_multiple_of(NAT_CLEANUP_INTERVAL_MS) {
                 self.nat.cleanup();
+                self.dns_cache.write().unwrap().cleanup();
             }
         }
     }
@@ -478,6 +496,136 @@ impl<F: FrameIO> UserNatStack<F> {
                 remote_addr
             );
         }
+    }
+
+    /// Check if a frame is a DNS query to the gateway (UDP port 53).
+    fn is_dns_query_to_gateway(&self, frame: &[u8]) -> bool {
+        use smoltcp::wire::UdpPacket;
+
+        let Ok(eth_frame) = EthernetFrame::new_checked(frame) else {
+            return false;
+        };
+
+        if eth_frame.ethertype() != EthernetProtocol::Ipv4 {
+            return false;
+        }
+
+        let Ok(ip_packet) = Ipv4Packet::new_checked(eth_frame.payload()) else {
+            return false;
+        };
+
+        // Must be to gateway
+        let dst_ip: Ipv4Addr = ip_packet.dst_addr();
+        if dst_ip != self.config.gateway_ip {
+            return false;
+        }
+
+        // Must be UDP
+        if ip_packet.next_header() != IpProtocol::Udp {
+            return false;
+        }
+
+        let Ok(udp_packet) = UdpPacket::new_checked(ip_packet.payload()) else {
+            return false;
+        };
+
+        // Must be port 53 (DNS)
+        udp_packet.dst_port() == 53
+    }
+
+    /// Handle a DNS query by forwarding through the DNS proxy.
+    async fn handle_dns_query(&mut self, frame: &[u8]) {
+        use smoltcp::wire::UdpPacket;
+
+        let Ok(eth_frame) = EthernetFrame::new_checked(frame) else {
+            return;
+        };
+
+        let Ok(ip_packet) = Ipv4Packet::new_checked(eth_frame.payload()) else {
+            return;
+        };
+
+        let Ok(udp_packet) = UdpPacket::new_checked(ip_packet.payload()) else {
+            return;
+        };
+
+        let guest_mac = eth_frame.src_addr();
+        let guest_ip: Ipv4Addr = ip_packet.src_addr();
+        let guest_port = udp_packet.src_port();
+        let dns_query = udp_packet.payload();
+
+        // Forward query through DNS proxy
+        match self.dns_proxy.handle_query(dns_query).await {
+            Ok(response) => {
+                // Craft and send UDP response frame
+                if let Some(response_frame) =
+                    self.craft_dns_response(guest_mac, guest_ip, guest_port, &response)
+                    && let Err(e) = self.device.send_frame(&response_frame)
+                {
+                    tracing::warn!("Failed to send DNS response: {}", e);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("DNS proxy error: {}", e);
+            }
+        }
+    }
+
+    /// Craft a UDP response frame for DNS.
+    fn craft_dns_response(
+        &self,
+        guest_mac: EthernetAddress,
+        guest_ip: Ipv4Addr,
+        guest_port: u16,
+        dns_response: &[u8],
+    ) -> Option<Vec<u8>> {
+        use smoltcp::phy::ChecksumCapabilities;
+        use smoltcp::wire::{EthernetRepr, Ipv4Repr, UdpRepr};
+
+        let eth_repr = EthernetRepr {
+            src_addr: EthernetAddress(self.config.gateway_mac),
+            dst_addr: guest_mac,
+            ethertype: EthernetProtocol::Ipv4,
+        };
+
+        let ip_repr = Ipv4Repr {
+            src_addr: self.config.gateway_ip,
+            dst_addr: guest_ip,
+            next_header: IpProtocol::Udp,
+            payload_len: 8 + dns_response.len(), // UDP header + payload
+            hop_limit: 64,
+        };
+
+        let udp_repr = UdpRepr {
+            src_port: 53,
+            dst_port: guest_port,
+        };
+
+        let checksum_caps = ChecksumCapabilities::default();
+
+        let total_len = eth_repr.buffer_len()
+            + ip_repr.buffer_len()
+            + udp_repr.header_len()
+            + dns_response.len();
+        let mut buffer = vec![0u8; total_len];
+
+        let mut eth_frame = EthernetFrame::new_unchecked(&mut buffer);
+        eth_repr.emit(&mut eth_frame);
+
+        let mut ip_packet = Ipv4Packet::new_unchecked(eth_frame.payload_mut());
+        ip_repr.emit(&mut ip_packet, &checksum_caps);
+
+        let mut udp_packet = smoltcp::wire::UdpPacket::new_unchecked(ip_packet.payload_mut());
+        udp_repr.emit(
+            &mut udp_packet,
+            &IpAddress::Ipv4(self.config.gateway_ip),
+            &IpAddress::Ipv4(guest_ip),
+            dns_response.len(),
+            |buf| buf.copy_from_slice(dns_response),
+            &checksum_caps,
+        );
+
+        Some(buffer)
     }
 }
 
