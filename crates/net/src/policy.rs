@@ -212,8 +212,6 @@ impl CompiledMatcher {
             CompiledMatcher::Protocol(proto) => info.protocol == *proto,
             CompiledMatcher::Domain(pattern) => {
                 // Look up the domain for this IP in the cache
-                // TODO: Add debug/trace logging for domain policy mismatches and
-                // unknown IPs to aid debugging, but be careful about log volume.
                 if let Some(domain) = dns_cache.lookup(info.dst_ip) {
                     pattern.matches(domain)
                 } else {

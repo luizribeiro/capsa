@@ -1,15 +1,26 @@
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::net::Ipv4Addr;
 
 /// Pattern for matching domain names in network policies.
-#[derive(Debug, Clone, PartialEq, Serialize)]
-#[serde(untagged)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum DomainPattern {
     /// Exact match: "api.anthropic.com"
     Exact(String),
     /// Wildcard match: "*.github.com" matches "api.github.com"
     /// Does NOT match "github.com" itself (must have subdomain)
     Wildcard(String),
+}
+
+impl Serialize for DomainPattern {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            DomainPattern::Exact(s) => serializer.serialize_str(s),
+            DomainPattern::Wildcard(s) => serializer.serialize_str(&format!("*.{}", s)),
+        }
+    }
 }
 
 impl DomainPattern {
@@ -560,9 +571,44 @@ mod tests {
 
         let wildcard = DomainPattern::parse("*.example.com");
         let json = serde_json::to_string(&wildcard).unwrap();
-        assert_eq!(json, "\"example.com\"");
-        let parsed: DomainPattern = serde_json::from_str("\"*.example.com\"").unwrap();
+        assert_eq!(json, "\"*.example.com\"");
+        let parsed: DomainPattern = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed, wildcard);
+    }
+
+    #[test]
+    fn domain_pattern_wildcard_serialization_preserves_prefix() {
+        let wildcard = DomainPattern::Wildcard("github.com".to_string());
+        let json = serde_json::to_string(&wildcard).unwrap();
+        assert_eq!(json, "\"*.github.com\"");
+
+        let parsed: DomainPattern = serde_json::from_str(&json).unwrap();
+        assert!(matches!(parsed, DomainPattern::Wildcard(ref s) if s == "github.com"));
+        assert!(parsed.matches("api.github.com"));
+        assert!(!parsed.matches("github.com"));
+    }
+
+    #[test]
+    fn network_policy_with_wildcard_domain_roundtrip() {
+        let policy = NetworkPolicy::deny_all().allow_domain("*.example.com");
+
+        let json = serde_json::to_string(&policy).unwrap();
+        let parsed: NetworkPolicy = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(parsed.default_action, PolicyAction::Deny);
+        assert_eq!(parsed.rules.len(), 1);
+
+        if let RuleMatcher::Domain(pattern) = &parsed.rules[0].matcher {
+            assert!(
+                matches!(pattern, DomainPattern::Wildcard(s) if s == "example.com"),
+                "Expected Wildcard(\"example.com\"), got {:?}",
+                pattern
+            );
+            assert!(pattern.matches("www.example.com"));
+            assert!(!pattern.matches("example.com"));
+        } else {
+            panic!("Expected Domain matcher");
+        }
     }
 
     #[test]
