@@ -9,7 +9,7 @@
 //! # Example
 //!
 //! ```rust,ignore
-//! use capsa::Capsa;
+//! use capsa::{Capsa, sandbox};
 //! use capsa_core::MountMode;
 //!
 //! let vm = Capsa::sandbox()
@@ -20,14 +20,17 @@
 //!     .build()
 //!     .await?;
 //!
-//! vm.wait_ready().await?;
-//! let result = vm.exec("ls /mnt").await?;
+//! let socket = vm.vsock_socket(sandbox::agent_port()).unwrap();
+//! let agent = sandbox::wait_ready(socket).await?;
+//! agent.ping().await?;
 //! ```
 
 mod builder;
+mod client;
 mod config;
 
 pub use builder::{HasMainProcess, NoMainProcess, SandboxBuilder};
+pub use client::{AgentClient, agent_port, wait_ready, wait_ready_timeout};
 pub use config::CapsaSandboxConfig;
 
 // These will be used when implementing build() and cmdline generation

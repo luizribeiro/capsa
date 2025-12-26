@@ -19,7 +19,7 @@ pub use linux::LinuxKvmBackend;
 pub use capsa_core::{HypervisorBackend, Result};
 
 /// Returns all compiled-in backends.
-#[allow(clippy::vec_init_then_push)]
+#[allow(clippy::vec_init_then_push, unused_mut)]
 pub fn available_backends() -> Vec<Box<dyn HypervisorBackend>> {
     let mut backends: Vec<Box<dyn HypervisorBackend>> = Vec::new();
 

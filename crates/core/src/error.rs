@@ -33,11 +33,14 @@ pub enum Error {
     #[error("console not enabled for this VM")]
     ConsoleNotEnabled,
 
-    #[error("operation timed out")]
-    Timeout,
+    #[error("operation timed out: {0}")]
+    Timeout(String),
 
     #[error("pattern not found in console output: {pattern}")]
     PatternNotFound { pattern: String },
+
+    #[error("agent error: {0}")]
+    Agent(String),
 
     #[error("no VMs available in pool")]
     PoolEmpty,

@@ -50,7 +50,7 @@ mod console;
 pub mod guides;
 mod handle;
 mod pool;
-mod sandbox;
+pub mod sandbox;
 mod vsock;
 
 // TODO: stop exporting test-utils externally as all it does is expose VMs from test-vms.nix

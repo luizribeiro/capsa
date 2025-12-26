@@ -126,7 +126,10 @@ impl VmConsole {
     pub async fn wait_for_timeout(&self, pattern: &str, duration: Duration) -> Result<String> {
         match timeout(duration, self.wait_for(pattern)).await {
             Ok(result) => result,
-            Err(_) => Err(Error::Timeout),
+            Err(_) => Err(Error::Timeout(format!(
+                "pattern '{}' not found within {:?}",
+                pattern, duration
+            ))),
         }
     }
 
