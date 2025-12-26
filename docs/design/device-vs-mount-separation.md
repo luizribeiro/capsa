@@ -1,0 +1,523 @@
+# Device Attachment vs Guest-Side Configuration
+
+## Executive Summary
+
+The current `.share()` API is fundamentally broken. It implies auto-mounting at a guest path but actually:
+- On KVM: ignores `guest_path` entirely, uses hardcoded tags (`share0`, `share1`), requires manual mount
+- On vfkit: uses `guest_path` only for tag generation, still requires manual mount
+- Nowhere: actually mounts the filesystem
+
+This document proposes separating device attachment (universal) from guest-side mounting (Linux direct boot only), making the API honest and adding real auto-mount support.
+
+## Current State: What The API Implies vs Reality
+
+### The API
+
+```rust
+.share("./src", "/mnt/src", MountMode::ReadOnly)
+//     ^^^^^^   ^^^^^^^^^   ^^^^^^^^^^^^^^^^^^^
+//     host     guest       mode
+//     path     path
+```
+
+**What users expect**: "Share `./src` from host, automatically mounted at `/mnt/src` in guest"
+
+**What actually happens**: Device attached, user must manually mount
+
+### KVM Backend Reality
+
+```rust
+// In vm.rs:470-475
+let tag = match &share.mechanism {
+    ShareMechanism::VirtioFs(cfg) => cfg.tag.clone().unwrap_or_else(|| format!("share{}", i)),
+    _ => format!("share{}", i),  // guest_path COMPLETELY IGNORED
+};
+```
+
+- `guest_path` parameter: **Ignored**
+- Tag used: `share0`, `share1`, `share2`, ...
+- Auto-mount: **No**
+- What user must do:
+  ```bash
+  mkdir -p /mnt/wherever
+  mount -t virtiofs share0 /mnt/wherever
+  ```
+
+### vfkit Backend Reality
+
+```rust
+// In vfkit.rs:91-103
+let tag = match &share.mechanism {
+    ShareMechanism::Auto => share.guest_path.replace('/', "_").trim_matches('_').to_string(),
+    ShareMechanism::VirtioFs(cfg) => cfg.tag.clone().unwrap_or_else(|| {
+        share.guest_path.replace('/', "_").trim_matches('_').to_string()
+    }),
+    // ...
+};
+```
+
+- `guest_path` parameter: **Used only for tag generation** (`/mnt/src` → `mnt_src`)
+- Auto-mount: **No**
+- What user must do:
+  ```bash
+  mkdir -p /mnt/src
+  mount -t virtiofs mnt_src /mnt/src
+  ```
+
+### Evidence: Our Own Tests
+
+Every integration test manually mounts:
+
+```rust
+// From share_test.rs
+console.exec(
+    "mkdir -p /mnt/share && mount -t virtiofs share0 /mnt/share && echo MOUNT_OK",
+    Duration::from_secs(10),
+).await
+```
+
+## Problems
+
+### 1. Misleading API
+
+The `guest_path` parameter implies the filesystem will be mounted there. It isn't.
+
+### 2. Inconsistent Behavior
+
+- KVM ignores `guest_path`, uses `share{i}` tags
+- vfkit uses `guest_path` to derive tags
+- User code that works on one backend may not work on the other
+
+### 3. No Type Safety
+
+`.share()` is available on all `VmBuilder<B>` types, but:
+- Auto-mounting would only be possible for Linux direct boot (requires cmdline/initrd modification)
+- UEFI boot can only attach device, user must mount after boot
+
+### 4. `guest_path` Parameter Is Useless
+
+On KVM it does nothing. On vfkit it's just used for generating a tag (which could be explicit).
+
+## Proposed Design
+
+### Principle
+
+1. **Separate device attachment from mounting**
+2. **Make device attachment universal** (works for all boot types)
+3. **Make auto-mounting Linux-direct-boot-only** (type-safe)
+4. **Be honest about what requires manual intervention**
+
+### New Types
+
+```rust
+/// Configuration for a virtio-fs device.
+/// This is device-level configuration - no guest mount path.
+#[derive(Debug, Clone)]
+pub struct VirtioFsDevice {
+    /// Host directory to share.
+    pub host_path: PathBuf,
+
+    /// Tag for guest to identify the device (max 36 chars).
+    /// Used in: `mount -t virtiofs <tag> /path`
+    pub tag: String,
+
+    /// Whether guest can only read.
+    pub read_only: bool,
+
+    /// UID/GID mapping configuration.
+    pub uid_gid_mapping: UidGidMapping,
+}
+
+impl VirtioFsDevice {
+    pub fn new(host_path: impl Into<PathBuf>) -> Self {
+        Self {
+            host_path: host_path.into(),
+            tag: String::new(),  // Auto-generated if empty
+            read_only: false,
+            uid_gid_mapping: UidGidMapping::squash_to_root(),
+        }
+    }
+
+    pub fn tag(mut self, tag: impl Into<String>) -> Self {
+        self.tag = tag.into();
+        self
+    }
+
+    pub fn read_only(mut self) -> Self {
+        self.read_only = true;
+        self
+    }
+
+    pub fn uid_gid_mapping(mut self, mapping: UidGidMapping) -> Self {
+        self.uid_gid_mapping = mapping;
+        self
+    }
+
+    // Convenience methods
+    pub fn passthrough_ownership(self) -> Self {
+        self.uid_gid_mapping(UidGidMapping::passthrough())
+    }
+}
+
+impl Default for VirtioFsDevice {
+    fn default() -> Self {
+        Self::new("")
+    }
+}
+```
+
+### API Changes
+
+#### Universal: Device Attachment (All Boot Types)
+
+```rust
+impl<B: BootConfigBuilder, P> VmBuilder<B, P> {
+    /// Attach a virtio-fs device to the VM.
+    ///
+    /// The guest must mount manually:
+    /// ```bash
+    /// mount -t virtiofs <tag> /path
+    /// ```
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let vm = Capsa::vm(config)
+    ///     .virtio_fs(VirtioFsDevice::new("./workspace").tag("workspace"))
+    ///     .build().await?;
+    ///
+    /// // Later, in guest:
+    /// // mount -t virtiofs workspace /mnt
+    /// ```
+    pub fn virtio_fs(mut self, device: impl Into<VirtioFsDevice>) -> Self {
+        self.virtio_fs_devices.push(device.into());
+        self
+    }
+}
+```
+
+#### Linux Direct Boot Only: Auto-Mount Convenience
+
+```rust
+impl<P> VmBuilder<LinuxDirectBootConfig, P> {
+    /// Share a directory with automatic mounting.
+    ///
+    /// This attaches a virtio-fs device AND configures the initrd
+    /// to automatically mount it at the specified guest path.
+    ///
+    /// Only available for Linux direct boot (requires initrd modification).
+    ///
+    /// # Example
+    /// ```rust,ignore
+    /// let vm = Capsa::vm(LinuxDirectBootConfig::new(kernel, initrd))
+    ///     .share("./workspace", "/mnt/workspace", MountMode::ReadWrite)
+    ///     .build().await?;
+    ///
+    /// // Guest automatically has ./workspace mounted at /mnt/workspace
+    /// ```
+    pub fn share(
+        self,
+        host: impl Into<PathBuf>,
+        guest: impl Into<String>,
+        mode: MountMode,
+    ) -> Self {
+        let guest_path = guest.into();
+        let tag = Self::tag_from_path(&guest_path);
+
+        let device = VirtioFsDevice::new(host)
+            .tag(&tag)
+            .read_only_if(mode == MountMode::ReadOnly);
+
+        self.virtio_fs(device)
+            .auto_mount(tag, guest_path)
+    }
+
+    /// Share with explicit device configuration.
+    pub fn share_with_config(
+        self,
+        device: VirtioFsDevice,
+        guest_path: impl Into<String>,
+    ) -> Self {
+        let guest_path = guest_path.into();
+        let tag = device.tag.clone();
+
+        self.virtio_fs(device)
+            .auto_mount(tag, guest_path)
+    }
+
+    // Internal: records mount for initrd/cmdline generation
+    fn auto_mount(mut self, tag: String, guest_path: String) -> Self {
+        self.auto_mounts.push(AutoMount { tag, guest_path });
+        self
+    }
+
+    fn tag_from_path(path: &str) -> String {
+        path.replace('/', "_").trim_matches('_').to_string()
+    }
+}
+```
+
+### Auto-Mount Implementation
+
+For Linux direct boot, auto-mounting can be achieved by:
+
+#### Option A: Kernel Command Line (Limited)
+
+Add to cmdline:
+```
+virtiofs.mount=<tag>:<path>
+```
+
+**Problem**: Requires kernel support, may need custom initrd.
+
+#### Option B: Init Script Injection (Recommended)
+
+Modify initrd to include a mount script that runs early in boot:
+
+```bash
+#!/bin/sh
+# /etc/init.d/capsa-mounts or similar
+mount -t virtiofs share0 /mnt/workspace
+mount -t virtiofs share1 /mnt/data
+```
+
+**Implementation**:
+1. Store mount info in `LinuxDirectBootConfig`
+2. When building, generate mount script
+3. Inject into initrd (or use overlayfs approach)
+
+#### Option C: Systemd Units (If Guest Uses Systemd)
+
+Generate `.mount` units:
+
+```ini
+# /etc/systemd/system/mnt-workspace.mount
+[Mount]
+What=share0
+Where=/mnt/workspace
+Type=virtiofs
+
+[Install]
+WantedBy=local-fs.target
+```
+
+**Complexity**: Requires knowing guest init system.
+
+#### Recommended Approach
+
+Start with **Option B** for the test VM (NixOS-based, we control the initrd). Document that auto-mount requires compatible initrd, and provide `virtio_fs()` for users who need manual control.
+
+### Internal Storage Changes
+
+```rust
+pub struct VmBuilder<B: BootConfigBuilder, P = No> {
+    // Existing fields...
+
+    /// Virtio-fs devices to attach (universal).
+    pub(crate) virtio_fs_devices: Vec<VirtioFsDevice>,
+}
+
+// Linux-specific storage for auto-mounts
+pub struct LinuxDirectBootConfig {
+    // Existing fields...
+
+    /// Mounts to set up automatically via initrd.
+    pub auto_mounts: Vec<AutoMount>,
+}
+
+pub struct AutoMount {
+    pub tag: String,
+    pub guest_path: String,
+}
+```
+
+### VmConfig Changes
+
+```rust
+pub struct VmConfig {
+    // Replace:
+    // pub shares: Vec<SharedDir>,
+
+    // With:
+    pub virtio_fs_devices: Vec<VirtioFsDevice>,
+
+    // Only populated for Linux direct boot:
+    pub auto_mounts: Vec<AutoMount>,
+}
+```
+
+### Backend Changes
+
+#### KVM Backend
+
+```rust
+// In vm.rs - simplified, no more ShareMechanism matching
+for (i, device) in config.virtio_fs_devices.iter().enumerate() {
+    let base = VIRTIO_FS_MMIO_BASE + (i as u64 * VIRTIO_MMIO_SIZE);
+    let irq = VIRTIO_FS_IRQ + i as u32;
+
+    // Use explicit tag or generate one
+    let tag = if device.tag.is_empty() {
+        format!("share{}", i)
+    } else {
+        device.tag.clone()
+    };
+
+    let virtio_fs = VirtioFs::new(
+        device.host_path.clone(),
+        tag,
+        device.read_only,
+        device.uid_gid_mapping.clone(),  // New: UID mapping
+        vm_fd.clone(),
+        irq,
+    );
+    // ... register device
+}
+
+// Handle auto_mounts for initrd modification (if implementing Option B)
+if !config.auto_mounts.is_empty() {
+    // Inject mount script into initrd
+}
+```
+
+## Migration Path
+
+### Phase 1: Add New API (Non-Breaking)
+
+1. Add `VirtioFsDevice` type
+2. Add `.virtio_fs()` method on all builders
+3. Keep `.share()` working as before (deprecated)
+4. Add `.share()` only on `VmBuilder<LinuxDirectBootConfig>` with proper implementation
+
+### Phase 2: Fix Tag Generation
+
+1. KVM: Use `guest_path` to derive tag (matching vfkit behavior) OR use explicit tag
+2. Make tag derivation consistent across backends
+
+### Phase 3: Implement Auto-Mount (Linux Direct Boot)
+
+1. Implement initrd modification for auto-mounting
+2. `.share()` now actually mounts at `guest_path`
+
+### Phase 4: Deprecate Old API
+
+1. Deprecate `SharedDir` type
+2. Deprecate `ShareMechanism` enum (fold into `VirtioFsDevice`)
+3. Remove after migration period
+
+## Usage Examples
+
+### UEFI Boot (Device Only, Manual Mount)
+
+```rust
+let vm = Capsa::vm(UefiBootConfig::new(disk))
+    .virtio_fs(VirtioFsDevice::new("./workspace").tag("ws"))
+    .console_enabled()
+    .build()
+    .await?;
+
+let console = vm.console().await?;
+console.wait_for("login:").await?;
+console.write_line("root").await?;
+console.wait_for("# ").await?;
+
+// Manual mount required
+console.exec("mkdir -p /mnt && mount -t virtiofs ws /mnt", timeout).await?;
+```
+
+### Linux Direct Boot (Auto-Mount)
+
+```rust
+let vm = Capsa::vm(LinuxDirectBootConfig::new(kernel, initrd))
+    .share("./workspace", "/mnt", MountMode::ReadWrite)
+    .console_enabled()
+    .build()
+    .await?;
+
+let console = vm.console().await?;
+console.wait_for("# ").await?;
+
+// Already mounted!
+console.exec("ls /mnt", timeout).await?;
+```
+
+### Linux Direct Boot (Explicit Device Config)
+
+```rust
+let vm = Capsa::vm(LinuxDirectBootConfig::new(kernel, initrd))
+    .share_with_config(
+        VirtioFsDevice::new("./workspace")
+            .tag("myshare")
+            .passthrough_ownership(),
+        "/mnt/workspace",
+    )
+    .build()
+    .await?;
+```
+
+### Linux Direct Boot (Device Only, No Auto-Mount)
+
+```rust
+// User wants device but will mount manually (e.g., conditional mounting)
+let vm = Capsa::vm(LinuxDirectBootConfig::new(kernel, initrd))
+    .virtio_fs(VirtioFsDevice::new("./workspace").tag("ws"))
+    .build()
+    .await?;
+
+// Must mount manually
+```
+
+## Testing Updates
+
+Current tests manually mount. After this change:
+
+**Before:**
+```rust
+let vm = Capsa::vm(config)
+    .share(&share_dir, "/mnt/share", MountMode::ReadWrite)
+    .build().await?;
+
+// Manual mount 😢
+console.exec(
+    "mkdir -p /mnt/share && mount -t virtiofs share0 /mnt/share",
+    timeout,
+).await?;
+```
+
+**After:**
+```rust
+let vm = Capsa::vm(config)
+    .share(&share_dir, "/mnt/share", MountMode::ReadWrite)
+    .build().await?;
+
+// Auto-mounted! 🎉
+console.exec("ls /mnt/share", timeout).await?;
+```
+
+## Open Questions
+
+1. **Auto-mount implementation**: Which option (cmdline, initrd injection, systemd)? Recommend initrd injection for test VM.
+
+2. **Virtio-9p**: Should follow same pattern? Lower priority since virtio-fs is preferred.
+
+3. **Tag uniqueness**: Should we validate tags are unique across devices?
+
+4. **Max devices**: Should we limit number of virtio-fs devices? (IRQ allocation)
+
+## Related Documents
+
+- [UID/GID Mapping Design](./virtio-fs-uid-mapping.md) - `UidGidMapping` type used in `VirtioFsDevice`
+
+## Summary of Changes
+
+| Component | Change |
+|-----------|--------|
+| `VirtioFsDevice` | New type for device config |
+| `UidGidMapping` | New type (from UID mapping design) |
+| `.virtio_fs()` | New method on all builders |
+| `.share()` | Move to `VmBuilder<LinuxDirectBootConfig>` only, implement auto-mount |
+| `SharedDir` | Deprecate |
+| `ShareMechanism` | Deprecate |
+| `VmConfig.shares` | Replace with `virtio_fs_devices` + `auto_mounts` |
+| KVM backend | Use `VirtioFsDevice`, implement auto-mount |
+| vfkit backend | Use `VirtioFsDevice` |
+| Tests | Remove manual mount commands |
