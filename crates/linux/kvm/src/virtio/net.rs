@@ -16,75 +16,31 @@ use vm_device::MutDeviceMmio;
 use vm_device::bus::{MmioAddress, MmioAddressOffset};
 use vm_memory::{Bytes, GuestAddress, GuestMemoryMmap};
 
+use super::common::{
+    VIRTIO_MMIO_CONFIG, VIRTIO_MMIO_DEVICE_FEATURES, VIRTIO_MMIO_DEVICE_FEATURES_SEL,
+    VIRTIO_MMIO_DEVICE_ID, VIRTIO_MMIO_DRIVER_FEATURES, VIRTIO_MMIO_DRIVER_FEATURES_SEL,
+    VIRTIO_MMIO_INTERRUPT_ACK, VIRTIO_MMIO_INTERRUPT_STATUS, VIRTIO_MMIO_MAGIC,
+    VIRTIO_MMIO_MAGIC_VALUE, VIRTIO_MMIO_QUEUE_AVAIL_HIGH, VIRTIO_MMIO_QUEUE_AVAIL_LOW,
+    VIRTIO_MMIO_QUEUE_DESC_HIGH, VIRTIO_MMIO_QUEUE_DESC_LOW, VIRTIO_MMIO_QUEUE_NOTIFY,
+    VIRTIO_MMIO_QUEUE_NUM, VIRTIO_MMIO_QUEUE_NUM_MAX, VIRTIO_MMIO_QUEUE_READY,
+    VIRTIO_MMIO_QUEUE_SEL, VIRTIO_MMIO_QUEUE_USED_HIGH, VIRTIO_MMIO_QUEUE_USED_LOW,
+    VIRTIO_MMIO_STATUS, VIRTIO_MMIO_VENDOR_ID, VIRTIO_MMIO_VERSION, VirtioQueueState,
+};
+use super::{MAX_DESCRIPTOR_LEN, validate_queue_addresses};
+
 const VIRTIO_ID_NET: u32 = 1;
 
 const RX_QUEUE_INDEX: usize = 0;
 const TX_QUEUE_INDEX: usize = 1;
 const QUEUE_SIZE: u16 = 256;
 
-// Virtio MMIO register offsets
-const VIRTIO_MMIO_MAGIC: u64 = 0x00;
-const VIRTIO_MMIO_VERSION: u64 = 0x04;
-const VIRTIO_MMIO_DEVICE_ID: u64 = 0x08;
-const VIRTIO_MMIO_VENDOR_ID: u64 = 0x0c;
-const VIRTIO_MMIO_DEVICE_FEATURES: u64 = 0x10;
-const VIRTIO_MMIO_DEVICE_FEATURES_SEL: u64 = 0x14;
-const VIRTIO_MMIO_DRIVER_FEATURES: u64 = 0x20;
-const VIRTIO_MMIO_DRIVER_FEATURES_SEL: u64 = 0x24;
-const VIRTIO_MMIO_QUEUE_SEL: u64 = 0x30;
-const VIRTIO_MMIO_QUEUE_NUM_MAX: u64 = 0x34;
-const VIRTIO_MMIO_QUEUE_NUM: u64 = 0x38;
-const VIRTIO_MMIO_QUEUE_READY: u64 = 0x44;
-const VIRTIO_MMIO_QUEUE_NOTIFY: u64 = 0x50;
-const VIRTIO_MMIO_INTERRUPT_STATUS: u64 = 0x60;
-const VIRTIO_MMIO_INTERRUPT_ACK: u64 = 0x64;
-const VIRTIO_MMIO_STATUS: u64 = 0x70;
-const VIRTIO_MMIO_QUEUE_DESC_LOW: u64 = 0x80;
-const VIRTIO_MMIO_QUEUE_DESC_HIGH: u64 = 0x84;
-const VIRTIO_MMIO_QUEUE_AVAIL_LOW: u64 = 0x90;
-const VIRTIO_MMIO_QUEUE_AVAIL_HIGH: u64 = 0x94;
-const VIRTIO_MMIO_QUEUE_USED_LOW: u64 = 0xa0;
-const VIRTIO_MMIO_QUEUE_USED_HIGH: u64 = 0xa4;
-const VIRTIO_MMIO_CONFIG: u64 = 0x100;
-
-const VIRTIO_MMIO_MAGIC_VALUE: u32 = 0x74726976;
-
 const VIRTIO_STATUS_DRIVER_OK: u32 = 4;
 const VIRTIO_INT_USED_RING: u32 = 1;
 
-// Virtio feature bits
 const VIRTIO_F_VERSION_1: u64 = 1 << 32;
 const VIRTIO_NET_F_MAC: u64 = 1 << 5;
 
-// Virtio-net header size
-// With VIRTIO_F_VERSION_1, the modern header includes num_buffers (12 bytes total)
 const VIRTIO_NET_HDR_SIZE: usize = 12;
-
-use super::{MAX_DESCRIPTOR_LEN, validate_queue_addresses};
-
-struct VirtioQueueState {
-    ready: bool,
-    size: u16,
-    desc_table: u64,
-    avail_ring: u64,
-    used_ring: u64,
-    next_avail: u16,
-    next_used: u16,
-}
-
-impl Default for VirtioQueueState {
-    fn default() -> Self {
-        Self {
-            ready: false,
-            size: QUEUE_SIZE,
-            desc_table: 0,
-            avail_ring: 0,
-            used_ring: 0,
-            next_avail: 0,
-            next_used: 0,
-        }
-    }
-}
 
 /// Virtio network device using MMIO transport.
 ///

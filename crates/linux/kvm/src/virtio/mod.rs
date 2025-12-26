@@ -6,10 +6,13 @@
 //! - `vsock`: Virtio socket device for host-guest communication
 //! - `fs`: Virtio filesystem device for shared directories
 
+mod common;
 mod console;
 mod fs;
 mod net;
 mod vsock;
+
+pub use common::{DEFAULT_QUEUE_SIZE, VirtioQueueState};
 
 pub use console::VirtioConsole;
 pub use fs::VirtioFs;
