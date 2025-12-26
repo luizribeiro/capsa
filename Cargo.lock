@@ -337,8 +337,10 @@ dependencies = [
  "capsa-sandbox-protocol",
  "futures",
  "tarpc",
+ "tempfile",
  "tokio",
  "tokio-serde",
+ "tokio-util",
  "tokio-vsock",
 ]
 

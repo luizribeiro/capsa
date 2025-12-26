@@ -1,8 +1,17 @@
 //! Host-side client for communicating with the sandbox agent.
+//!
+//! # Security Considerations
+//!
+//! The [`AgentClient`] provides unrestricted access to the guest VM's filesystem
+//! and command execution. The security boundary is the VM isolation itself.
+//! The agent is trusted by design within the guest environment.
 
 use crate::vsock::VsockSocket;
 use capsa_core::{Error, Result};
-use capsa_sandbox_protocol::{AGENT_VSOCK_PORT, AgentServiceClient};
+use capsa_sandbox_protocol::{
+    AGENT_VSOCK_PORT, AgentServiceClient, DirEntry, ExecResult, SystemInfo,
+};
+use std::collections::HashMap;
 use std::time::Duration;
 use tarpc::tokio_serde::formats::Bincode;
 use tarpc::tokio_util::codec::LengthDelimitedCodec;
@@ -46,6 +55,78 @@ impl AgentClient {
             .ping(tarpc::context::current())
             .await
             .map_err(|e| Error::Agent(format!("ping failed: {}", e)))
+    }
+
+    /// Executes a command in the guest and returns the result.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let result = agent.exec("ls -la /mnt", HashMap::new()).await?;
+    /// println!("stdout: {}", result.stdout);
+    /// ```
+    pub async fn exec(&self, command: &str, env: HashMap<String, String>) -> Result<ExecResult> {
+        self.client
+            .exec(tarpc::context::current(), command.to_string(), env)
+            .await
+            .map_err(|e| Error::Agent(format!("exec failed: {}", e)))?
+            .map_err(Error::Agent)
+    }
+
+    /// Reads a file from the guest filesystem.
+    pub async fn read_file(&self, path: &str) -> Result<Vec<u8>> {
+        self.client
+            .read_file(tarpc::context::current(), path.to_string())
+            .await
+            .map_err(|e| Error::Agent(format!("read_file failed: {}", e)))?
+            .map_err(Error::Agent)
+    }
+
+    /// Writes contents to a file in the guest filesystem.
+    pub async fn write_file(&self, path: &str, contents: &[u8]) -> Result<()> {
+        self.client
+            .write_file(
+                tarpc::context::current(),
+                path.to_string(),
+                contents.to_vec(),
+            )
+            .await
+            .map_err(|e| Error::Agent(format!("write_file failed: {}", e)))?
+            .map_err(Error::Agent)
+    }
+
+    /// Lists the contents of a directory in the guest filesystem.
+    pub async fn list_dir(&self, path: &str) -> Result<Vec<DirEntry>> {
+        self.client
+            .list_dir(tarpc::context::current(), path.to_string())
+            .await
+            .map_err(|e| Error::Agent(format!("list_dir failed: {}", e)))?
+            .map_err(Error::Agent)
+    }
+
+    /// Checks if a path exists in the guest filesystem.
+    pub async fn exists(&self, path: &str) -> Result<bool> {
+        self.client
+            .exists(tarpc::context::current(), path.to_string())
+            .await
+            .map_err(|e| Error::Agent(format!("exists failed: {}", e)))
+    }
+
+    /// Returns information about the guest system.
+    pub async fn info(&self) -> Result<SystemInfo> {
+        self.client
+            .info(tarpc::context::current())
+            .await
+            .map_err(|e| Error::Agent(format!("info failed: {}", e)))
+    }
+
+    /// Requests the guest VM to shutdown.
+    pub async fn shutdown(&self) -> Result<()> {
+        self.client
+            .shutdown(tarpc::context::current())
+            .await
+            .map_err(|e| Error::Agent(format!("shutdown failed: {}", e)))?
+            .map_err(Error::Agent)
     }
 }
 

@@ -33,6 +33,8 @@ pub use builder::{HasMainProcess, NoMainProcess, SandboxBuilder};
 pub use client::{AgentClient, agent_port, wait_ready, wait_ready_timeout};
 pub use config::CapsaSandboxConfig;
 
+pub use capsa_sandbox_protocol::{DirEntry, ExecResult, SystemInfo};
+
 // These will be used when implementing build() and cmdline generation
 #[allow(unused_imports)]
 pub(crate) use config::{MainProcess, ShareConfig};

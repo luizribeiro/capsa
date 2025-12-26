@@ -15,4 +15,8 @@ tokio = { workspace = true }
 tokio-vsock = "0.6"
 tarpc = { version = "0.35", features = ["serde1", "tokio1", "serde-transport", "serde-transport-bincode"] }
 tokio-serde = { version = "0.9", features = ["bincode"] }
+tokio-util = { version = "0.7", features = ["codec"] }
 futures = "0.3"
+
+[dev-dependencies]
+tempfile = { workspace = true }
