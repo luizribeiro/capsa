@@ -14,6 +14,7 @@ libc = "0.2"
 heapless = "0.8"
 futures = "0.3"
 rand = "0.8"
+socket2 = { version = "0.5", features = ["all"] }
 
 smoltcp = { version = "0.12", default-features = false, features = [
     "medium-ethernet",

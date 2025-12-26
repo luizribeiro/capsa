@@ -1,14 +1,15 @@
 //! NAT connection tracking and packet forwarding.
 //!
-//! This module implements userspace NAT for TCP and UDP connections from the guest
+//! This module implements userspace NAT for TCP, UDP, and ICMP from the guest
 //! to external hosts. It intercepts packets destined for external IPs and forwards
 //! them through host sockets, then crafts response packets back to the guest.
 
 use smoltcp::phy::ChecksumCapabilities;
 use smoltcp::wire::{
-    EthernetAddress, EthernetFrame, EthernetProtocol, EthernetRepr, IpProtocol, Ipv4Packet,
-    Ipv4Repr, TcpPacket, TcpRepr, TcpSeqNumber, UdpPacket, UdpRepr,
+    EthernetAddress, EthernetFrame, EthernetProtocol, EthernetRepr, Icmpv4Message, Icmpv4Packet,
+    IpProtocol, Ipv4Packet, Ipv4Repr, TcpPacket, TcpRepr, TcpSeqNumber, UdpPacket, UdpRepr,
 };
+use socket2::{Domain, Protocol, Type};
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
@@ -24,6 +25,12 @@ const UDP_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Idle timeout for TCP NAT entries.
 const TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+
+/// Idle timeout for ICMP NAT entries.
+const ICMP_IDLE_TIMEOUT: Duration = Duration::from_secs(120);
+
+/// Maximum ICMP bindings per guest IP to prevent socket exhaustion.
+const MAX_ICMP_BINDINGS_PER_GUEST: usize = 64;
 
 /// Standard Ethernet MTU in bytes.
 const ETHERNET_MTU: usize = 1500;
@@ -47,12 +54,14 @@ pub fn frame_channel(buffer: usize) -> (FrameSender, FrameReceiver) {
     mpsc::channel(buffer)
 }
 
-/// NAT connection tracker handling UDP and TCP forwarding.
+/// NAT connection tracker handling UDP, TCP, and ICMP forwarding.
 pub struct NatTable {
     /// UDP bindings: guest source -> host socket and metadata
     udp_bindings: HashMap<UdpKey, UdpNatEntry>,
     /// TCP connections: (guest_addr, remote_addr) -> connection state
     tcp_connections: HashMap<TcpKey, TcpNatEntry>,
+    /// ICMP bindings: (guest_ip, identifier) -> socket and metadata
+    icmp_bindings: HashMap<IcmpKey, IcmpNatEntry>,
     /// Gateway IP (our IP on the virtual network)
     gateway_ip: Ipv4Addr,
     /// Gateway MAC address
@@ -107,11 +116,31 @@ struct TcpNatEntry {
     last_activity: Instant,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+struct IcmpKey {
+    /// Guest's IP address (source of the echo request)
+    guest_ip: Ipv4Addr,
+    /// ICMP identifier from the echo request
+    identifier: u16,
+}
+
+struct IcmpNatEntry {
+    /// ICMP SOCK_DGRAM socket (non-privileged ICMP via IPPROTO_ICMP).
+    /// Note: Type is UdpSocket because socket2 converts to std::net::UdpSocket,
+    /// but the underlying protocol is ICMP, not UDP.
+    socket: Arc<tokio::net::UdpSocket>,
+    /// Handle to the receive task
+    task_handle: JoinHandle<()>,
+    /// Last activity time for cleanup
+    last_activity: Instant,
+}
+
 impl NatTable {
     pub fn new(gateway_ip: Ipv4Addr, gateway_mac: [u8; 6], tx_to_guest: FrameSender) -> Self {
         Self {
             udp_bindings: HashMap::new(),
             tcp_connections: HashMap::new(),
+            icmp_bindings: HashMap::new(),
             gateway_ip,
             gateway_mac: EthernetAddress(gateway_mac),
             tx_to_guest,
@@ -148,6 +177,7 @@ impl NatTable {
         match ip_packet.next_header() {
             IpProtocol::Udp => self.handle_udp(guest_mac, &ip_packet).await,
             IpProtocol::Tcp => self.handle_tcp(guest_mac, &ip_packet).await,
+            IpProtocol::Icmp => self.handle_icmp(guest_mac, &ip_packet).await,
             _ => false,
         }
     }
@@ -574,6 +604,177 @@ impl NatTable {
         }
     }
 
+    async fn handle_icmp(
+        &mut self,
+        guest_mac: EthernetAddress,
+        ip_packet: &Ipv4Packet<&[u8]>,
+    ) -> bool {
+        let Ok(icmp_packet) = Icmpv4Packet::new_checked(ip_packet.payload()) else {
+            return false;
+        };
+
+        // Only handle echo requests
+        if icmp_packet.msg_type() != Icmpv4Message::EchoRequest {
+            return false;
+        }
+
+        let src_ip: Ipv4Addr = ip_packet.src_addr();
+        let dst_ip: Ipv4Addr = ip_packet.dst_addr();
+
+        // Parse echo request fields (identifier at offset 4, sequence at offset 6)
+        let icmp_data = icmp_packet.data();
+        if icmp_data.len() < 4 {
+            return false;
+        }
+        let identifier = u16::from_be_bytes([icmp_data[0], icmp_data[1]]);
+        let sequence = u16::from_be_bytes([icmp_data[2], icmp_data[3]]);
+        let payload = &icmp_data[4..];
+
+        let key = IcmpKey {
+            guest_ip: src_ip,
+            identifier,
+        };
+
+        // Get or create ICMP socket for this guest/identifier pair
+        if let Some(entry) = self.icmp_bindings.get_mut(&key) {
+            entry.last_activity = Instant::now();
+        } else {
+            // Check binding limit to prevent socket exhaustion
+            let guest_binding_count = self
+                .icmp_bindings
+                .keys()
+                .filter(|k| k.guest_ip == src_ip)
+                .count();
+
+            if guest_binding_count >= MAX_ICMP_BINDINGS_PER_GUEST {
+                tracing::warn!(
+                    "NAT: ICMP binding limit ({}) reached for guest {}",
+                    MAX_ICMP_BINDINGS_PER_GUEST,
+                    src_ip
+                );
+                return false;
+            }
+
+            // Create non-privileged ICMP socket using SOCK_DGRAM
+            let socket =
+                match socket2::Socket::new(Domain::IPV4, Type::DGRAM, Some(Protocol::ICMPV4)) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::warn!("NAT: Failed to create ICMP socket: {}", e);
+                        return false;
+                    }
+                };
+
+            socket.set_nonblocking(true).ok();
+
+            // Convert to async tokio socket
+            let std_socket: std::net::UdpSocket = socket.into();
+            let tokio_socket = match tokio::net::UdpSocket::from_std(std_socket) {
+                Ok(s) => Arc::new(s),
+                Err(e) => {
+                    tracing::warn!("NAT: Failed to convert ICMP socket to async: {}", e);
+                    return false;
+                }
+            };
+            let socket_clone = tokio_socket.clone();
+
+            // Spawn task to receive ICMP replies
+            let tx = self.tx_to_guest.clone();
+            let gateway_mac = self.gateway_mac;
+            let guest_ip = src_ip;
+            let icmp_id = identifier;
+
+            let task_handle = tokio::spawn(async move {
+                let mut buf = vec![0u8; ETHERNET_MTU];
+                loop {
+                    match socket_clone.recv_from(&mut buf).await {
+                        Ok((len, remote_addr)) => {
+                            let remote_ip = match remote_addr.ip() {
+                                std::net::IpAddr::V4(ip) => ip,
+                                _ => continue,
+                            };
+
+                            // Validate ICMP identifier matches (ignore stray replies)
+                            if len >= 8 {
+                                let received_id = u16::from_be_bytes([buf[4], buf[5]]);
+                                if received_id != icmp_id {
+                                    tracing::trace!(
+                                        "NAT: ICMP reply with wrong id {} (expected {})",
+                                        received_id,
+                                        icmp_id
+                                    );
+                                    continue;
+                                }
+                            }
+
+                            // Craft ICMP echo reply frame to guest
+                            if let Some(frame) = craft_icmp_echo_reply(
+                                remote_ip,
+                                guest_ip,
+                                icmp_id,
+                                &buf[..len],
+                                gateway_mac,
+                                guest_mac,
+                            ) {
+                                if tx.send(frame).await.is_err() {
+                                    break;
+                                }
+                            }
+                        }
+                        Err(e) => {
+                            tracing::debug!("NAT: ICMP recv error for {}: {}", guest_ip, e);
+                            break;
+                        }
+                    }
+                }
+            });
+
+            self.icmp_bindings.insert(
+                key,
+                IcmpNatEntry {
+                    socket: tokio_socket,
+                    task_handle,
+                    last_activity: Instant::now(),
+                },
+            );
+        }
+
+        // Send ICMP echo request to the destination
+        let entry = self.icmp_bindings.get(&key).unwrap();
+        let socket = entry.socket.clone();
+
+        // Build ICMP echo request packet
+        let mut icmp_buf = vec![0u8; 8 + payload.len()];
+        icmp_buf[0] = 8; // Echo request type
+        icmp_buf[1] = 0; // Code
+        // Checksum at [2..4] - fill later
+        icmp_buf[4..6].copy_from_slice(&identifier.to_be_bytes());
+        icmp_buf[6..8].copy_from_slice(&sequence.to_be_bytes());
+        icmp_buf[8..].copy_from_slice(payload);
+
+        // Calculate ICMP checksum
+        let checksum = icmp_checksum(&icmp_buf);
+        icmp_buf[2..4].copy_from_slice(&checksum.to_be_bytes());
+
+        let dest_addr = SocketAddr::new(std::net::IpAddr::V4(dst_ip), 0);
+        match socket.send_to(&icmp_buf, dest_addr).await {
+            Ok(_) => {
+                tracing::debug!(
+                    "NAT: ICMP echo {} -> {} id={} seq={}",
+                    src_ip,
+                    dst_ip,
+                    identifier,
+                    sequence
+                );
+                true
+            }
+            Err(e) => {
+                tracing::warn!("NAT: ICMP send to {} failed: {}", dst_ip, e);
+                false
+            }
+        }
+    }
+
     /// Clean up stale NAT entries (called periodically).
     /// Removes entries that have been idle for more than their respective timeouts
     /// and aborts their background tasks.
@@ -604,6 +805,23 @@ impl NatTable {
                     "NAT: Cleaning up TCP connection {} -> {} (idle for {:?})",
                     key.guest_addr,
                     key.remote_addr,
+                    idle_duration
+                );
+                entry.task_handle.abort();
+                false
+            } else {
+                true
+            }
+        });
+
+        // Cleanup ICMP entries
+        self.icmp_bindings.retain(|key, entry| {
+            let idle_duration = now.duration_since(entry.last_activity);
+            if idle_duration > ICMP_IDLE_TIMEOUT {
+                tracing::debug!(
+                    "NAT: Cleaning up idle ICMP entry for {} id={} (idle for {:?})",
+                    key.guest_ip,
+                    key.identifier,
                     idle_duration
                 );
                 entry.task_handle.abort();
@@ -862,6 +1080,95 @@ fn craft_tcp_frame(
     Some(frame)
 }
 
+/// Calculate ICMP checksum (one's complement of one's complement sum).
+fn icmp_checksum(data: &[u8]) -> u16 {
+    let mut sum: u32 = 0;
+    let mut i = 0;
+    while i + 1 < data.len() {
+        sum += u16::from_be_bytes([data[i], data[i + 1]]) as u32;
+        i += 2;
+    }
+    if i < data.len() {
+        sum += (data[i] as u32) << 8;
+    }
+    while (sum >> 16) != 0 {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+    !(sum as u16)
+}
+
+/// Craft an ICMP echo reply ethernet frame to send back to guest.
+fn craft_icmp_echo_reply(
+    src_ip: Ipv4Addr,
+    dst_ip: Ipv4Addr,
+    identifier: u16,
+    icmp_data: &[u8],
+    gateway_mac: EthernetAddress,
+    guest_mac: EthernetAddress,
+) -> Option<Vec<u8>> {
+    // ICMP header is 8 bytes, then payload
+    // For echo reply, we receive the full ICMP packet from socket
+    // which includes: type(1) + code(1) + checksum(2) + id(2) + seq(2) + payload
+
+    // Parse the received ICMP data to extract sequence and payload
+    if icmp_data.len() < 8 {
+        return None;
+    }
+
+    let msg_type = icmp_data[0];
+    // Only process echo replies
+    if msg_type != 0 {
+        return None;
+    }
+
+    let sequence = u16::from_be_bytes([icmp_data[6], icmp_data[7]]);
+    let payload = &icmp_data[8..];
+
+    // Build ICMP echo reply (we rebuild it to ensure correctness)
+    let icmp_len = 8 + payload.len();
+    let ip_len = 20 + icmp_len;
+    let total_len = 14 + ip_len;
+
+    let mut frame = vec![0u8; total_len];
+
+    // Build ethernet header
+    let eth_repr = EthernetRepr {
+        src_addr: gateway_mac,
+        dst_addr: guest_mac,
+        ethertype: EthernetProtocol::Ipv4,
+    };
+    let mut eth_frame = EthernetFrame::new_unchecked(&mut frame[..]);
+    eth_repr.emit(&mut eth_frame);
+
+    // Build IP header
+    let ip_repr = Ipv4Repr {
+        src_addr: src_ip,
+        dst_addr: dst_ip,
+        next_header: IpProtocol::Icmp,
+        payload_len: icmp_len,
+        hop_limit: 64,
+    };
+
+    let mut ip_packet = Ipv4Packet::new_unchecked(&mut frame[14..]);
+    let checksum_caps = ChecksumCapabilities::default();
+    ip_repr.emit(&mut ip_packet, &checksum_caps);
+
+    // Build ICMP echo reply
+    let icmp_start = 14 + 20;
+    frame[icmp_start] = 0; // Echo reply type
+    frame[icmp_start + 1] = 0; // Code
+    // Checksum at [2..4] - fill later
+    frame[icmp_start + 4..icmp_start + 6].copy_from_slice(&identifier.to_be_bytes());
+    frame[icmp_start + 6..icmp_start + 8].copy_from_slice(&sequence.to_be_bytes());
+    frame[icmp_start + 8..icmp_start + 8 + payload.len()].copy_from_slice(payload);
+
+    // Calculate ICMP checksum
+    let checksum = icmp_checksum(&frame[icmp_start..]);
+    frame[icmp_start + 2..icmp_start + 4].copy_from_slice(&checksum.to_be_bytes());
+
+    Some(frame)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -987,5 +1294,129 @@ mod tests {
         assert_eq!(udp.src_port(), src.port());
         assert_eq!(udp.dst_port(), dst.port());
         assert_eq!(udp.payload(), payload);
+    }
+
+    #[test]
+    fn test_icmp_checksum() {
+        // Test with known ICMP echo request data
+        // Type(8) Code(0) Checksum(0) ID(1234) Seq(1) + "Hello"
+        let mut data = vec![
+            8, 0, // Type, Code
+            0, 0, // Checksum placeholder
+            0x04, 0xD2, // Identifier = 1234
+            0x00, 0x01, // Sequence = 1
+            b'H', b'e', b'l', b'l', b'o', // Payload
+        ];
+
+        let checksum = icmp_checksum(&data);
+        data[2..4].copy_from_slice(&checksum.to_be_bytes());
+
+        // Verify checksum by recalculating (should be 0 or 0xFFFF)
+        let verify = icmp_checksum(&data);
+        assert!(
+            verify == 0 || verify == 0xFFFF,
+            "Checksum verification failed: {:04X}",
+            verify
+        );
+    }
+
+    #[test]
+    fn test_icmp_checksum_empty() {
+        // Empty data should produce valid checksum (all 1s)
+        let checksum = icmp_checksum(&[]);
+        assert_eq!(checksum, 0xFFFF);
+    }
+
+    #[test]
+    fn test_icmp_checksum_odd_length() {
+        // Odd length data should be handled correctly
+        let data = vec![0x08, 0x00, 0x00, 0x00, 0x01, 0x02, 0x03];
+        let checksum = icmp_checksum(&data);
+        // Checksum should be valid (non-zero for this data)
+        assert!(checksum != 0);
+    }
+
+    #[test]
+    fn test_craft_icmp_echo_reply() {
+        let src_ip = Ipv4Addr::new(8, 8, 8, 8);
+        let dst_ip = Ipv4Addr::new(10, 0, 2, 15);
+        let identifier = 1234;
+        let gateway_mac = EthernetAddress([0x52, 0x54, 0x00, 0x00, 0x00, 0x01]);
+        let guest_mac = EthernetAddress([0x52, 0x54, 0x00, 0x00, 0x00, 0x02]);
+
+        // Simulate received ICMP echo reply from socket
+        // Type(0) Code(0) Checksum(xx) ID(1234) Seq(1) + payload
+        let icmp_data = vec![
+            0, 0, // Type = echo reply, Code = 0
+            0x00, 0x00, // Checksum (ignored for test)
+            0x04, 0xD2, // Identifier = 1234
+            0x00, 0x01, // Sequence = 1
+            b'p', b'i', b'n', b'g', // Payload
+        ];
+
+        let frame = craft_icmp_echo_reply(
+            src_ip,
+            dst_ip,
+            identifier,
+            &icmp_data,
+            gateway_mac,
+            guest_mac,
+        );
+
+        assert!(frame.is_some());
+        let frame = frame.unwrap();
+
+        // Verify ethernet header
+        let eth = EthernetFrame::new_checked(&frame).unwrap();
+        assert_eq!(eth.src_addr(), gateway_mac);
+        assert_eq!(eth.dst_addr(), guest_mac);
+        assert_eq!(eth.ethertype(), EthernetProtocol::Ipv4);
+
+        // Verify IP header
+        let ip = Ipv4Packet::new_checked(eth.payload()).unwrap();
+        assert_eq!(Ipv4Addr::from(ip.src_addr()), src_ip);
+        assert_eq!(Ipv4Addr::from(ip.dst_addr()), dst_ip);
+        assert_eq!(ip.next_header(), IpProtocol::Icmp);
+
+        // Verify ICMP header
+        let icmp = Icmpv4Packet::new_checked(ip.payload()).unwrap();
+        assert_eq!(icmp.msg_type(), Icmpv4Message::EchoReply);
+        assert_eq!(icmp.msg_code(), 0);
+
+        // Verify ICMP echo fields using smoltcp's API
+        assert_eq!(icmp.echo_ident(), identifier);
+        assert_eq!(icmp.echo_seq_no(), 1);
+        assert_eq!(icmp.data(), b"ping");
+    }
+
+    #[test]
+    fn test_craft_icmp_echo_reply_rejects_non_reply() {
+        let src_ip = Ipv4Addr::new(8, 8, 8, 8);
+        let dst_ip = Ipv4Addr::new(10, 0, 2, 15);
+        let gateway_mac = EthernetAddress([0x52, 0x54, 0x00, 0x00, 0x00, 0x01]);
+        let guest_mac = EthernetAddress([0x52, 0x54, 0x00, 0x00, 0x00, 0x02]);
+
+        // ICMP echo request (type 8) should be rejected
+        let icmp_data = vec![
+            8, 0, // Type = echo request (not reply)
+            0x00, 0x00, 0x04, 0xD2, 0x00, 0x01,
+        ];
+
+        let frame = craft_icmp_echo_reply(src_ip, dst_ip, 1234, &icmp_data, gateway_mac, guest_mac);
+        assert!(frame.is_none());
+    }
+
+    #[test]
+    fn test_craft_icmp_echo_reply_rejects_short_data() {
+        let src_ip = Ipv4Addr::new(8, 8, 8, 8);
+        let dst_ip = Ipv4Addr::new(10, 0, 2, 15);
+        let gateway_mac = EthernetAddress([0x52, 0x54, 0x00, 0x00, 0x00, 0x01]);
+        let guest_mac = EthernetAddress([0x52, 0x54, 0x00, 0x00, 0x00, 0x02]);
+
+        // Too short ICMP data (less than 8 bytes)
+        let icmp_data = vec![0, 0, 0, 0];
+
+        let frame = craft_icmp_echo_reply(src_ip, dst_ip, 1234, &icmp_data, gateway_mac, guest_mac);
+        assert!(frame.is_none());
     }
 }
