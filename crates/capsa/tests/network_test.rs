@@ -12,10 +12,32 @@
 //! NOTE: The vfkit backend doesn't support UserNat (VZFileHandleNetworkDeviceAttachment).
 
 use capsa::test_utils::test_vm;
+use capsa::{VmConsole, VmHandle};
 use capsa_core::{NetworkMode, NetworkPolicy, UserNatConfig};
 #[allow(unused_imports)] // Used only in native-vz cfg block
 use std::net::Ipv4Addr;
 use std::time::Duration;
+
+/// Helper to set up a VM with networking and wait for DHCP.
+///
+/// Returns the VM handle and console, ready for test commands.
+#[cfg(not(feature = "vfkit"))]
+async fn setup_vm_with_dhcp(network_mode: NetworkMode) -> (VmHandle, VmConsole) {
+    let vm = test_vm("default")
+        .network(network_mode)
+        .build()
+        .await
+        .expect("Failed to build VM");
+
+    let console = vm.console().await.expect("Failed to get console");
+
+    console
+        .wait_for_timeout("Network configured via DHCP", Duration::from_secs(30))
+        .await
+        .expect("VM did not configure network via DHCP");
+
+    (vm, console)
+}
 
 /// Tests that DHCP works with UserNat networking.
 ///
@@ -60,19 +82,8 @@ async fn test_usernat_dns_lookup() {
 
     #[cfg(not(feature = "vfkit"))]
     {
-        let vm = test_vm("default")
-            .network(NetworkMode::UserNat(UserNatConfig::default()))
-            .build()
-            .await
-            .expect("Failed to build VM");
-
-        let console = vm.console().await.expect("Failed to get console");
-
-        // Wait for boot and DHCP to complete
-        console
-            .wait_for_timeout("Network configured via DHCP", Duration::from_secs(30))
-            .await
-            .expect("VM did not configure network via DHCP");
+        let (vm, console) =
+            setup_vm_with_dhcp(NetworkMode::UserNat(UserNatConfig::default())).await;
 
         // Do a DNS lookup (uses UDP NAT)
         let output = console
@@ -103,22 +114,10 @@ async fn test_usernat_https_fetch() {
 
     #[cfg(not(feature = "vfkit"))]
     {
-        let vm = test_vm("default")
-            .network(NetworkMode::UserNat(UserNatConfig::default()))
-            .build()
-            .await
-            .expect("Failed to build VM");
-
-        let console = vm.console().await.expect("Failed to get console");
-
-        // Wait for boot and DHCP to complete
-        console
-            .wait_for_timeout("Network configured via DHCP", Duration::from_secs(30))
-            .await
-            .expect("VM did not configure network via DHCP");
+        let (vm, console) =
+            setup_vm_with_dhcp(NetworkMode::UserNat(UserNatConfig::default())).await;
 
         // Fetch HTTPS content (uses TCP NAT + TLS handshake)
-        // This tests that TLS handshake works through the NAT
         let output = console
             .exec(
                 "wget -T 15 -q https://example.com -O /dev/null && echo HTTPS_SUCCESS",
@@ -146,22 +145,10 @@ async fn test_usernat_http_fetch() {
 
     #[cfg(not(feature = "vfkit"))]
     {
-        let vm = test_vm("default")
-            .network(NetworkMode::UserNat(UserNatConfig::default()))
-            .build()
-            .await
-            .expect("Failed to build VM");
-
-        let console = vm.console().await.expect("Failed to get console");
-
-        // Wait for boot and DHCP to complete
-        console
-            .wait_for_timeout("Network configured via DHCP", Duration::from_secs(30))
-            .await
-            .expect("VM did not configure network via DHCP");
+        let (vm, console) =
+            setup_vm_with_dhcp(NetworkMode::UserNat(UserNatConfig::default())).await;
 
         // Fetch HTTP content (uses TCP NAT)
-        // Simple approach: download and verify success
         let output = console
             .exec(
                 "wget -T 10 -q http://example.com -O /dev/null && echo HTTP_SUCCESS",
