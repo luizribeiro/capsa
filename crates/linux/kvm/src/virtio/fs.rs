@@ -292,6 +292,22 @@ impl VirtioFs {
         }
     }
 
+    fn requires_write_access(opcode: FuseOpcode) -> bool {
+        matches!(
+            opcode,
+            FuseOpcode::Setattr
+                | FuseOpcode::Symlink
+                | FuseOpcode::Mknod
+                | FuseOpcode::Mkdir
+                | FuseOpcode::Unlink
+                | FuseOpcode::Rmdir
+                | FuseOpcode::Rename
+                | FuseOpcode::Link
+                | FuseOpcode::Write
+                | FuseOpcode::Create
+        )
+    }
+
     fn handle_fuse_request(&mut self, request: &[u8]) -> Vec<u8> {
         let header = match FuseInHeader::from_bytes(request) {
             Some(h) => h,
@@ -304,6 +320,10 @@ impl VirtioFs {
             Ok(op) => op,
             Err(_) => return error_response(header.unique, libc::ENOSYS),
         };
+
+        if self.read_only && Self::requires_write_access(opcode) {
+            return error_response(header.unique, libc::EROFS);
+        }
 
         match opcode {
             FuseOpcode::Init => self.handle_init(header.unique, body),
@@ -444,10 +464,6 @@ impl VirtioFs {
     }
 
     fn handle_setattr(&mut self, unique: u64, nodeid: u64, body: &[u8]) -> Vec<u8> {
-        if self.read_only {
-            return error_response(unique, libc::EROFS);
-        }
-
         let setattr = match FuseSetattrIn::from_bytes(body) {
             Some(s) => s,
             None => return error_response(unique, libc::EINVAL),
@@ -539,10 +555,6 @@ impl VirtioFs {
     }
 
     fn handle_symlink(&mut self, unique: u64, parent: u64, body: &[u8]) -> Vec<u8> {
-        if self.read_only {
-            return error_response(unique, libc::EROFS);
-        }
-
         let name = match extract_name(body) {
             Some(n) => n,
             None => return error_response(unique, libc::EINVAL),
@@ -592,10 +604,6 @@ impl VirtioFs {
     }
 
     fn handle_mkdir(&mut self, unique: u64, parent: u64, body: &[u8]) -> Vec<u8> {
-        if self.read_only {
-            return error_response(unique, libc::EROFS);
-        }
-
         let mkdir_in = match FuseMkdirIn::from_bytes(body) {
             Some(m) => m,
             None => return error_response(unique, libc::EINVAL),
@@ -644,10 +652,6 @@ impl VirtioFs {
     }
 
     fn handle_unlink(&mut self, unique: u64, parent: u64, body: &[u8]) -> Vec<u8> {
-        if self.read_only {
-            return error_response(unique, libc::EROFS);
-        }
-
         let name = match extract_name(body) {
             Some(n) => n,
             None => return error_response(unique, libc::EINVAL),
@@ -668,10 +672,6 @@ impl VirtioFs {
     }
 
     fn handle_rmdir(&mut self, unique: u64, parent: u64, body: &[u8]) -> Vec<u8> {
-        if self.read_only {
-            return error_response(unique, libc::EROFS);
-        }
-
         let name = match extract_name(body) {
             Some(n) => n,
             None => return error_response(unique, libc::EINVAL),
@@ -692,10 +692,6 @@ impl VirtioFs {
     }
 
     fn handle_rename(&mut self, unique: u64, parent: u64, body: &[u8]) -> Vec<u8> {
-        if self.read_only {
-            return error_response(unique, libc::EROFS);
-        }
-
         let rename_in = match FuseRenameIn::from_bytes(body) {
             Some(r) => r,
             None => return error_response(unique, libc::EINVAL),
@@ -736,10 +732,6 @@ impl VirtioFs {
     }
 
     fn handle_link(&mut self, unique: u64, parent: u64, body: &[u8]) -> Vec<u8> {
-        if self.read_only {
-            return error_response(unique, libc::EROFS);
-        }
-
         let link_in = match FuseLinkIn::from_bytes(body) {
             Some(l) => l,
             None => return error_response(unique, libc::EINVAL),
@@ -833,10 +825,6 @@ impl VirtioFs {
     }
 
     fn handle_write(&mut self, unique: u64, body: &[u8]) -> Vec<u8> {
-        if self.read_only {
-            return error_response(unique, libc::EROFS);
-        }
-
         let write_in = match FuseWriteIn::from_bytes(body) {
             Some(w) => w,
             None => return error_response(unique, libc::EINVAL),
@@ -1009,10 +997,6 @@ impl VirtioFs {
     }
 
     fn handle_create(&mut self, unique: u64, parent: u64, body: &[u8]) -> Vec<u8> {
-        if self.read_only {
-            return error_response(unique, libc::EROFS);
-        }
-
         let create_in = match FuseCreateIn::from_bytes(body) {
             Some(c) => c,
             None => return error_response(unique, libc::EINVAL),
@@ -1789,11 +1773,21 @@ mod tests {
     }
 
     fn parse_fuse_out_header(response: &[u8]) -> (u32, i32, u64) {
-        // len, error, unique
         let len = u32::from_le_bytes(response[0..4].try_into().unwrap());
         let error = i32::from_le_bytes(response[4..8].try_into().unwrap());
         let unique = u64::from_le_bytes(response[8..16].try_into().unwrap());
         (len, error, unique)
+    }
+
+    fn build_fuse_request(opcode: FuseOpcode, unique: u64, nodeid: u64, body: &[u8]) -> Vec<u8> {
+        let total_len = (FUSE_IN_HEADER_SIZE + body.len()) as u32;
+        let mut request = vec![0u8; FUSE_IN_HEADER_SIZE];
+        request[0..4].copy_from_slice(&total_len.to_le_bytes());
+        request[4..8].copy_from_slice(&(opcode as u32).to_le_bytes());
+        request[8..16].copy_from_slice(&unique.to_le_bytes());
+        request[16..24].copy_from_slice(&nodeid.to_le_bytes());
+        request.extend_from_slice(body);
+        request
     }
 
     #[test]
@@ -1897,11 +1891,11 @@ mod tests {
     fn read_only_blocks_mkdir() {
         let (mut device, _tmp) = create_read_only_device("test");
 
-        // Try to create directory
         let mut body = vec![0u8; 8]; // FuseMkdirIn
         body.extend_from_slice(b"newdir\0");
+        let request = build_fuse_request(FuseOpcode::Mkdir, 42, 1, &body);
 
-        let response = device.handle_mkdir(42, 1, &body);
+        let response = device.handle_fuse_request(&request);
 
         let (_, error, _) = parse_fuse_out_header(&response);
         assert_eq!(error, -libc::EROFS, "mkdir should fail on read-only share");
@@ -1911,10 +1905,10 @@ mod tests {
     fn read_only_blocks_unlink() {
         let (mut device, tmp) = create_read_only_device("test");
 
-        // Create a file first
         std::fs::write(tmp.path().join("file.txt"), "content").unwrap();
 
-        let response = device.handle_unlink(42, 1, b"file.txt\0");
+        let request = build_fuse_request(FuseOpcode::Unlink, 42, 1, b"file.txt\0");
+        let response = device.handle_fuse_request(&request);
 
         let (_, error, _) = parse_fuse_out_header(&response);
         assert_eq!(error, -libc::EROFS, "unlink should fail on read-only share");
@@ -1924,10 +1918,10 @@ mod tests {
     fn read_only_blocks_rmdir() {
         let (mut device, tmp) = create_read_only_device("test");
 
-        // Create a directory first
         std::fs::create_dir(tmp.path().join("subdir")).unwrap();
 
-        let response = device.handle_rmdir(42, 1, b"subdir\0");
+        let request = build_fuse_request(FuseOpcode::Rmdir, 42, 1, b"subdir\0");
+        let response = device.handle_fuse_request(&request);
 
         let (_, error, _) = parse_fuse_out_header(&response);
         assert_eq!(error, -libc::EROFS, "rmdir should fail on read-only share");
@@ -1938,7 +1932,8 @@ mod tests {
         let (mut device, _tmp) = create_read_only_device("test");
 
         let body = b"linkname\0target\0";
-        let response = device.handle_symlink(42, 1, body);
+        let request = build_fuse_request(FuseOpcode::Symlink, 42, 1, body);
+        let response = device.handle_fuse_request(&request);
 
         let (_, error, _) = parse_fuse_out_header(&response);
         assert_eq!(
@@ -1954,12 +1949,12 @@ mod tests {
 
         std::fs::write(tmp.path().join("old.txt"), "content").unwrap();
 
-        // Build rename request: FuseRenameIn (newdir=1) + old_name + new_name
         let mut body = vec![0u8; 8];
-        body[0..8].copy_from_slice(&1u64.to_le_bytes()); // newdir
+        body[0..8].copy_from_slice(&1u64.to_le_bytes());
         body.extend_from_slice(b"old.txt\0new.txt\0");
+        let request = build_fuse_request(FuseOpcode::Rename, 42, 1, &body);
 
-        let response = device.handle_rename(42, 1, &body);
+        let response = device.handle_fuse_request(&request);
 
         let (_, error, _) = parse_fuse_out_header(&response);
         assert_eq!(error, -libc::EROFS, "rename should fail on read-only share");
@@ -1971,19 +1966,17 @@ mod tests {
 
         std::fs::write(tmp.path().join("file.txt"), "content").unwrap();
 
-        // Lookup the file to get its inode
         let lookup_response = device.handle_lookup(1, 1, b"file.txt\0");
         let (_, lookup_error, _) = parse_fuse_out_header(&lookup_response);
         assert_eq!(lookup_error, 0, "Lookup should succeed");
 
-        // Extract nodeid from entry response
         let nodeid = u64::from_le_bytes(lookup_response[16..24].try_into().unwrap());
 
-        // Build setattr request with FATTR_SIZE set
         let mut body = vec![0u8; 88]; // FuseSetattrIn size
-        body[0..4].copy_from_slice(&FATTR_SIZE.to_le_bytes()); // valid flags
+        body[0..4].copy_from_slice(&FATTR_SIZE.to_le_bytes());
+        let request = build_fuse_request(FuseOpcode::Setattr, 42, nodeid, &body);
 
-        let response = device.handle_setattr(42, nodeid, &body);
+        let response = device.handle_fuse_request(&request);
 
         let (_, error, _) = parse_fuse_out_header(&response);
         assert_eq!(
