@@ -257,9 +257,9 @@ impl NetworkPolicy {
 #[serde(rename_all = "lowercase")]
 pub enum NetworkMode {
     /// No network access.
+    #[default]
     None,
     /// Platform-native NAT networking (macOS VZ built-in).
-    #[default]
     Nat,
     /// Userspace NAT via capsa-net (cross-platform, supports filtering).
     #[serde(rename = "user_nat")]
@@ -413,8 +413,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_is_nat() {
-        assert_eq!(NetworkMode::default(), NetworkMode::Nat);
+    fn default_is_none() {
+        assert_eq!(NetworkMode::default(), NetworkMode::None);
     }
 
     #[test]

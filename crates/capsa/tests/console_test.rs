@@ -8,14 +8,10 @@ use std::time::Duration;
 
 #[apple_main::harness_test]
 async fn test_console_echo() {
-    let mut builder = test_vm("default");
-
-    #[cfg(feature = "linux-kvm")]
-    {
-        builder = builder.no_network();
-    }
-
-    let vm = builder.build().await.expect("Failed to build VM");
+    let vm = test_vm("default")
+        .build()
+        .await
+        .expect("Failed to build VM");
     let console = vm.console().await.expect("Failed to get console");
 
     console
@@ -42,14 +38,10 @@ async fn test_console_echo() {
 
 #[apple_main::harness_test]
 async fn test_console_ctrl_c() {
-    let mut builder = test_vm("default");
-
-    #[cfg(feature = "linux-kvm")]
-    {
-        builder = builder.no_network();
-    }
-
-    let vm = builder.build().await.expect("Failed to build VM");
+    let vm = test_vm("default")
+        .build()
+        .await
+        .expect("Failed to build VM");
     let console = vm.console().await.expect("Failed to get console");
 
     console

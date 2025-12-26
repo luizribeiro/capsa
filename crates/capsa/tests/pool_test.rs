@@ -13,7 +13,6 @@ use std::time::Duration;
 #[apple_main::harness_test]
 async fn test_pool_creation() {
     let pool = test_pool("default")
-        .no_network()
         .build(2)
         .await
         .expect("Failed to create pool");
@@ -24,7 +23,6 @@ async fn test_pool_creation() {
 #[apple_main::harness_test]
 async fn test_pool_reserve_decreases_available_count() {
     let pool = test_pool("default")
-        .no_network()
         .build(2)
         .await
         .expect("Failed to create pool");
@@ -44,7 +42,6 @@ async fn test_pool_reserve_decreases_available_count() {
 #[apple_main::harness_test]
 async fn test_pool_try_reserve_fails_when_empty() {
     let pool = test_pool("default")
-        .no_network()
         .build(1)
         .await
         .expect("Failed to create pool");
@@ -59,7 +56,6 @@ async fn test_pool_try_reserve_fails_when_empty() {
 #[apple_main::harness_test]
 async fn test_pooled_vm_console_works() {
     let pool = test_pool("default")
-        .no_network()
         .build(1)
         .await
         .expect("Failed to create pool");
@@ -77,7 +73,6 @@ async fn test_pooled_vm_console_works() {
 async fn test_pool_vm_respawns_after_release() {
     let pool = Arc::new(
         test_pool("default")
-            .no_network()
             .build(1)
             .await
             .expect("Failed to create pool"),
@@ -121,7 +116,6 @@ async fn test_pool_vm_respawns_after_release() {
 async fn test_pool_reserve_waits_for_available_vm() {
     let pool = Arc::new(
         test_pool("default")
-            .no_network()
             .build(1)
             .await
             .expect("Failed to create pool"),
@@ -150,7 +144,6 @@ async fn test_pool_reserve_waits_for_available_vm() {
 async fn test_pool_concurrent_reservations() {
     let pool = Arc::new(
         test_pool("default")
-            .no_network()
             .build(3)
             .await
             .expect("Failed to create pool"),
@@ -178,7 +171,6 @@ async fn test_pool_concurrent_reservations() {
 async fn test_try_reserve_returns_shutdown_error() {
     let pool = Arc::new(
         test_pool("default")
-            .no_network()
             .build(1)
             .await
             .expect("Failed to create pool"),

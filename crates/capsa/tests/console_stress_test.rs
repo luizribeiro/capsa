@@ -28,7 +28,6 @@ async fn test_kvm_no_character_duplication() {
     #[cfg(feature = "linux-kvm")]
     {
         let vm = test_vm("default")
-            .no_network()
             .build()
             .await
             .expect("Failed to build VM");
@@ -73,7 +72,6 @@ async fn test_kvm_fork_exec_works() {
     #[cfg(feature = "linux-kvm")]
     {
         let vm = test_vm("default")
-            .no_network()
             .build()
             .await
             .expect("Failed to build VM");
@@ -109,14 +107,10 @@ async fn test_kvm_fork_exec_works() {
 /// Simple test to verify exec works.
 #[apple_main::harness_test]
 async fn test_exec_10_commands() {
-    let mut builder = test_vm("default");
-
-    #[cfg(feature = "linux-kvm")]
-    {
-        builder = builder.no_network();
-    }
-
-    let vm = builder.build().await.expect("Failed to build VM");
+    let vm = test_vm("default")
+        .build()
+        .await
+        .expect("Failed to build VM");
     let console = vm.console().await.expect("Failed to get console");
 
     console
@@ -156,14 +150,10 @@ async fn test_exec_10_commands() {
 /// Executes 30 commands in rapid sequence - aggressive stress test.
 #[apple_main::harness_test]
 async fn test_exec_30_commands() {
-    let mut builder = test_vm("default");
-
-    #[cfg(feature = "linux-kvm")]
-    {
-        builder = builder.no_network();
-    }
-
-    let vm = builder.build().await.expect("Failed to build VM");
+    let vm = test_vm("default")
+        .build()
+        .await
+        .expect("Failed to build VM");
     let console = vm.console().await.expect("Failed to get console");
 
     console
@@ -187,14 +177,10 @@ async fn test_exec_30_commands() {
 /// Tests commands with variable output lengths.
 #[apple_main::harness_test]
 async fn test_exec_variable_output() {
-    let mut builder = test_vm("default");
-
-    #[cfg(feature = "linux-kvm")]
-    {
-        builder = builder.no_network();
-    }
-
-    let vm = builder.build().await.expect("Failed to build VM");
+    let vm = test_vm("default")
+        .build()
+        .await
+        .expect("Failed to build VM");
     let console = vm.console().await.expect("Failed to get console");
 
     console
@@ -246,7 +232,6 @@ async fn test_exec_pipe_diagnostic() {
     eprintln!("Running on macOS backend");
 
     let vm = test_vm("default")
-        .no_network()
         .build()
         .await
         .expect("Failed to build VM");
@@ -313,14 +298,10 @@ async fn test_exec_pipe_diagnostic() {
 /// Tests mixed execution times.
 #[apple_main::harness_test]
 async fn test_exec_mixed_times() {
-    let mut builder = test_vm("default");
-
-    #[cfg(feature = "linux-kvm")]
-    {
-        builder = builder.no_network();
-    }
-
-    let vm = builder.build().await.expect("Failed to build VM");
+    let vm = test_vm("default")
+        .build()
+        .await
+        .expect("Failed to build VM");
     let console = vm.console().await.expect("Failed to get console");
 
     console
