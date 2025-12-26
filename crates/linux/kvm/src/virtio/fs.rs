@@ -1500,4 +1500,271 @@ mod tests {
         write_u32(&mut device, VIRTIO_MMIO_INTERRUPT_ACK, VIRTIO_INT_USED_RING);
         assert_eq!(read_u32(&device, VIRTIO_MMIO_INTERRUPT_STATUS), 0);
     }
+
+    // Descriptor flag constants
+    const VIRTQ_DESC_F_NEXT: u16 = 1;
+    const VIRTQ_DESC_F_WRITE: u16 = 2;
+
+    fn create_test_memory() -> Arc<GuestMemoryMmap> {
+        use vm_memory::{GuestMemoryMmap, GuestRegionMmap};
+
+        let region = GuestRegionMmap::new(
+            vm_memory::MmapRegion::new(0x10000).unwrap(),
+            GuestAddress(0),
+        )
+        .unwrap();
+        Arc::new(GuestMemoryMmap::from_regions(vec![region]).unwrap())
+    }
+
+    fn write_descriptor(
+        memory: &GuestMemoryMmap,
+        desc_table: u64,
+        idx: u16,
+        addr: u64,
+        len: u32,
+        flags: u16,
+        next: u16,
+    ) {
+        let desc_addr = desc_table + (idx as u64 * 16);
+        memory.write_obj(addr, GuestAddress(desc_addr)).unwrap();
+        memory.write_obj(len, GuestAddress(desc_addr + 8)).unwrap();
+        memory
+            .write_obj(flags, GuestAddress(desc_addr + 12))
+            .unwrap();
+        memory
+            .write_obj(next, GuestAddress(desc_addr + 14))
+            .unwrap();
+    }
+
+    #[test]
+    fn read_single_descriptor_chain() {
+        let memory = create_test_memory();
+        let desc_table = 0x1000u64;
+        let data_addr = 0x2000u64;
+
+        // Write test data
+        let test_data = b"Hello, virtio!";
+        memory
+            .write_slice(test_data, GuestAddress(data_addr))
+            .unwrap();
+
+        // Set up single descriptor (readable, no next)
+        write_descriptor(
+            &memory,
+            desc_table,
+            0,
+            data_addr,
+            test_data.len() as u32,
+            0,
+            0,
+        );
+
+        // Read the chain
+        let result = VirtioFs::read_descriptor_chain(&memory, desc_table, 256, 0);
+        assert_eq!(result, test_data);
+    }
+
+    #[test]
+    fn read_chained_descriptors() {
+        let memory = create_test_memory();
+        let desc_table = 0x1000u64;
+        let data1_addr = 0x2000u64;
+        let data2_addr = 0x3000u64;
+
+        // Write test data in two buffers
+        let data1 = b"First ";
+        let data2 = b"Second";
+        memory.write_slice(data1, GuestAddress(data1_addr)).unwrap();
+        memory.write_slice(data2, GuestAddress(data2_addr)).unwrap();
+
+        // Set up chained descriptors
+        write_descriptor(
+            &memory,
+            desc_table,
+            0,
+            data1_addr,
+            data1.len() as u32,
+            VIRTQ_DESC_F_NEXT,
+            1,
+        );
+        write_descriptor(&memory, desc_table, 1, data2_addr, data2.len() as u32, 0, 0);
+
+        // Read the chain
+        let result = VirtioFs::read_descriptor_chain(&memory, desc_table, 256, 0);
+        assert_eq!(result, b"First Second");
+    }
+
+    #[test]
+    fn read_skips_write_only_descriptors() {
+        let memory = create_test_memory();
+        let desc_table = 0x1000u64;
+        let read_addr = 0x2000u64;
+        let write_addr = 0x3000u64;
+
+        // Write test data
+        let read_data = b"Readable";
+        let write_data = b"Writable";
+        memory
+            .write_slice(read_data, GuestAddress(read_addr))
+            .unwrap();
+        memory
+            .write_slice(write_data, GuestAddress(write_addr))
+            .unwrap();
+
+        // Set up chain: readable -> writable (should be skipped)
+        write_descriptor(
+            &memory,
+            desc_table,
+            0,
+            read_addr,
+            read_data.len() as u32,
+            VIRTQ_DESC_F_NEXT,
+            1,
+        );
+        write_descriptor(
+            &memory,
+            desc_table,
+            1,
+            write_addr,
+            write_data.len() as u32,
+            VIRTQ_DESC_F_WRITE,
+            0,
+        );
+
+        // Read should only get readable data
+        let result = VirtioFs::read_descriptor_chain(&memory, desc_table, 256, 0);
+        assert_eq!(result, b"Readable");
+    }
+
+    #[test]
+    fn write_to_descriptor_chain() {
+        let memory = create_test_memory();
+        let desc_table = 0x1000u64;
+        let write_addr = 0x2000u64;
+
+        // Set up writable descriptor
+        write_descriptor(
+            &memory,
+            desc_table,
+            0,
+            write_addr,
+            100,
+            VIRTQ_DESC_F_WRITE,
+            0,
+        );
+
+        // Write response
+        let response = b"Response data";
+        VirtioFs::write_response_to_chain(&memory, desc_table, 256, 0, response);
+
+        // Verify data was written
+        let mut buf = vec![0u8; response.len()];
+        memory
+            .read_slice(&mut buf, GuestAddress(write_addr))
+            .unwrap();
+        assert_eq!(buf, response);
+    }
+
+    #[test]
+    fn write_skips_read_only_descriptors() {
+        let memory = create_test_memory();
+        let desc_table = 0x1000u64;
+        let read_addr = 0x2000u64;
+        let write_addr = 0x3000u64;
+
+        // Clear memory
+        memory
+            .write_slice(&[0u8; 20], GuestAddress(read_addr))
+            .unwrap();
+        memory
+            .write_slice(&[0u8; 20], GuestAddress(write_addr))
+            .unwrap();
+
+        // Set up chain: readable (skip) -> writable (use)
+        write_descriptor(&memory, desc_table, 0, read_addr, 10, VIRTQ_DESC_F_NEXT, 1);
+        write_descriptor(
+            &memory,
+            desc_table,
+            1,
+            write_addr,
+            10,
+            VIRTQ_DESC_F_WRITE,
+            0,
+        );
+
+        // Write response
+        let response = b"Data";
+        VirtioFs::write_response_to_chain(&memory, desc_table, 256, 0, response);
+
+        // Verify read-only buffer is unchanged (zeros)
+        let mut read_buf = vec![0u8; 10];
+        memory
+            .read_slice(&mut read_buf, GuestAddress(read_addr))
+            .unwrap();
+        assert_eq!(read_buf, vec![0u8; 10]);
+
+        // Verify write buffer has data
+        let mut write_buf = vec![0u8; response.len()];
+        memory
+            .read_slice(&mut write_buf, GuestAddress(write_addr))
+            .unwrap();
+        assert_eq!(write_buf, response);
+    }
+
+    #[test]
+    fn write_spans_multiple_descriptors() {
+        let memory = create_test_memory();
+        let desc_table = 0x1000u64;
+        let buf1_addr = 0x2000u64;
+        let buf2_addr = 0x3000u64;
+
+        // Set up chained writable descriptors (small buffers)
+        write_descriptor(
+            &memory,
+            desc_table,
+            0,
+            buf1_addr,
+            4,
+            VIRTQ_DESC_F_WRITE | VIRTQ_DESC_F_NEXT,
+            1,
+        );
+        write_descriptor(&memory, desc_table, 1, buf2_addr, 4, VIRTQ_DESC_F_WRITE, 0);
+
+        // Write more than first buffer
+        let response = b"ABCDEFGH";
+        VirtioFs::write_response_to_chain(&memory, desc_table, 256, 0, response);
+
+        // Verify split across buffers
+        let mut buf1 = [0u8; 4];
+        let mut buf2 = [0u8; 4];
+        memory
+            .read_slice(&mut buf1, GuestAddress(buf1_addr))
+            .unwrap();
+        memory
+            .read_slice(&mut buf2, GuestAddress(buf2_addr))
+            .unwrap();
+        assert_eq!(&buf1, b"ABCD");
+        assert_eq!(&buf2, b"EFGH");
+    }
+
+    #[test]
+    fn descriptor_length_capped() {
+        let memory = create_test_memory();
+        let desc_table = 0x1000u64;
+        let data_addr = 0x2000u64;
+
+        // Write some test data
+        let test_data = b"Short data";
+        memory
+            .write_slice(test_data, GuestAddress(data_addr))
+            .unwrap();
+
+        // Descriptor claims huge length (should be capped)
+        write_descriptor(&memory, desc_table, 0, data_addr, u32::MAX, 0, 0);
+
+        // This should not panic or read excessive memory
+        let result = VirtioFs::read_descriptor_chain(&memory, desc_table, 256, 0);
+        // Result length should be capped to MAX_DESCRIPTOR_LEN
+        assert!(result.len() <= MAX_DESCRIPTOR_LEN as usize);
+    }
 }
