@@ -1,10 +1,13 @@
 use crate::device::SmoltcpDevice;
 use crate::dhcp::DhcpServer;
+use crate::dns_cache::DnsCache;
 use crate::error::NetError;
 use crate::frame_io::FrameIO;
 use crate::nat::{FrameReceiver, NatTable, craft_tcp_rst, frame_channel};
 use crate::policy::{PacketProtocol, PolicyChecker, PolicyResult};
 use crate::port_forward::PortForwarder;
+
+use std::sync::{Arc, RwLock};
 
 use smoltcp::iface::{Config, Interface, SocketHandle, SocketSet};
 use smoltcp::socket::udp::{self, PacketBuffer, PacketMetadata};
@@ -173,11 +176,12 @@ impl<F: FrameIO> UserNatStack<F> {
             ))
         };
 
-        // Create policy checker if policy is configured
+        // Create DNS cache and policy checker if policy is configured
+        let dns_cache = Arc::new(RwLock::new(DnsCache::new()));
         let policy_checker = config
             .policy
             .as_ref()
-            .map(|p| PolicyChecker::new(p.default_action, &p.rules));
+            .map(|p| PolicyChecker::new(p.default_action, &p.rules, dns_cache.clone()));
 
         Self {
             device,

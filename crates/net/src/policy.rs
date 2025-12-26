@@ -3,10 +3,12 @@
 //! This module provides packet matching against NetworkPolicy rules,
 //! allowing traffic to be allowed, denied, or logged.
 
+use crate::dns_cache::DnsCache;
 use smoltcp::wire::{
     EthernetFrame, EthernetProtocol, IpProtocol, Ipv4Packet, TcpPacket, UdpPacket,
 };
 use std::net::Ipv4Addr;
+use std::sync::{Arc, RwLock};
 
 /// Extracted packet information for policy matching.
 #[derive(Debug, Clone)]
@@ -38,6 +40,7 @@ pub enum PolicyResult {
 pub struct PolicyChecker {
     default_action: PolicyResult,
     rules: Vec<CompiledRule>,
+    dns_cache: Arc<RwLock<DnsCache>>,
 }
 
 struct CompiledRule {
@@ -52,27 +55,49 @@ enum CompiledMatcher {
     Port(u16),
     PortRange { start: u16, end: u16 },
     Protocol(PacketProtocol),
+    Domain(capsa_core::DomainPattern),
     All(Vec<CompiledMatcher>),
 }
 
 impl PolicyChecker {
     /// Create a policy checker from the given configuration.
-    pub fn new(default_action: capsa_core::PolicyAction, rules: &[capsa_core::PolicyRule]) -> Self {
+    pub fn new(
+        default_action: capsa_core::PolicyAction,
+        rules: &[capsa_core::PolicyRule],
+        dns_cache: Arc<RwLock<DnsCache>>,
+    ) -> Self {
         let default_action = convert_action(default_action);
         let rules = rules.iter().map(compile_rule).collect();
 
         Self {
             default_action,
             rules,
+            dns_cache,
         }
     }
 
     /// Check a packet against the policy.
-    /// Returns the action to take.
+    ///
+    /// Rules are evaluated in order. Log actions are non-terminal: they log
+    /// and continue to the next rule. Allow and Deny are terminal.
     pub fn check(&self, info: &PacketInfo) -> PolicyResult {
+        let cache = self.dns_cache.read().unwrap();
         for rule in &self.rules {
-            if rule.matcher.matches(info) {
-                return rule.action;
+            if rule.matcher.matches(info, &cache) {
+                match rule.action {
+                    PolicyResult::Log => {
+                        tracing::info!(
+                            "Policy log: {:?} {} -> {}:{}",
+                            info.protocol,
+                            info.src_ip,
+                            info.dst_ip,
+                            info.dst_port.unwrap_or(0)
+                        );
+                        // Log is non-terminal, continue to next rule
+                        continue;
+                    }
+                    action => return action,
+                }
             }
         }
         self.default_action
@@ -164,11 +189,7 @@ fn compile_matcher(matcher: &capsa_core::RuleMatcher) -> CompiledMatcher {
             };
             CompiledMatcher::Protocol(proto)
         }
-        capsa_core::RuleMatcher::Domain(_domain) => {
-            // Domain matching requires DNS interception - not yet implemented
-            // For now, treat as "never matches"
-            CompiledMatcher::All(vec![])
-        }
+        capsa_core::RuleMatcher::Domain(pattern) => CompiledMatcher::Domain(pattern.clone()),
         capsa_core::RuleMatcher::All(matchers) => {
             CompiledMatcher::All(matchers.iter().map(compile_matcher).collect())
         }
@@ -176,7 +197,7 @@ fn compile_matcher(matcher: &capsa_core::RuleMatcher) -> CompiledMatcher {
 }
 
 impl CompiledMatcher {
-    fn matches(&self, info: &PacketInfo) -> bool {
+    fn matches(&self, info: &PacketInfo, dns_cache: &DnsCache) -> bool {
         match self {
             CompiledMatcher::Any => true,
             CompiledMatcher::Ip(ip) => info.dst_ip == *ip,
@@ -189,7 +210,15 @@ impl CompiledMatcher {
                 info.dst_port.is_some_and(|p| p >= *start && p <= *end)
             }
             CompiledMatcher::Protocol(proto) => info.protocol == *proto,
-            CompiledMatcher::All(matchers) => matchers.iter().all(|m| m.matches(info)),
+            CompiledMatcher::Domain(pattern) => {
+                // Look up the domain for this IP in the cache
+                if let Some(domain) = dns_cache.lookup(info.dst_ip) {
+                    pattern.matches(domain)
+                } else {
+                    false // Unknown IP = no domain match
+                }
+            }
+            CompiledMatcher::All(matchers) => matchers.iter().all(|m| m.matches(info, dns_cache)),
         }
     }
 }
@@ -198,6 +227,11 @@ impl CompiledMatcher {
 mod tests {
     use super::*;
     use capsa_core::{NetworkPolicy, PolicyAction, RuleMatcher};
+    use std::time::Duration;
+
+    fn make_dns_cache() -> Arc<RwLock<DnsCache>> {
+        Arc::new(RwLock::new(DnsCache::new()))
+    }
 
     fn make_packet_info(dst_ip: Ipv4Addr, dst_port: u16, proto: PacketProtocol) -> PacketInfo {
         PacketInfo {
@@ -212,7 +246,7 @@ mod tests {
     #[test]
     fn allow_all_policy() {
         let policy = NetworkPolicy::allow_all();
-        let checker = PolicyChecker::new(policy.default_action, &policy.rules);
+        let checker = PolicyChecker::new(policy.default_action, &policy.rules, make_dns_cache());
 
         let info = make_packet_info(Ipv4Addr::new(8, 8, 8, 8), 53, PacketProtocol::Udp);
         assert_eq!(checker.check(&info), PolicyResult::Allow);
@@ -221,7 +255,7 @@ mod tests {
     #[test]
     fn deny_all_policy() {
         let policy = NetworkPolicy::deny_all();
-        let checker = PolicyChecker::new(policy.default_action, &policy.rules);
+        let checker = PolicyChecker::new(policy.default_action, &policy.rules, make_dns_cache());
 
         let info = make_packet_info(Ipv4Addr::new(8, 8, 8, 8), 53, PacketProtocol::Udp);
         assert_eq!(checker.check(&info), PolicyResult::Deny);
@@ -230,7 +264,7 @@ mod tests {
     #[test]
     fn deny_all_allow_port() {
         let policy = NetworkPolicy::deny_all().allow_port(443);
-        let checker = PolicyChecker::new(policy.default_action, &policy.rules);
+        let checker = PolicyChecker::new(policy.default_action, &policy.rules, make_dns_cache());
 
         // HTTPS allowed
         let info = make_packet_info(Ipv4Addr::new(1, 2, 3, 4), 443, PacketProtocol::Tcp);
@@ -244,7 +278,7 @@ mod tests {
     #[test]
     fn deny_all_allow_ip() {
         let policy = NetworkPolicy::deny_all().allow_ip(Ipv4Addr::new(8, 8, 8, 8));
-        let checker = PolicyChecker::new(policy.default_action, &policy.rules);
+        let checker = PolicyChecker::new(policy.default_action, &policy.rules, make_dns_cache());
 
         // Allowed IP
         let info = make_packet_info(Ipv4Addr::new(8, 8, 8, 8), 53, PacketProtocol::Udp);
@@ -264,7 +298,7 @@ mod tests {
                 prefix: 8,
             },
         );
-        let checker = PolicyChecker::new(policy.default_action, &policy.rules);
+        let checker = PolicyChecker::new(policy.default_action, &policy.rules, make_dns_cache());
 
         // In range
         let info = make_packet_info(Ipv4Addr::new(10, 1, 2, 3), 80, PacketProtocol::Tcp);
@@ -279,7 +313,7 @@ mod tests {
     fn composite_matcher() {
         // Allow DNS (port 53 + UDP)
         let policy = NetworkPolicy::deny_all().allow_dns();
-        let checker = PolicyChecker::new(policy.default_action, &policy.rules);
+        let checker = PolicyChecker::new(policy.default_action, &policy.rules, make_dns_cache());
 
         // UDP DNS allowed
         let info = make_packet_info(Ipv4Addr::new(8, 8, 8, 8), 53, PacketProtocol::Udp);
@@ -288,5 +322,80 @@ mod tests {
         // TCP to port 53 denied (not UDP)
         let info = make_packet_info(Ipv4Addr::new(8, 8, 8, 8), 53, PacketProtocol::Tcp);
         assert_eq!(checker.check(&info), PolicyResult::Deny);
+    }
+
+    #[test]
+    fn domain_matcher_with_cache() {
+        let cache = make_dns_cache();
+        let ip = Ipv4Addr::new(93, 184, 216, 34);
+        cache
+            .write()
+            .unwrap()
+            .insert(ip, "example.com".to_string(), Duration::from_secs(300));
+
+        let policy = NetworkPolicy::deny_all().allow_domain("example.com");
+        let checker = PolicyChecker::new(policy.default_action, &policy.rules, cache);
+
+        let info = make_packet_info(ip, 443, PacketProtocol::Tcp);
+        assert_eq!(checker.check(&info), PolicyResult::Allow);
+    }
+
+    #[test]
+    fn domain_matcher_unknown_ip_denies() {
+        let cache = make_dns_cache();
+        // Cache is empty
+
+        let policy = NetworkPolicy::deny_all().allow_domain("example.com");
+        let checker = PolicyChecker::new(policy.default_action, &policy.rules, cache);
+
+        let info = make_packet_info(Ipv4Addr::new(1, 2, 3, 4), 443, PacketProtocol::Tcp);
+        assert_eq!(checker.check(&info), PolicyResult::Deny);
+    }
+
+    #[test]
+    fn domain_matcher_wildcard() {
+        let cache = make_dns_cache();
+        let ip = Ipv4Addr::new(140, 82, 121, 4);
+        cache
+            .write()
+            .unwrap()
+            .insert(ip, "api.github.com".to_string(), Duration::from_secs(300));
+
+        let policy = NetworkPolicy::deny_all().allow_domain("*.github.com");
+        let checker = PolicyChecker::new(policy.default_action, &policy.rules, cache);
+
+        let info = make_packet_info(ip, 443, PacketProtocol::Tcp);
+        assert_eq!(checker.check(&info), PolicyResult::Allow);
+    }
+
+    #[test]
+    fn log_action_continues_evaluation() {
+        let cache = make_dns_cache();
+
+        // Log all, then allow port 443
+        let policy = NetworkPolicy::deny_all()
+            .rule(PolicyAction::Log, RuleMatcher::Any)
+            .allow_port(443);
+        let checker = PolicyChecker::new(policy.default_action, &policy.rules, cache);
+
+        // Should log (non-terminal), then match port 443 and allow
+        let info = make_packet_info(Ipv4Addr::new(1, 2, 3, 4), 443, PacketProtocol::Tcp);
+        assert_eq!(checker.check(&info), PolicyResult::Allow);
+
+        // Should log (non-terminal), no other match, fall through to deny
+        let info = make_packet_info(Ipv4Addr::new(1, 2, 3, 4), 80, PacketProtocol::Tcp);
+        assert_eq!(checker.check(&info), PolicyResult::Deny);
+    }
+
+    #[test]
+    fn empty_all_matches_everything() {
+        let cache = make_dns_cache();
+
+        let policy = NetworkPolicy::deny_all().rule(PolicyAction::Allow, RuleMatcher::All(vec![]));
+        let checker = PolicyChecker::new(policy.default_action, &policy.rules, cache);
+
+        // Empty All([]) = vacuous truth = matches everything
+        let info = make_packet_info(Ipv4Addr::new(1, 2, 3, 4), 80, PacketProtocol::Tcp);
+        assert_eq!(checker.check(&info), PolicyResult::Allow);
     }
 }
