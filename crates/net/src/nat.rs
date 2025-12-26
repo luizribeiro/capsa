@@ -332,11 +332,12 @@ impl NatTable {
                                 let data = &buf[..n];
                                 let mut offset = 0;
                                 let mut send_failed = false;
+                                // Load sequence once, track locally for efficiency
+                                let mut our_seq = our_seq_for_task.load(Ordering::Relaxed);
 
                                 while offset < data.len() {
                                     let end = (offset + TCP_MSS).min(data.len());
                                     let segment = &data[offset..end];
-                                    let our_seq = our_seq_for_task.load(Ordering::Relaxed);
 
                                     match craft_tcp_data(
                                         remote_addr,
@@ -352,8 +353,8 @@ impl NatTable {
                                                 send_failed = true;
                                                 break;
                                             }
-                                            our_seq_for_task
-                                                .fetch_add(segment.len() as u32, Ordering::Relaxed);
+                                            our_seq = our_seq.wrapping_add(segment.len() as u32);
+                                            our_seq_for_task.store(our_seq, Ordering::Relaxed);
                                         }
                                         None => {
                                             tracing::error!(
