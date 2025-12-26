@@ -63,6 +63,10 @@ impl InodeTable {
     }
 
     pub fn lookup(&mut self, parent_ino: u64, name: &str) -> Result<u64, i32> {
+        if name.contains('/') || name == "." || name == ".." {
+            return Err(libc::EINVAL);
+        }
+
         let parent_path = self
             .by_guest_ino
             .get(&parent_ino)
@@ -295,5 +299,107 @@ mod tests {
                 .validate_parent_and_name(ROOT_INODE, "foo/bar")
                 .is_err()
         );
+    }
+
+    #[test]
+    fn path_traversal_absolute_path_blocked() {
+        let tmp = TempDir::new().unwrap();
+        let table = InodeTable::new(tmp.path().to_path_buf());
+
+        let result = table.validate_path(Path::new("/etc/passwd"));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn path_traversal_deep_nesting_blocked() {
+        let tmp = TempDir::new().unwrap();
+        let table = InodeTable::new(tmp.path().to_path_buf());
+
+        let mut evil_path = tmp.path().to_path_buf();
+        for _ in 0..50 {
+            evil_path.push("..");
+        }
+        evil_path.push("etc/passwd");
+
+        let result = table.validate_path(&evil_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn symlink_inside_root_allowed() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(tmp.path().join("target.txt"), "content").unwrap();
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("target.txt", tmp.path().join("link.txt")).unwrap();
+        }
+
+        let mut table = InodeTable::new(tmp.path().to_path_buf());
+        let result = table.lookup(ROOT_INODE, "link.txt");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn symlink_outside_root_blocked() {
+        let outer = TempDir::new().unwrap();
+        let inner = outer.path().join("inner");
+        fs::create_dir(&inner).unwrap();
+        fs::write(outer.path().join("secret.txt"), "secret").unwrap();
+
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink("../secret.txt", inner.join("escape")).unwrap();
+        }
+
+        let table = InodeTable::new(inner.clone());
+        let evil_path = inner.join("escape");
+
+        let result = table.validate_path(&evil_path);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn lookup_with_dotdot_in_body_rejected() {
+        let tmp = TempDir::new().unwrap();
+        fs::create_dir(tmp.path().join("subdir")).unwrap();
+
+        let mut table = InodeTable::new(tmp.path().to_path_buf());
+        let subdir_ino = table.lookup(ROOT_INODE, "subdir").unwrap();
+
+        let result = table.lookup(subdir_ino, "..");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn lookup_with_dot_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let mut table = InodeTable::new(tmp.path().to_path_buf());
+
+        let result = table.lookup(ROOT_INODE, ".");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn name_with_null_byte_handled() {
+        let tmp = TempDir::new().unwrap();
+        let table = InodeTable::new(tmp.path().to_path_buf());
+
+        let result = table.validate_parent_and_name(ROOT_INODE, "file\0.txt");
+        assert!(result.is_ok() || result.is_err());
+    }
+
+    #[test]
+    fn inode_limit_enforced() {
+        let tmp = TempDir::new().unwrap();
+        let mut table = InodeTable::new(tmp.path().to_path_buf());
+
+        for i in 0..100 {
+            let name = format!("file{}.txt", i);
+            fs::write(tmp.path().join(&name), "content").unwrap();
+            let _ = table.lookup(ROOT_INODE, &name);
+        }
+
+        assert!(table.by_guest_ino.len() <= MAX_INODES);
     }
 }
