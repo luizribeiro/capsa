@@ -3,13 +3,11 @@
 //! operations happen on the main queue.
 
 use crate::handle::NativeVmHandle;
-use crate::vm::{
-    BootMethodConfig, CreateVmConfig, create_pipe, create_vm, get_socket_device_addr, start_vm,
-};
+use crate::vm::{CreateVmConfig, create_pipe, create_vm, get_socket_device_addr, start_vm};
 use crate::vsock::VsockBridge;
 use async_trait::async_trait;
 use capsa_core::{
-    BackendCapabilities, BackendVmHandle, BootMethod, DEFAULT_ROOT_DEVICE, Error, HostPlatform,
+    BackendCapabilities, BackendVmHandle, DEFAULT_ROOT_DEVICE, Error, HostPlatform,
     HypervisorBackend, KernelCmdline, NetworkMode, Result, VmConfig, macos_cmdline_defaults,
     macos_virtualization_capabilities,
 };
@@ -87,25 +85,6 @@ impl HypervisorBackend for NativeVirtualizationBackend {
 
         let (stop_tx, stop_rx) = std::sync::mpsc::sync_channel(1);
 
-        let boot = match &config.boot {
-            BootMethod::LinuxDirect {
-                kernel,
-                initrd,
-                cmdline,
-            } => BootMethodConfig::LinuxDirect {
-                kernel_path: kernel.clone(),
-                initrd_path: initrd.clone(),
-                cmdline: cmdline.clone(),
-            },
-            BootMethod::Uefi {
-                efi_variable_store,
-                create_variable_store,
-            } => BootMethodConfig::Uefi {
-                efi_variable_store: efi_variable_store.clone(),
-                create_variable_store: *create_variable_store,
-            },
-        };
-
         // Create socketpair for UserNat networking.
         // We use into_raw_fd() to transfer ownership because NSFileHandle takes ownership.
         //
@@ -135,7 +114,7 @@ impl HypervisorBackend for NativeVirtualizationBackend {
         };
 
         let vm_config = CreateVmConfig {
-            boot,
+            boot: config.boot.clone(),
             cpus: config.resources.cpus,
             memory_mb: config.resources.memory_mb as u64,
             root_disk: config.root_disk.clone(),

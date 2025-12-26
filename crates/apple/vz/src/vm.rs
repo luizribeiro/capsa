@@ -2,7 +2,7 @@
 
 use crate::delegate::{StopSender, VmStateDelegate};
 use block2::RcBlock;
-use capsa_core::{DiskImage, Error, NetworkMode, Result, VsockConfig};
+use capsa_core::{BootMethod, DiskImage, Error, NetworkMode, Result, VsockConfig};
 use objc2::rc::Retained;
 use objc2::runtime::ProtocolObject;
 use objc2::{AnyThread, MainThreadMarker};
@@ -17,22 +17,9 @@ use objc2_virtualization::{
 };
 use std::os::fd::OwnedFd;
 use std::os::unix::io::RawFd;
-use std::path::PathBuf;
-
-pub enum BootMethodConfig {
-    LinuxDirect {
-        kernel_path: PathBuf,
-        initrd_path: PathBuf,
-        cmdline: String,
-    },
-    Uefi {
-        efi_variable_store: PathBuf,
-        create_variable_store: bool,
-    },
-}
 
 pub struct CreateVmConfig {
-    pub boot: BootMethodConfig,
+    pub boot: BootMethod,
     pub cpus: u32,
     pub memory_mb: u64,
     pub root_disk: Option<DiskImage>,
@@ -70,15 +57,15 @@ pub fn create_vm(config: CreateVmConfig) -> Result<(usize, usize)> {
         let vm_config = VZVirtualMachineConfiguration::new();
 
         match &config.boot {
-            BootMethodConfig::LinuxDirect {
-                kernel_path,
-                initrd_path,
+            BootMethod::LinuxDirect {
+                kernel,
+                initrd,
                 cmdline,
             } => {
-                let kernel_path_str = kernel_path
+                let kernel_path_str = kernel
                     .to_str()
                     .ok_or_else(|| Error::StartFailed("Invalid kernel path".to_string()))?;
-                let initrd_path_str = initrd_path
+                let initrd_path_str = initrd
                     .to_str()
                     .ok_or_else(|| Error::StartFailed("Invalid initrd path".to_string()))?;
 
@@ -92,7 +79,7 @@ pub fn create_vm(config: CreateVmConfig) -> Result<(usize, usize)> {
 
                 vm_config.setBootLoader(Some(&boot_loader));
             }
-            BootMethodConfig::Uefi {
+            BootMethod::Uefi {
                 efi_variable_store,
                 create_variable_store,
             } => {
