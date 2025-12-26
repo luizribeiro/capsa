@@ -1,0 +1,18 @@
+[package]
+name = "capsa-sandbox-agent"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Guest agent for capsa sandbox VMs"
+
+[[bin]]
+name = "capsa-sandbox-agent"
+path = "src/main.rs"
+
+[dependencies]
+capsa-sandbox-protocol = { path = "../protocol" }
+tokio = { workspace = true }
+tokio-vsock = "0.6"
+tarpc = { version = "0.35", features = ["serde1", "tokio1", "serde-transport", "serde-transport-bincode"] }
+tokio-serde = { version = "0.9", features = ["bincode"] }
+futures = "0.3"

@@ -11,6 +11,7 @@ members = [
     "crates/linux/kvm",
     "crates/sandbox/protocol",
     "crates/sandbox/init",
+    "crates/sandbox/agent",
 ]
 
 [workspace.package]
