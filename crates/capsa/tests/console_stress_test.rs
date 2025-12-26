@@ -1,6 +1,3 @@
-#![feature(custom_test_frameworks)]
-#![test_runner(apple_main::test_runner)]
-
 //! Stress tests for console automation timing.
 //!
 //! These tests execute many commands in rapid sequence to verify that the
@@ -9,7 +6,6 @@
 
 use capsa::test_utils::test_vm;
 use std::time::Duration;
-#[allow(unused_imports)]
 use tokio::time::sleep;
 
 /// Tests that KVM virtio-console output is not duplicated.
@@ -17,7 +13,7 @@ use tokio::time::sleep;
 /// This test verifies the fix for the character duplication bug where each
 /// output line was repeated many times due to improper virtio queue state
 /// tracking. The fix saves and restores next_avail/next_used indices.
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_kvm_no_character_duplication() {
     #[cfg(not(feature = "linux-kvm"))]
     {
@@ -61,7 +57,7 @@ async fn test_kvm_no_character_duplication() {
 /// This is a regression test for the fork/exec fix. Previously, any command
 /// that required forking a child process would hang because interrupts were
 /// not being delivered correctly to the guest.
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_kvm_fork_exec_works() {
     #[cfg(not(feature = "linux-kvm"))]
     {
@@ -105,7 +101,7 @@ async fn test_kvm_fork_exec_works() {
 }
 
 /// Simple test to verify exec works.
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_exec_10_commands() {
     let vm = test_vm("default")
         .build()
@@ -148,7 +144,7 @@ async fn test_exec_10_commands() {
 }
 
 /// Executes 30 commands in rapid sequence - aggressive stress test.
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_exec_30_commands() {
     let vm = test_vm("default")
         .build()
@@ -175,7 +171,7 @@ async fn test_exec_30_commands() {
 }
 
 /// Tests commands with variable output lengths.
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_exec_variable_output() {
     let vm = test_vm("default")
         .build()
@@ -224,7 +220,7 @@ async fn test_exec_variable_output() {
 /// See docs/known-issues.md for historical context.
 ///
 /// Run with: cargo test test_exec_pipe_diagnostic --features <backend> -- --nocapture
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_exec_pipe_diagnostic() {
     #[cfg(feature = "linux-kvm")]
     eprintln!("Running on KVM backend");
@@ -296,7 +292,7 @@ async fn test_exec_pipe_diagnostic() {
 }
 
 /// Tests mixed execution times.
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_exec_mixed_times() {
     let vm = test_vm("default")
         .build()

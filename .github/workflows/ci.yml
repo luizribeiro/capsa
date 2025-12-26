@@ -112,13 +112,9 @@ jobs:
         run: devenv shell cargo test-linux -- --test-threads=1
 
   test-macos:
-    name: Test macOS (${{ matrix.backend }})
+    name: Test macOS
     runs-on: macos-latest
     needs: build-vms
-    strategy:
-      fail-fast: false
-      matrix:
-        backend: [vfkit, native, subprocess]
     steps:
       - uses: actions/checkout@v5
       - uses: cachix/install-nix-action@v31
@@ -139,13 +135,13 @@ jobs:
           path: result-vms
 
       - name: Run unit tests
-        run: devenv shell cargo test-macos-${{ matrix.backend }} --lib
+        run: devenv shell cargo test-macos --lib
 
       - name: Run doc tests
-        run: devenv shell cargo test-macos-${{ matrix.backend }} --doc
+        run: devenv shell cargo test-macos --doc
 
       # Integration tests require Virtualization.framework which isn't available
       # on GitHub's macOS runners (no nested virtualization support on M1/M2).
       # See: https://github.com/orgs/community/discussions/69211
       # - name: Run integration tests
-      #   run: devenv shell cargo test-macos-${{ matrix.backend }}
+      #   run: devenv shell cargo test-macos -- --test-threads=1

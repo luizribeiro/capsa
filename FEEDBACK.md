@@ -9,8 +9,7 @@
 - Workspace structure is reasonable and modular
 
 **What Makes Me Nervous:**
-- Three different execution strategies on macOS (native, subprocess, vfkit) - this smells like code duplication waiting to happen
-- Too many layers of indirection: `VmConfig` → `BootConfigBuilder` → `VmBuilder` → `HypervisorBackend` → `BackendVmHandle` → `ExecutionStrategy` → actual hypervisor calls
+- Too many layers of indirection: `VmConfig` → `BootConfigBuilder` → `VmBuilder` → `HypervisorBackend` → `BackendVmHandle` → actual hypervisor calls
 - The pool implementation re-invents wheels already solved by standard concurrency primitives
 
 ---
@@ -78,7 +77,6 @@ Err(Error::HypervisorAccess {
 ### 3. Code Duplication & Abstraction Leaks
 
 **Problems:**
-- Native, subprocess, and vfkit strategies on macOS likely duplicate boot config generation
 - Console buffering logic in `VmConsole::wait_for` is repeated across methods
 - Capability checking is scattered across multiple files
 

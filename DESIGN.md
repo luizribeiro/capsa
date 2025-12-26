@@ -8,7 +8,7 @@
 
 ## Overview
 
-Capsa provides a unified Rust API for running virtual machines across platforms. It abstracts hypervisor differences (vfkit on macOS, cloud-hypervisor on Linux) behind a clean interface, with a focus on:
+Capsa provides a unified Rust API for running virtual machines across platforms. It abstracts hypervisor differences (Virtualization.framework on macOS, KVM on Linux) behind a clean interface, with a focus on:
 
 1. **Embeddability**: Use as a library in CLI tools, desktop apps, or servers
 2. **Security by default**: Network policies, resource limits, isolated filesystems
@@ -160,7 +160,7 @@ pub struct MacOsVmConfig {
 use capsa::{Capsa, LinuxDirectBootConfig, DiskImage, MountMode};
 use std::time::Duration;
 
-#[apple_main::main]
+#[tokio::main]
 async fn main() -> capsa::Result<()> {
     // Configuration struct has required params
     let config = LinuxDirectBootConfig {
@@ -973,12 +973,12 @@ capsa version
 
 **Current:**
 ```
-DevVM → nix-build → microvm-run script → spawns vfkit
+DevVM → nix-build → microvm-run script → spawns hypervisor
 ```
 
 **With Capsa:**
 ```
-DevVM → nix-build → kernel + initrd + rootfs → Capsa → spawns vfkit
+DevVM → nix-build → kernel + initrd + rootfs → Capsa → manages VM
 ```
 
 ### DevVM Code Changes
@@ -1117,8 +1117,8 @@ capsa/
 │   │       ├── capabilities.rs # BackendCapabilities
 │   │       └── backend/        # Internal
 │   │           ├── mod.rs      # HypervisorBackend trait
-│   │           ├── vfkit.rs
-│   │           └── cloud_hypervisor.rs
+│   │           ├── macos/      # macOS Virtualization.framework
+│   │           └── linux/      # Linux KVM
 │   └── capsa-cli/
 │       ├── Cargo.toml
 │       └── src/
@@ -1174,8 +1174,8 @@ These items need more investigation or will be designed when their features are 
 
 ## References
 
-- [vfkit](https://github.com/crc-org/vfkit) - macOS hypervisor CLI
-- [cloud-hypervisor](https://github.com/cloud-hypervisor/cloud-hypervisor) - Linux VMM
+- [Apple Virtualization.framework](https://developer.apple.com/documentation/virtualization) - macOS hypervisor API
+- [KVM](https://www.kernel.org/doc/html/latest/virt/kvm/index.html) - Linux kernel virtual machine
 - [virtiofsd](https://gitlab.com/virtio-fs/virtiofsd) - virtio-fs daemon
 - [microvm.nix](https://github.com/astro/microvm.nix) - Reference for cmdline generation
 - [DevVM](./devvm) - First consumer

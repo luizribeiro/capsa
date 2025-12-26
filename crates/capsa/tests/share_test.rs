@@ -1,6 +1,3 @@
-#![feature(custom_test_frameworks)]
-#![test_runner(apple_main::test_runner)]
-
 //! Integration tests for shared directories (virtio-fs).
 //!
 //! These tests verify that host directories can be shared with guest VMs
@@ -25,7 +22,7 @@ fn backend_supports_virtiofs() -> bool {
 }
 
 /// Tests mounting a read-only shared directory and reading files.
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_virtiofs_read_only() {
     if !backend_supports_virtiofs() {
         eprintln!("Skipping: backend does not support virtio-fs");
@@ -123,7 +120,7 @@ async fn test_virtiofs_read_only() {
 }
 
 /// Tests mounting a read-write shared directory and writing files.
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_virtiofs_read_write() {
     if !backend_supports_virtiofs() {
         eprintln!("Skipping: backend does not support virtio-fs");
@@ -243,7 +240,7 @@ async fn test_virtiofs_read_write() {
 }
 
 /// Tests multiple shared directories in a single VM.
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_virtiofs_multiple_shares() {
     if !backend_supports_virtiofs() {
         eprintln!("Skipping: backend does not support virtio-fs");
@@ -323,7 +320,7 @@ async fn test_virtiofs_multiple_shares() {
 }
 
 /// Tests that path traversal attacks are blocked.
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_virtiofs_path_traversal_blocked() {
     if !backend_supports_virtiofs() {
         eprintln!("Skipping: backend does not support virtio-fs");

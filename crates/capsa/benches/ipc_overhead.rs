@@ -1,9 +1,7 @@
-#![feature(custom_test_frameworks)]
-#![test_runner(apple_main::criterion_runner)]
+//! Benchmarks for IPC overhead (subprocess backend).
 
-use apple_main::criterion::Criterion;
-use apple_main::criterion_macro::criterion;
 use capsa::test_utils::test_vm;
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::time::Duration;
 
 fn custom_criterion() -> Criterion {
@@ -12,13 +10,13 @@ fn custom_criterion() -> Criterion {
         .sample_size(10)
 }
 
-#[criterion(custom_criterion())]
 fn native_backend_benchmark(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
     let mut group = c.benchmark_group("native_backend");
 
     group.bench_function("vm_lifecycle", |b| {
         b.iter(|| {
-            apple_main::block_on(async {
+            rt.block_on(async {
                 let vm = test_vm("default")
                     .build()
                     .await
@@ -35,3 +33,11 @@ fn native_backend_benchmark(c: &mut Criterion) {
 
     group.finish();
 }
+
+criterion_group! {
+    name = benches;
+    config = custom_criterion();
+    targets = native_backend_benchmark
+}
+
+criterion_main!(benches);

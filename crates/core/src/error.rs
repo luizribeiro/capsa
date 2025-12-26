@@ -67,12 +67,12 @@ mod tests {
     #[test]
     fn error_display_backend_unavailable() {
         let err = Error::BackendUnavailable {
-            name: "vfkit".to_string(),
-            reason: "not installed".to_string(),
+            name: "kvm".to_string(),
+            reason: "not available".to_string(),
         };
         assert_eq!(
             err.to_string(),
-            "backend 'vfkit' is not available: not installed"
+            "backend 'kvm' is not available: not available"
         );
     }
 

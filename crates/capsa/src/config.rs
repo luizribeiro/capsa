@@ -31,8 +31,8 @@ impl<B: BootConfigBuilder> BootConfig for B {
 ///
 /// # Supported Platforms
 ///
-/// - **macOS**: Uses the Virtualization.framework via vfkit
-/// - **Linux**: Uses cloud-hypervisor (coming soon)
+/// - **macOS**: Uses Apple's Virtualization.framework
+/// - **Linux**: Uses KVM
 ///
 /// # Example
 ///

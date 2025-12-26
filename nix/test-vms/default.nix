@@ -6,7 +6,7 @@
 #
 # Architecture:
 #   lib.nix     - shared functions (config generation, init scripts, etc.)
-#   aarch64.nix - ARM64 VMs for macOS Virtualization.framework / vfkit
+#   aarch64.nix - ARM64 VMs for macOS Virtualization.framework
 #   x86_64.nix  - x86_64 VMs for Linux KVM
 
 { nixpkgs ? <nixpkgs> }:

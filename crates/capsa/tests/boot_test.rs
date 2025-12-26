@@ -1,12 +1,9 @@
-#![feature(custom_test_frameworks)]
-#![test_runner(apple_main::test_runner)]
-
 //! Integration tests for VM boot functionality.
 
 use capsa::test_utils::{default_test_vm, test_vm};
 use std::time::Duration;
 
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_vm_boots_successfully() {
     let vm = default_test_vm().build().await.expect("Failed to build VM");
     let console = vm.console().await.expect("Failed to get console");
@@ -19,7 +16,7 @@ async fn test_vm_boots_successfully() {
     vm.kill().await.expect("Failed to stop VM");
 }
 
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_sequential_vms() {
     for i in 0..2 {
         let vm = test_vm("default")

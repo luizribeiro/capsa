@@ -1,14 +1,11 @@
-#![feature(custom_test_frameworks)]
-#![test_runner(apple_main::test_runner)]
-
 //! Integration tests for UEFI boot functionality.
 
-#[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+#[cfg(not(feature = "linux-kvm"))]
 use capsa::test_utils::{BOOT_SUCCESS_MESSAGE, test_uefi_vm};
-#[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+#[cfg(not(feature = "linux-kvm"))]
 use std::time::Duration;
 
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_uefi_vm_boots_successfully() {
     #[cfg(feature = "linux-kvm")]
     {
@@ -16,13 +13,7 @@ async fn test_uefi_vm_boots_successfully() {
         return;
     }
 
-    #[cfg(feature = "vfkit")]
-    {
-        eprintln!("Skipping: vfkit UEFI boot not working (use native backend)");
-        return;
-    }
-
-    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    #[cfg(not(feature = "linux-kvm"))]
     {
         let vm = test_uefi_vm("uefi")
             .build()

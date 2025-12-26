@@ -1,12 +1,9 @@
-#![feature(custom_test_frameworks)]
-#![test_runner(apple_main::test_runner)]
-
 //! Integration tests for VM console functionality.
 
 use capsa::test_utils::test_vm;
 use std::time::Duration;
 
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_console_echo() {
     let vm = test_vm("default")
         .build()
@@ -36,7 +33,7 @@ async fn test_console_echo() {
     vm.kill().await.expect("Failed to kill VM");
 }
 
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_console_ctrl_c() {
     let vm = test_vm("default")
         .build()

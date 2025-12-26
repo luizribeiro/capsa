@@ -4,20 +4,13 @@
 //! implementations. Users typically don't need to interact with this module directly;
 //! the [`Capsa`](crate::Capsa) builder automatically selects an available backend.
 
-#[cfg(target_os = "macos")]
+#[cfg(all(target_os = "macos", feature = "macos-subprocess"))]
 mod macos;
 
 #[cfg(target_os = "linux")]
 mod linux;
 
-#[cfg(all(
-    target_os = "macos",
-    any(
-        feature = "vfkit",
-        feature = "macos-subprocess",
-        feature = "macos-native"
-    )
-))]
+#[cfg(all(target_os = "macos", feature = "macos-subprocess"))]
 pub use macos::MacOsBackend;
 
 #[cfg(all(target_os = "linux", feature = "linux-kvm"))]
@@ -26,27 +19,15 @@ pub use linux::LinuxKvmBackend;
 pub use capsa_core::{HypervisorBackend, Result};
 
 /// Returns all compiled-in backends.
+#[allow(clippy::vec_init_then_push)]
 pub fn available_backends() -> Vec<Box<dyn HypervisorBackend>> {
-    #[allow(unused_mut)]
     let mut backends: Vec<Box<dyn HypervisorBackend>> = Vec::new();
 
-    #[cfg(target_os = "macos")]
-    {
-        #[cfg(feature = "macos-subprocess")]
-        backends.push(Box::new(MacOsBackend::subprocess()));
+    #[cfg(all(target_os = "macos", feature = "macos-subprocess"))]
+    backends.push(Box::new(MacOsBackend::new()));
 
-        #[cfg(feature = "macos-native")]
-        backends.push(Box::new(MacOsBackend::native()));
-
-        #[cfg(feature = "vfkit")]
-        backends.push(Box::new(MacOsBackend::vfkit()));
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        #[cfg(feature = "linux-kvm")]
-        backends.push(Box::new(LinuxKvmBackend::new()));
-    }
+    #[cfg(all(target_os = "linux", feature = "linux-kvm"))]
+    backends.push(Box::new(LinuxKvmBackend::new()));
 
     backends
 }

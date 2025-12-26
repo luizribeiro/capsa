@@ -26,11 +26,11 @@ cargo test-linux --doc               # Doc tests
 cargo test-linux -- --test-threads=1 # Integration tests (requires /dev/kvm)
 ```
 
-**macOS (three backends):**
+**macOS:**
 ```bash
-cargo test-macos-vfkit --lib         # vfkit backend
-cargo test-macos-native --lib        # Native Virtualization.framework
-cargo test-macos-subprocess --lib    # Subprocess daemon backend
+cargo test-macos --lib               # Unit tests
+cargo test-macos --doc               # Doc tests
+cargo test-macos -- --test-threads=1 # Integration tests
 ```
 
 **Single test:**
@@ -54,8 +54,8 @@ nix-build nix/test-vms -A aarch64 -o result-vms
 ├─────────────────────────────────────────────────────────┤
 │               HypervisorBackend trait (internal)         │
 ├────────────────────────┬────────────────────────────────┤
-│   Linux KVM Backend    │      macOS Backends            │
-│   (capsa-linux-kvm)    │  vfkit | native | subprocess   │
+│   Linux KVM Backend    │      macOS Backend             │
+│   (capsa-linux-kvm)    │   (subprocess via vzd)         │
 └────────────────────────┴────────────────────────────────┘
               │                        │
         capsa-core              capsa-apple-*
@@ -69,7 +69,7 @@ nix-build nix/test-vms -A aarch64 -o result-vms
 - **capsa-net** (`crates/net/`) - Userspace NAT networking (smoltcp-based)
 - **capsa-linux-kvm** (`crates/linux/kvm/`) - Linux KVM backend
 - **capsa-apple-vz** (`crates/apple/vz/`) - macOS Virtualization.framework bindings
-- **capsa-apple-vzd** (`crates/apple/vzd/`) - macOS VM daemon (subprocess strategy)
+- **capsa-apple-vzd** (`crates/apple/vzd/`) - macOS VM daemon
 - **capsa-apple-vzd-ipc** (`crates/apple/vzd-ipc/`) - IPC protocol for vzd
 
 ### Key Design Patterns
@@ -82,15 +82,13 @@ nix-build nix/test-vms -A aarch64 -o result-vms
 
 ### Feature Flags
 - `linux-kvm` - Linux KVM backend
-- `vfkit` - macOS vfkit CLI backend
-- `macos-native` - Direct Virtualization.framework (requires `#[apple_main::main]`)
-- `macos-subprocess` - Subprocess daemon backend (recommended for macOS)
+- `macos-subprocess` - macOS subprocess daemon backend
 - `test-utils` - Test VM utilities
 
 ## macOS-Specific Notes
 
 - Tests require `codesign-run` for Virtualization.framework entitlements (auto-installed in devenv)
-- Virtualization.framework requires running on the main thread; the subprocess strategy avoids this constraint
+- The subprocess backend spawns a daemon (capsa-apple-vzd) that handles main thread requirements for Virtualization.framework
 - Integration tests require actual hardware (GitHub runners lack nested virtualization)
 
 ## Testing Notes

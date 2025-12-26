@@ -1,11 +1,7 @@
-#![feature(custom_test_frameworks)]
-#![test_runner(apple_main::criterion_runner)]
-
 //! Benchmarks for VM boot time.
 
-use apple_main::criterion::Criterion;
-use apple_main::criterion_macro::criterion;
 use capsa::test_utils::test_vm;
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::time::Duration;
 
 fn custom_criterion() -> Criterion {
@@ -14,11 +10,12 @@ fn custom_criterion() -> Criterion {
         .sample_size(10)
 }
 
-#[criterion(custom_criterion())]
 fn boot_benchmark(c: &mut Criterion) {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
     c.bench_function("boot", |b| {
         b.iter(|| {
-            apple_main::block_on(async {
+            rt.block_on(async {
                 let vm = test_vm("default")
                     .build()
                     .await
@@ -33,3 +30,11 @@ fn boot_benchmark(c: &mut Criterion) {
         })
     });
 }
+
+criterion_group! {
+    name = benches;
+    config = custom_criterion();
+    targets = boot_benchmark
+}
+
+criterion_main!(benches);

@@ -80,8 +80,6 @@ source = "git+https://github.com/luizribeiro/apple-main?rev=6f9e44b#6f9e44b2e971
 dependencies = [
  "apple-main-macros",
  "core-foundation",
- "criterion",
- "criterion-macro",
  "dispatch",
  "inventory",
  "libtest-mimic",
@@ -189,10 +187,8 @@ checksum = "b35204fbdc0b3f4446b89fc1ac2cf84a8a68971995d0bf2e925ec7cd960f9cb3"
 name = "capsa"
 version = "0.1.0"
 dependencies = [
- "apple-main",
  "async-trait",
  "capsa",
- "capsa-apple-vz",
  "capsa-apple-vzd",
  "capsa-apple-vzd-ipc",
  "capsa-core",
@@ -269,7 +265,6 @@ name = "capsa-cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "apple-main",
  "capsa",
  "clap",
  "libc",
@@ -467,16 +462,6 @@ dependencies = [
  "tinytemplate",
  "tokio",
  "walkdir",
-]
-
-[[package]]
-name = "criterion-macro"
-version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "288a8f36b28a19d7dbd572c76006c0a0eba1f3bf912a254dda211c6f665e7ffc"
-dependencies = [
- "proc-macro2",
- "quote",
 ]
 
 [[package]]

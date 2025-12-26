@@ -15,7 +15,6 @@ uuid = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
 serde_json = { version = "1.0", optional = true }
-apple-main = { git = "https://github.com/luizribeiro/apple-main", rev = "6f9e44b", optional = true, features = ["unstable-test-framework"] }
 capsa-apple-vzd-ipc = { path = "../apple/vzd-ipc", optional = true }
 tarpc = { version = "0.35", features = ["serde1", "tokio1", "serde-transport", "serde-transport-bincode"], optional = true }
 tokio-util = { version = "0.7", features = ["codec"], optional = true }
@@ -24,9 +23,6 @@ tokio-serde = { version = "0.9", features = ["bincode"], optional = true }
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["process", "signal", "fs", "term"] }
 capsa-net = { path = "../net" }
-
-[target.'cfg(target_os = "macos")'.dependencies]
-capsa-apple-vz = { path = "../apple/vz", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 capsa-linux-kvm = { path = "../linux/kvm", optional = true }
@@ -37,9 +33,7 @@ capsa-apple-vzd = { path = "../apple/vzd", artifact = "bin", optional = true }
 [features]
 default = []
 blocking = []
-test-utils = ["dep:serde_json", "dep:apple-main"]
-vfkit = []
-macos-native = ["dep:capsa-apple-vz"]
+test-utils = ["dep:serde_json"]
 macos-subprocess = ["dep:capsa-apple-vzd-ipc", "dep:tarpc", "dep:tokio-util", "dep:tokio-serde", "dep:capsa-apple-vzd"]
 linux-kvm = ["dep:capsa-linux-kvm"]
 
@@ -47,7 +41,6 @@ linux-kvm = ["dep:capsa-linux-kvm"]
 tempfile = { workspace = true }
 tokio-test = "0.4"
 criterion = { version = "0.5", features = ["async_tokio"] }
-apple-main = { git = "https://github.com/luizribeiro/apple-main", rev = "6f9e44b", features = ["unstable-criterion-framework", "unstable-test-framework"] }
 capsa = { path = ".", features = ["test-utils"] }
 
 [target.'cfg(target_os = "macos")'.dev-dependencies]

@@ -1,4 +1,4 @@
-# Test VMs for aarch64 (ARM64) - used for macOS vfkit/Virtualization.framework
+# Test VMs for aarch64 (ARM64) - used for macOS Virtualization.framework
 #
 # Build with: nix-build nix/test-vms -A aarch64
 

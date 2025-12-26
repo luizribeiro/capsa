@@ -1,12 +1,8 @@
 use capsa_core::AsyncOwnedFd;
-#[cfg(feature = "vfkit")]
-use capsa_core::{Error, Result};
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
 use nix::pty::{OpenptyResult, openpty};
 use nix::sys::termios::{self, ControlFlags, InputFlags, LocalFlags, OutputFlags, SetArg};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
-#[cfg(feature = "vfkit")]
-use std::process::Stdio;
 
 pub struct Pty {
     pub master: OwnedFd,
@@ -49,22 +45,6 @@ impl Pty {
         }
 
         Ok(Self { master, slave })
-    }
-
-    #[cfg(feature = "vfkit")]
-    pub fn slave_stdio(&self) -> Result<(Stdio, Stdio, Stdio)> {
-        let dup_fd = |fd: &OwnedFd| -> Result<Stdio> {
-            let new_fd = fd
-                .try_clone()
-                .map_err(|e| Error::StartFailed(format!("Failed to dup fd: {}", e)))?;
-            Ok(Stdio::from(new_fd))
-        };
-
-        Ok((
-            dup_fd(&self.slave)?,
-            dup_fd(&self.slave)?,
-            dup_fd(&self.slave)?,
-        ))
     }
 
     pub fn into_async_master(self) -> std::io::Result<AsyncOwnedFd> {

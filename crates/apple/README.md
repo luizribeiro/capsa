@@ -18,26 +18,25 @@ apple/
 │                            capsa                                │
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │                     MacOsBackend                          │  │
-│  │  ┌─────────────┐ ┌─────────────┐ ┌─────────────────────┐  │  │
-│  │  │VfkitStrategy│ │Subprocess-  │ │  NativeStrategy     │  │  │
-│  │  │             │ │Strategy     │ │                     │  │  │
-│  │  └─────────────┘ └──────┬──────┘ └──────────┬──────────┘  │  │
-│  └─────────────────────────┼───────────────────┼─────────────┘  │
-└────────────────────────────┼───────────────────┼────────────────┘
-                             │                   │
-                    IPC (tarpc)                  │ direct
-                             │                   │
-                             ▼                   │
-              ┌──────────────────────────────┐   │
-              │       capsa-apple-vzd        │   │
-              │    (VM daemon subprocess)    │   │
-              └──────────────┬───────────────┘   │
-                             │                   │
-                             ▼                   ▼
-              ┌──────────────────────────────────────┐
-              │           capsa-apple-vz             │
-              │     (Virtualization.framework)       │
-              └──────────────────────────────────────┘
+│  │                                                           │  │
+│  │  Spawns capsa-apple-vzd daemon and communicates via RPC   │  │
+│  │                                                           │  │
+│  └────────────────────────────┬──────────────────────────────┘  │
+└───────────────────────────────┼─────────────────────────────────┘
+                                │
+                       IPC (tarpc)
+                                │
+                                ▼
+             ┌──────────────────────────────┐
+             │       capsa-apple-vzd        │
+             │    (VM daemon subprocess)    │
+             └──────────────┬───────────────┘
+                            │
+                            ▼
+             ┌──────────────────────────────────────┐
+             │           capsa-apple-vz             │
+             │     (Virtualization.framework)       │
+             └──────────────────────────────────────┘
 ```
 
 ## Crates
@@ -52,7 +51,7 @@ Native backend using Apple's Virtualization.framework directly.
 
 Daemon binary that runs VMs in a separate process.
 
-**Purpose:** Allows running VMs without requiring the main application to manage the main thread (a Virtualization.framework requirement).
+**Purpose:** Allows running VMs without requiring the main application to manage the main thread (a Virtualization.framework requirement). The daemon uses `#[apple_main::main]` internally to manage the main thread.
 
 **Communication:** tarpc RPC over stdin/stdout pipes.
 
@@ -68,11 +67,9 @@ Shared IPC protocol between `capsa` (client) and `capsa-apple-vzd` (server).
 
 Apple's Virtualization.framework requires **all VM operations on the main thread**. This conflicts with async Rust runtimes like Tokio, which occupy the main thread.
 
-### Solutions
+### Solution
 
-#### 1. SubprocessStrategy (`macos-subprocess` feature)
-
-Spawns `capsa-apple-vzd` in a separate process:
+The `capsa-apple-vzd` daemon is spawned as a subprocess. It uses `#[apple_main::main]` internally to properly manage the main thread for Virtualization.framework operations. The main application can use standard `#[tokio::main]`:
 
 ```rust
 #[tokio::main]  // Tokio owns main thread - that's fine!
@@ -81,42 +78,9 @@ async fn main() {
 }
 ```
 
-The daemon uses `#[apple_main::main]` internally to manage the main thread.
-
-#### 2. NativeStrategy (`macos-native` feature)
-
-Uses Virtualization.framework directly, but requires `#[apple_main::main]`:
-
-```rust
-#[apple_main::main]  // Manages main thread for Apple frameworks
-async fn main() {
-    let vm = Capsa::vm(config).build().await?;
-}
-```
-
-#### 3. VfkitStrategy (`vfkit` feature)
-
-Spawns the external `vfkit` CLI tool. Works with any runtime since VM operations happen in a separate process.
-
-### Comparison
-
-| Strategy | Requires `apple_main`? | External dependency | Performance |
-|----------|------------------------|---------------------|-------------|
-| `NativeStrategy` | Yes | None | Best |
-| `SubprocessStrategy` | No | Bundled | Good |
-| `VfkitStrategy` | No | `vfkit` in PATH | Good |
-
-**Choose NativeStrategy** if you control the entry point.
-**Choose SubprocessStrategy** if you need `#[tokio::main]`.
-**Choose VfkitStrategy** if you prefer the established `vfkit` tool.
-
 ## Dependency Graph
 
 ```
-capsa (with macos-native)
-    └── capsa-apple-vz (vz/)
-            └── capsa-core
-
 capsa (with macos-subprocess)
     ├── capsa-apple-vzd-ipc (vzd-ipc/)
     │       └── capsa-core

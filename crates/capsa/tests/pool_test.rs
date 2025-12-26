@@ -1,6 +1,3 @@
-#![feature(custom_test_frameworks)]
-#![test_runner(apple_main::test_runner)]
-
 //! Pool integration tests.
 //!
 //! These tests verify the VM pool functionality with actual VMs.
@@ -10,7 +7,7 @@ use capsa::test_utils::test_pool;
 use std::sync::Arc;
 use std::time::Duration;
 
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_pool_creation() {
     let pool = test_pool("default")
         .build(2)
@@ -20,7 +17,7 @@ async fn test_pool_creation() {
     assert_eq!(pool.available_count().await, 2);
 }
 
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_pool_reserve_decreases_available_count() {
     let pool = test_pool("default")
         .build(2)
@@ -39,7 +36,7 @@ async fn test_pool_reserve_decreases_available_count() {
     drop(vm2);
 }
 
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_pool_try_reserve_fails_when_empty() {
     let pool = test_pool("default")
         .build(1)
@@ -53,7 +50,7 @@ async fn test_pool_try_reserve_fails_when_empty() {
     assert!(matches!(result, Err(Error::PoolEmpty)));
 }
 
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_pooled_vm_console_works() {
     let pool = test_pool("default")
         .build(1)
@@ -69,7 +66,7 @@ async fn test_pooled_vm_console_works() {
         .expect("VM did not boot successfully");
 }
 
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_pool_vm_respawns_after_release() {
     let pool = Arc::new(
         test_pool("default")
@@ -112,7 +109,7 @@ async fn test_pool_vm_respawns_after_release() {
         .expect("Respawned VM did not boot");
 }
 
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_pool_reserve_waits_for_available_vm() {
     let pool = Arc::new(
         test_pool("default")
@@ -140,7 +137,7 @@ async fn test_pool_reserve_waits_for_available_vm() {
     drop(vm2);
 }
 
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_pool_concurrent_reservations() {
     let pool = Arc::new(
         test_pool("default")
@@ -167,7 +164,7 @@ async fn test_pool_concurrent_reservations() {
     assert!(matches!(pool.try_reserve(), Err(Error::PoolEmpty)));
 }
 
-#[apple_main::harness_test]
+#[tokio::test]
 async fn test_try_reserve_returns_shutdown_error() {
     let pool = Arc::new(
         test_pool("default")

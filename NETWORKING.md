@@ -549,8 +549,7 @@ All phases require integration tests in `crates/capsa/tests/network_test.rs`.
 
 Tests should work across backends:
 ```bash
-cargo test-macos-native      # macOS native backend
-cargo test-macos-subprocess  # macOS subprocess backend
+cargo test-macos             # macOS backend
 cargo test-linux             # Linux KVM backend
 ```
 
@@ -639,8 +638,7 @@ Add unit tests for complex logic:
 
 ```bash
 # macOS
-cargo test-macos-native
-cargo test-macos-subprocess
+cargo test-macos
 
 # Linux
 cargo test-linux

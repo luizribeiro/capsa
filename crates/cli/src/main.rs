@@ -24,7 +24,7 @@ enum Commands {
     Version(commands::version::VersionArgs),
 }
 
-#[apple_main::main]
+#[tokio::main]
 async fn main() {
     tracing_subscriber::fmt::init();
 

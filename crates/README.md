@@ -104,9 +104,8 @@ Command-line interface for running VMs directly from the terminal.
 
 | Feature | Description |
 |---------|-------------|
-| `vfkit` | Enable vfkit backend (spawns `vfkit` CLI) |
-| `macos-subprocess` | Enable subprocess backend (spawns `capsa-apple-vzd`) |
-| `macos-native` | Enable native backend (Virtualization.framework directly) |
+| `macos-subprocess` | Enable macOS backend (spawns `capsa-apple-vzd` daemon) |
+| `linux-kvm` | Enable Linux KVM backend |
 | `test-utils` | Expose test utilities and VM configurations |
 | `blocking` | Blocking API wrappers |
 

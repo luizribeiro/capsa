@@ -8,8 +8,6 @@
 
   packages = [
     pkgs.cargo-modules
-  ] ++ lib.optionals pkgs.stdenv.isDarwin [
-    pkgs.vfkit
   ];
 
   git-hooks.hooks = {
@@ -17,7 +15,7 @@
     clippy.enable = true;
     clippy.settings.extraArgs =
       if pkgs.stdenv.isDarwin
-      then "--workspace --features macos-native,macos-subprocess,vfkit --exclude capsa-linux-kvm"
+      then "--workspace --features macos-subprocess --exclude capsa-linux-kvm"
       else "--workspace --features linux-kvm --exclude capsa-apple-vz --exclude capsa-apple-vzd --exclude capsa-apple-vzd-ipc";
   };
 

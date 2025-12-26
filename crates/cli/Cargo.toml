@@ -18,7 +18,6 @@ serde = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
-apple-main = { git = "https://github.com/luizribeiro/apple-main", rev = "6f9e44b" }
 
 [target.'cfg(unix)'.dependencies]
 nix = { version = "0.29", features = ["term"] }
@@ -26,5 +25,5 @@ libc = "0.2"
 
 [features]
 default = []
-vfkit = ["capsa/vfkit"]
-macos-native = ["capsa/macos-native"]
+macos-subprocess = ["capsa/macos-subprocess"]
+linux-kvm = ["capsa/linux-kvm"]
