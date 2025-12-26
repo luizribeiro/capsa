@@ -50,6 +50,7 @@ mod console;
 pub mod guides;
 mod handle;
 mod pool;
+mod sandbox;
 mod vsock;
 
 // TODO: stop exporting test-utils externally as all it does is expose VMs from test-vms.nix
@@ -68,6 +69,7 @@ pub use config::{BootConfig, Capsa};
 pub use console::{ConsoleReader, ConsoleWriter, VmConsole};
 pub use handle::{VmHandle, VmStatus};
 pub use pool::{PooledVm, VmPool};
+pub use sandbox::{CapsaSandboxConfig, HasMainProcess, NoMainProcess, SandboxBuilder};
 
 // Boot and disk configuration
 pub use capsa_core::{
