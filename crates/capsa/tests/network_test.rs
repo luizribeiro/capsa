@@ -222,6 +222,10 @@ async fn test_usernat_ping_external() {
 
     #[cfg(not(feature = "vfkit"))]
     {
+        if std::env::var("GITHUB_ACTIONS").is_ok() {
+            eprintln!("Skipping: ICMP to external hosts may be blocked in GitHub Actions");
+            return;
+        }
         let (vm, console) =
             setup_vm_with_dhcp(NetworkMode::UserNat(UserNatConfig::default())).await;
 
