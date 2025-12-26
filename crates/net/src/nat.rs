@@ -25,6 +25,19 @@ const UDP_IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 /// Idle timeout for TCP NAT entries.
 const TCP_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
+/// Standard Ethernet MTU in bytes.
+const ETHERNET_MTU: usize = 1500;
+
+/// IPv4 header size (without options).
+const IP_HEADER_SIZE: usize = 20;
+
+/// TCP header size (without options).
+const TCP_HEADER_SIZE: usize = 20;
+
+/// TCP Maximum Segment Size for standard Ethernet.
+/// MSS = MTU - IP header - TCP header
+const TCP_MSS: usize = ETHERNET_MTU - IP_HEADER_SIZE - TCP_HEADER_SIZE;
+
 /// Channel for sending frames back to the guest.
 pub type FrameSender = mpsc::Sender<Vec<u8>>;
 pub type FrameReceiver = mpsc::Receiver<Vec<u8>>;
@@ -316,14 +329,12 @@ impl NatTable {
                             }
                             Ok(n) => {
                                 // Send data to guest in MSS-sized segments
-                                // MSS = MTU (1500) - IP header (20) - TCP header (20) = 1460 bytes
-                                const MAX_SEGMENT_SIZE: usize = 1460;
                                 let data = &buf[..n];
                                 let mut offset = 0;
                                 let mut send_failed = false;
 
                                 while offset < data.len() {
-                                    let end = (offset + MAX_SEGMENT_SIZE).min(data.len());
+                                    let end = (offset + TCP_MSS).min(data.len());
                                     let segment = &data[offset..end];
                                     let our_seq = our_seq_for_task.load(Ordering::Relaxed);
 
@@ -885,20 +896,17 @@ mod tests {
     /// Test that MSS constant is correctly calculated.
     #[test]
     fn test_mss_constant() {
-        // MSS = MTU (1500) - IP header (20) - TCP header (20) = 1460
-        const ETHERNET_MTU: usize = 1500;
-        const IP_HEADER: usize = 20;
-        const TCP_HEADER: usize = 20;
-        const EXPECTED_MSS: usize = ETHERNET_MTU - IP_HEADER - TCP_HEADER;
-
-        assert_eq!(EXPECTED_MSS, 1460);
+        assert_eq!(ETHERNET_MTU, 1500);
+        assert_eq!(IP_HEADER_SIZE, 20);
+        assert_eq!(TCP_HEADER_SIZE, 20);
+        assert_eq!(TCP_MSS, 1460);
     }
 
     /// Test that sequence numbers would advance correctly for segmented data.
     #[test]
     fn test_sequence_advancement_for_segments() {
         // Simulate what happens when we segment 3000 bytes into MSS chunks
-        const MSS: u32 = 1460;
+        let mss = TCP_MSS as u32;
         let total_bytes: u32 = 3000;
         let initial_seq: u32 = 1000;
 
@@ -907,7 +915,7 @@ mod tests {
 
         let mut segments = Vec::new();
         while offset < total_bytes {
-            let segment_len = std::cmp::min(MSS, total_bytes - offset);
+            let segment_len = std::cmp::min(mss, total_bytes - offset);
             segments.push((seq, segment_len));
             seq = seq.wrapping_add(segment_len);
             offset += segment_len;
