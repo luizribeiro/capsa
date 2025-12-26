@@ -10,8 +10,12 @@
 Introduce `CapsaSandbox`, a new VM type with a capsa-controlled kernel and initrd that provides guaranteed features:
 
 - **Auto-mounting** of shared directories via cmdline
+- **Main process support** via `.run()` for running user binaries
+- **OCI container support** via `.oci()` for running containers
 - **Guest agent** for structured command execution, file transfers, and health checks
 - **Known environment** with predictable kernel version, modules, and capabilities
+
+The sandbox uses a **separated architecture**: a minimal init (PID 1) handles mounting and process lifecycle, while a guest agent handles host-guest RPC communication. This separation enables running user workloads (binaries, containers) alongside the agent.
 
 This is the foundation for fixing our broken `.share()` API. By building a controlled environment first, we have a proper destination for auto-mount functionality before cleaning up the existing APIs.
 
@@ -51,6 +55,38 @@ Because we build the initrd, we can guarantee:
 
 ## Design
 
+### Guest Architecture
+
+The sandbox uses a separated architecture where init and agent are distinct processes:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        Guest VM                                  │
+├─────────────────────────────────────────────────────────────────┤
+│  capsa-sandbox-init (PID 1)                                     │
+│  ├── Parse cmdline (capsa.mount=, capsa.run=, etc.)             │
+│  ├── Mount virtiofs shares                                      │
+│  ├── Spawn capsa-sandbox-agent                                  │
+│  ├── Spawn main process (if .run() or .oci() specified)         │
+│  ├── Reap zombies                                               │
+│  ├── Forward signals to main process                            │
+│  └── Shutdown when main process exits (or on agent shutdown)    │
+│                                                                  │
+│  capsa-sandbox-agent (child of init)                            │
+│  └── RPC over vsock: exec, file ops, info, shutdown             │
+│                                                                  │
+│  Main Process (child of init, optional)                         │
+│  └── User's binary, shell, or OCI container                     │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Why separate init from agent?**
+
+- **Workload support**: Users can run binaries (`.run()`) or containers (`.oci()`) as the main process
+- **Clean lifecycle**: Init manages process lifecycle; agent crash doesn't kill the workload
+- **Separation of concerns**: Init does init things; agent does RPC things
+- **Signal handling**: Init forwards SIGTERM to main process properly
+
 ### Boot Config Hierarchy
 
 ```
@@ -70,6 +106,7 @@ Because we build the initrd, we can guarantee:
 │               │  │ No guarantees   │  │                        │
 │ .virtio_fs()  │  │ .virtio_fs()    │  │ .virtio_fs()           │
 │ only          │  │ only            │  │ .share() ✓             │
+│               │  │                 │  │ .run() / .oci() ✓      │
 │               │  │                 │  │ .agent features ✓      │
 └───────────────┘  └─────────────────┘  └────────────────────────┘
 ```
@@ -80,6 +117,7 @@ Because we build the initrd, we can guarantee:
 
 ```rust
 // Minimal - uses capsa's default kernel/initrd
+// If no .run() specified, defaults to busybox shell
 let vm = Capsa::sandbox()
     .build()
     .await?;
@@ -100,6 +138,68 @@ let vm = Capsa::sandbox()
     .build()
     .await?;
 ```
+
+#### Running a Main Process
+
+```rust
+// Run a specific binary as the main process
+let vm = Capsa::sandbox()
+    .share("./workspace", "/mnt", MountMode::ReadWrite)
+    .run("/mnt/my-binary", &["--arg1", "--arg2"])
+    .build()
+    .await?;
+
+vm.wait_ready().await?;
+
+// Agent still available for auxiliary operations
+let result = vm.exec("ps aux").await?;
+vm.copy_from("/tmp/results.json", "./out.json").await?;
+
+// Wait for main process to complete
+let exit_code = vm.wait().await?;
+```
+
+#### Running an OCI Container
+
+```rust
+// Run an OCI container as the main process
+let vm = Capsa::sandbox()
+    .share("./workspace", "/mnt", MountMode::ReadWrite)
+    .oci("python:3.11", &["python", "/mnt/script.py"])
+    .build()
+    .await?;
+
+vm.wait_ready().await?;
+
+// Agent available for debugging/inspection
+let result = vm.exec("ps aux").await?;
+
+// Wait for container to complete
+let exit_code = vm.wait().await?;
+```
+
+#### API Constraints
+
+`.run()` and `.oci()` are **mutually exclusive** - you can only specify one main process:
+
+```rust
+// ❌ Compile error: can't call .run() after .oci()
+Capsa::sandbox()
+    .oci("python:3.11", &["python"])
+    .run("/bin/bash", &[])  // ERROR
+
+// ❌ Compile error: can't call .oci() after .run()
+Capsa::sandbox()
+    .run("/bin/bash", &[])
+    .oci("python:3.11", &["python"])  // ERROR
+
+// ❌ Compile error: can't call .run() twice
+Capsa::sandbox()
+    .run("/bin/foo", &[])
+    .run("/bin/bar", &[])  // ERROR
+```
+
+This is enforced at compile time using typestate pattern (see Implementation section).
 
 #### Using the Guest Agent
 
@@ -130,6 +230,9 @@ vm.copy_from("/tmp/results.json", "./local/results.json").await?;
 let info = vm.info().await?;
 println!("kernel: {}", info.kernel_version);
 println!("hostname: {}", info.hostname);
+
+// Request VM shutdown via agent
+vm.shutdown().await?;
 ```
 
 #### Comparison with Raw VMs
@@ -159,15 +262,48 @@ let result = vm.exec("ls /mnt").await?;  // Structured output
 
 ### Implementation
 
+#### Crate Structure
+
+The sandbox functionality is split across multiple crates:
+
+```
+crates/
+├── capsa/                      # Main library (existing)
+│   └── src/
+│       └── sandbox/            # Sandbox builder, SandboxHandle
+│           ├── mod.rs
+│           ├── builder.rs      # VmBuilder<CapsaSandboxConfig>
+│           ├── handle.rs       # SandboxHandle with agent client
+│           └── config.rs       # CapsaSandboxConfig
+│
+├── sandbox/
+│   ├── init/                   # capsa-sandbox-init binary
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       └── main.rs         # PID 1: mount, spawn, reap, signal
+│   │
+│   ├── agent/                  # capsa-sandbox-agent binary
+│   │   ├── Cargo.toml
+│   │   └── src/
+│   │       ├── main.rs         # vsock listener, RPC server
+│   │       └── handlers.rs     # exec, file ops, info, shutdown
+│   │
+│   └── protocol/               # Shared types between host and guest
+│       ├── Cargo.toml
+│       └── src/
+│           └── lib.rs          # ExecResult, SystemInfo, RPC definitions
+```
+
+**Why this structure?**
+
+- `capsa-sandbox-init` and `capsa-sandbox-agent` are **statically linked binaries** that go into the initrd
+- `capsa-sandbox-protocol` is shared between host (in `capsa` crate) and guest (in agent)
+- Separation allows independent versioning and smaller binary sizes
+
 #### CapsaSandboxConfig
 
 ```rust
 /// Configuration for a Capsa sandbox VM.
-///
-/// Uses capsa-provided kernel and initrd with guaranteed features:
-/// - Auto-mounting of shared directories
-/// - Guest agent for structured operations
-/// - Known kernel version and capabilities
 #[derive(Debug, Clone)]
 pub struct CapsaSandboxConfig {
     /// Override the default kernel (for testing/development)
@@ -176,73 +312,113 @@ pub struct CapsaSandboxConfig {
     pub initrd_override: Option<PathBuf>,
 }
 
-impl Default for CapsaSandboxConfig {
-    fn default() -> Self {
-        Self {
-            kernel_override: None,
-            initrd_override: None,
-        }
-    }
-}
-
-impl CapsaSandboxConfig {
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Override kernel (for testing)
-    pub fn with_kernel(mut self, path: impl Into<PathBuf>) -> Self {
-        self.kernel_override = Some(path.into());
-        self
-    }
-
-    /// Override initrd (for testing)
-    pub fn with_initrd(mut self, path: impl Into<PathBuf>) -> Self {
-        self.initrd_override = Some(path.into());
-        self
-    }
+/// What to run as the main process in the sandbox.
+#[derive(Debug, Clone)]
+pub enum MainProcess {
+    /// No main process specified - init spawns a default shell
+    Default,
+    /// Run a specific binary
+    Run { path: String, args: Vec<String> },
+    /// Run an OCI container
+    Oci { image: String, args: Vec<String> },
 }
 ```
 
-#### Sandbox Builder
+#### Sandbox Builder with Typestate
+
+The builder uses typestate to enforce that `.run()` and `.oci()` are mutually exclusive:
 
 ```rust
+/// Marker: no main process specified yet
+pub struct NoMainProcess;
+/// Marker: main process has been specified
+pub struct HasMainProcess;
+
 impl Capsa {
     /// Create a sandbox VM with capsa-controlled kernel/initrd.
-    ///
-    /// Sandboxes provide guaranteed features not available with raw VMs:
-    /// - `.share()` with auto-mounting
-    /// - Guest agent for structured command execution
-    /// - Known environment
-    pub fn sandbox() -> VmBuilder<CapsaSandboxConfig> {
-        VmBuilder::new(CapsaSandboxConfig::default())
+    pub fn sandbox() -> SandboxBuilder<NoMainProcess> {
+        SandboxBuilder::new()
     }
 }
 
-impl<P> VmBuilder<CapsaSandboxConfig, P> {
+pub struct SandboxBuilder<M> {
+    config: CapsaSandboxConfig,
+    shares: Vec<ShareConfig>,
+    main_process: MainProcess,
+    _marker: PhantomData<M>,
+}
+
+impl<M> SandboxBuilder<M> {
     /// Share a directory with automatic mounting.
-    ///
-    /// Unlike raw VMs, sandboxes guarantee the share will be mounted
-    /// at the specified guest path before the agent reports ready.
     pub fn share(
-        self,
+        mut self,
         host: impl Into<PathBuf>,
         guest: impl Into<String>,
         mode: MountMode,
     ) -> Self {
-        // Implementation: adds to auto_mounts, generates cmdline args
+        // Can call .share() regardless of main process state
+        self.shares.push(ShareConfig { host: host.into(), guest: guest.into(), mode });
+        self
     }
 
-    /// Share with explicit device configuration.
-    pub fn share_with_config(
+    /// Common builder methods available in any state
+    pub fn cpus(mut self, count: u32) -> Self { ... }
+    pub fn memory_mb(mut self, mb: u64) -> Self { ... }
+}
+
+impl SandboxBuilder<NoMainProcess> {
+    /// Run a binary as the main process.
+    ///
+    /// Can only be called once, and cannot be combined with `.oci()`.
+    pub fn run(
         self,
-        device: VirtioFsDevice,
-        guest_path: impl Into<String>,
-    ) -> Self {
-        // Implementation
+        path: impl Into<String>,
+        args: &[&str],
+    ) -> SandboxBuilder<HasMainProcess> {
+        SandboxBuilder {
+            config: self.config,
+            shares: self.shares,
+            main_process: MainProcess::Run {
+                path: path.into(),
+                args: args.iter().map(|s| s.to_string()).collect(),
+            },
+            _marker: PhantomData,
+        }
+    }
+
+    /// Run an OCI container as the main process.
+    ///
+    /// Can only be called once, and cannot be combined with `.run()`.
+    pub fn oci(
+        self,
+        image: impl Into<String>,
+        args: &[&str],
+    ) -> SandboxBuilder<HasMainProcess> {
+        SandboxBuilder {
+            config: self.config,
+            shares: self.shares,
+            main_process: MainProcess::Oci {
+                image: image.into(),
+                args: args.iter().map(|s| s.to_string()).collect(),
+            },
+            _marker: PhantomData,
+        }
+    }
+}
+
+// .build() is available in both states
+impl<M> SandboxBuilder<M> {
+    pub async fn build(self) -> Result<SandboxHandle> {
+        // If NoMainProcess, main_process is MainProcess::Default
+        // Generate cmdline args, start VM, connect to agent
     }
 }
 ```
+
+This ensures at compile time:
+- `.run()` and `.oci()` can only be called from `NoMainProcess` state
+- After calling either, the builder moves to `HasMainProcess` state
+- Neither can be called again from `HasMainProcess` state
 
 #### Kernel/Initrd Resolution
 
@@ -283,38 +459,94 @@ fn capsa_sandbox_kernel_path() -> PathBuf {
 }
 ```
 
-### Guest Agent
+### Sandbox Init (`capsa-sandbox-init`)
+
+The init binary runs as PID 1 and handles:
+
+1. **Cmdline parsing**: Reads `/proc/cmdline` for `capsa.mount=`, `capsa.run=`, etc.
+2. **Mounting**: Mounts virtiofs shares before spawning other processes
+3. **Process spawning**: Starts agent and main process (if specified)
+4. **Signal handling**: Forwards SIGTERM/SIGINT to main process
+5. **Zombie reaping**: Calls `waitpid(-1, WNOHANG)` on SIGCHLD
+6. **Shutdown**: Exits when main process exits (or on agent shutdown request)
+
+```rust
+// Simplified init logic
+fn main() {
+    // Parse cmdline
+    let config = parse_cmdline("/proc/cmdline");
+
+    // Mount shares
+    for mount in &config.mounts {
+        mount_virtiofs(&mount.tag, &mount.path);
+    }
+
+    // Spawn agent
+    let agent_pid = spawn("/capsa-sandbox-agent", &[]);
+
+    // Spawn main process (if any)
+    let main_pid = match &config.main_process {
+        MainProcess::Default => spawn("/bin/sh", &[]),
+        MainProcess::Run { path, args } => spawn(path, args),
+        MainProcess::Oci { image, args } => spawn_oci(image, args),
+    };
+
+    // Event loop: handle signals, reap zombies
+    loop {
+        match wait_for_event() {
+            Event::ChildExited(pid) if pid == main_pid => {
+                // Main process exited, shutdown
+                signal(agent_pid, SIGTERM);
+                exit(0);
+            }
+            Event::Signal(SIGTERM) => {
+                // Forward to main process
+                signal(main_pid, SIGTERM);
+            }
+            Event::Sigchld => {
+                // Reap zombies
+                while waitpid(-1, WNOHANG) > 0 {}
+            }
+        }
+    }
+}
+```
+
+### Guest Agent (`capsa-sandbox-agent`)
+
+The agent is a separate process that handles RPC communication with the host.
 
 #### Communication Protocol
 
-The guest agent communicates over vsock using tarpc (or similar RPC framework):
+The agent communicates over vsock (port 52) using a simple RPC protocol:
 
 ```rust
-#[tarpc::service]
-pub trait CapsaAgent {
-    /// Execute a command and return structured output
-    async fn exec(command: String) -> ExecResult;
+// In crates/sandbox/protocol/src/lib.rs
 
-    /// Execute with environment variables
-    async fn exec_env(command: String, env: HashMap<String, String>) -> ExecResult;
+/// RPC requests from host to agent
+#[derive(Debug, Serialize, Deserialize)]
+pub enum Request {
+    Ping,
+    Exec { command: String, env: HashMap<String, String> },
+    ReadFile { path: String },
+    WriteFile { path: String, contents: Vec<u8> },
+    ListDir { path: String },
+    Exists { path: String },
+    Info,
+    Shutdown,
+}
 
-    /// Read file contents
-    async fn read_file(path: String) -> Result<Vec<u8>, AgentError>;
-
-    /// Write file contents
-    async fn write_file(path: String, contents: Vec<u8>) -> Result<(), AgentError>;
-
-    /// Check if agent is ready
-    async fn ping() -> PingResponse;
-
-    /// Get system information
-    async fn info() -> SystemInfo;
-
-    /// List directory contents
-    async fn list_dir(path: String) -> Result<Vec<DirEntry>, AgentError>;
-
-    /// Check if path exists
-    async fn exists(path: String) -> bool;
+/// RPC responses from agent to host
+#[derive(Debug, Serialize, Deserialize)]
+pub enum Response {
+    Pong,
+    Exec(ExecResult),
+    ReadFile(Result<Vec<u8>, String>),
+    WriteFile(Result<(), String>),
+    ListDir(Result<Vec<DirEntry>, String>),
+    Exists(bool),
+    Info(SystemInfo),
+    Shutdown(Result<(), String>),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -336,11 +568,10 @@ pub struct SystemInfo {
 
 #### Agent Lifecycle
 
-1. **Boot**: Kernel starts, initrd runs
-2. **Mounts**: Initrd parses `capsa.mount=` args, mounts virtiofs shares
-3. **Agent starts**: Guest agent starts and listens on vsock port (e.g., 52)
-4. **Ready signal**: Agent sends ready signal or responds to ping
-5. **Operations**: Host sends RPC requests, agent executes and responds
+1. **Started by init**: Init spawns agent after mounting shares
+2. **Listen on vsock**: Agent binds to vsock port 52
+3. **Handle requests**: Process RPC requests from host
+4. **Shutdown**: On `Shutdown` request, signal init to terminate
 
 #### Host-Side Integration
 
@@ -363,53 +594,44 @@ impl SandboxHandle {
     /// Execute a command in the guest
     pub async fn exec(&self, command: &str) -> Result<ExecResult> {
         self.agent.exec(command.to_string()).await
-            .map_err(|e| Error::AgentError(e))
     }
 
-    /// Read a file from the guest
-    pub async fn read_file(&self, path: &str) -> Result<Vec<u8>> {
-        self.agent.read_file(path.to_string()).await
-            .map_err(|e| Error::AgentError(e))?
+    /// Request VM shutdown via agent
+    pub async fn shutdown(&self) -> Result<()> {
+        self.agent.shutdown().await
     }
 
     // ... other methods
 }
 ```
 
-### Initrd Requirements
+### Initrd Contents
 
-The capsa sandbox initrd must include:
+The capsa sandbox initrd contains:
 
-1. **Kernel modules**:
-   - `virtiofs`
-   - `virtio_pci` / `virtio_mmio`
-   - `vsock` / `vmw_vsock_virtio_transport`
+```
+/
+├── init                    # capsa-sandbox-init (PID 1)
+├── capsa-sandbox-agent     # Agent binary
+├── bin/
+│   ├── sh -> busybox
+│   ├── ls -> busybox
+│   ├── cat -> busybox
+│   ├── mount -> busybox
+│   └── busybox             # Busybox for basic utilities
+├── lib/modules/            # Kernel modules (if not built-in)
+│   ├── virtiofs.ko
+│   ├── virtio_mmio.ko
+│   └── vsock.ko
+└── etc/
+    └── passwd              # Minimal passwd for user ops
+```
 
-2. **Mount parsing script**:
-   ```bash
-   #!/bin/sh
-   # /init or part of init
-
-   # Parse capsa.mount=<tag>:<path> from cmdline
-   for arg in $(cat /proc/cmdline); do
-       case "$arg" in
-           capsa.mount=*)
-               spec="${arg#capsa.mount=}"
-               tag="${spec%%:*}"
-               path="${spec#*:}"
-               mkdir -p "$path"
-               mount -t virtiofs "$tag" "$path"
-               ;;
-       esac
-   done
-   ```
-
-3. **Guest agent binary**: Statically linked binary that:
-   - Listens on vsock port 52
-   - Implements the `CapsaAgent` service
-   - Runs as PID 1 or started by minimal init
-
-4. **Minimal userspace**: busybox or similar for basic operations
+**Build requirements**:
+- `capsa-sandbox-init`: Static binary (musl), ~1-2MB
+- `capsa-sandbox-agent`: Static binary (musl), ~2-3MB
+- `busybox`: Static binary, ~1MB
+- Total initrd size: ~5-10MB (compressed)
 
 ### Kernel/Initrd Distribution
 
@@ -494,35 +716,116 @@ in {
 }
 ```
 
-## Migration Path
+## Implementation Phases
 
-### Phase 1: Infrastructure
+### Phase 1: Sandbox Rust Scaffolding
 
-1. Create `CapsaSandboxConfig` type
-2. Add `Capsa::sandbox()` entry point
-3. Implement basic boot (kernel/initrd resolution)
-4. Add `capsa.mount=` cmdline generation
+**Goal**: Set up the host-side types and builder pattern.
 
-### Phase 2: Initrd with Mount Support
+**Tasks**:
+1. Create `crates/sandbox/protocol/` with shared types (`ExecResult`, `SystemInfo`, `Request`, `Response`)
+2. Create `CapsaSandboxConfig` type in `crates/capsa/src/sandbox/config.rs`
+3. Create `SandboxBuilder` with typestate pattern in `crates/capsa/src/sandbox/builder.rs`
+4. Add `Capsa::sandbox()` entry point
+5. Move `.share()` method to `SandboxBuilder` (remove from other builders or deprecate)
+6. Add `.run()` and `.oci()` methods with mutual exclusion
+7. Implement cmdline generation for `capsa.mount=`, `capsa.run=`
+8. Create placeholder `SandboxHandle` (can use existing `VmHandle` internally)
 
-1. Build initrd with virtiofs support
-2. Add cmdline parsing script
-3. Test auto-mounting works
-4. `.share()` method on sandbox builder
+**Deliverables**:
+- `Capsa::sandbox().share(...).run(...).build()` compiles
+- Cmdline args are generated correctly
+- `.share()` only available on sandbox builder
 
-### Phase 3: Guest Agent
+### Phase 2: Sandbox Init Binary
 
-1. Define agent protocol (tarpc service)
-2. Implement guest-side agent
-3. Build agent into initrd
-4. Host-side `SandboxHandle` with agent methods
+**Goal**: Build the init process that runs as PID 1.
 
-### Phase 4: Polish
+**Tasks**:
+1. Create `crates/sandbox/init/` crate
+2. Implement cmdline parsing (`capsa.mount=tag:path`, `capsa.run=path:arg1:arg2`)
+3. Implement virtiofs mounting
+4. Implement main process spawning via `.run()` (defaults to `/bin/sh` if not specified)
+5. Implement signal handling (forward SIGTERM to main process)
+6. Implement zombie reaping (SIGCHLD handler)
+7. Implement shutdown logic (exit when main process exits)
+8. Build as static binary (musl target)
+9. Create Nix derivation for building initrd with init + busybox
 
-1. `wait_ready()` implementation
-2. File transfer methods
-3. Error handling and timeouts
-4. Documentation and examples
+**Deliverables**:
+- `capsa-sandbox-init` binary that boots, mounts shares, runs a process
+- Integration test: sandbox boots, mounts work, can run commands via console
+
+### Phase 3: Basic Guest Agent
+
+**Goal**: Add RPC communication between host and guest.
+
+**Tasks**:
+1. Create `crates/sandbox/agent/` crate
+2. Implement vsock listener (port 52)
+3. Implement `Ping` → `Pong` RPC (hello world)
+4. Update init to spawn agent alongside main process
+5. Implement host-side agent client in `SandboxHandle`
+6. Implement `wait_ready()` using ping
+
+**Deliverables**:
+- `capsa-sandbox-agent` binary in initrd
+- `vm.wait_ready()` works
+- Integration test: `wait_ready()` succeeds after boot
+
+### Phase 4: Agent Operations
+
+**Goal**: Implement useful agent operations.
+
+**Tasks**:
+1. Implement `Exec` RPC (run command, return stdout/stderr/exit_code)
+2. Implement `ReadFile` RPC
+3. Implement `WriteFile` RPC
+4. Implement `ListDir` RPC
+5. Implement `Exists` RPC
+6. Implement `Info` RPC (system info)
+7. Add corresponding methods to `SandboxHandle`
+
+**Deliverables**:
+- `vm.exec("ls /mnt")` returns structured output
+- `vm.read_file()`, `vm.write_file()` work
+- Integration tests for all operations
+
+### Phase 5: Agent Shutdown
+
+**Goal**: Allow host to request clean VM shutdown.
+
+**Tasks**:
+1. Implement `Shutdown` RPC in agent
+2. Agent signals init to terminate (via file, signal, or dedicated mechanism)
+3. Init performs clean shutdown (SIGTERM to main process, wait, exit)
+4. Add `vm.shutdown()` to `SandboxHandle`
+
+**Deliverables**:
+- `vm.shutdown()` cleanly terminates the VM
+- Main process receives SIGTERM before VM exits
+
+### Phase 6: OCI Container Support
+
+**Goal**: Support running OCI containers as the main process.
+
+**Tasks**:
+1. Add OCI runtime to initrd (crun or similar minimal runtime)
+2. Implement `capsa.oci=image:arg1:arg2` cmdline parsing
+3. Implement container image pulling/caching strategy
+4. Implement `spawn_oci()` in init
+5. Handle container lifecycle (start, signal forwarding, exit)
+
+**Deliverables**:
+- `Capsa::sandbox().oci("python:3.11", &["python", "script.py"])` works
+- Container runs with access to mounted shares
+
+### Future Phases (Not in Initial Scope)
+
+- **Phase 7**: Container image caching and pre-pulling
+- **Phase 8**: Resource limits (cgroups) for main process/container
+- **Phase 9**: Network namespace isolation for containers
+- **Phase 10**: Multi-architecture support (aarch64)
 
 ## Relationship to Other Design Docs
 
@@ -552,17 +855,21 @@ Default for sandbox shares: `squash_to_root()` (guest sees root ownership).
 
 ## Open Questions
 
-1. **Agent protocol**: tarpc? Custom protocol? gRPC?
+1. **RPC serialization**: serde + bincode? postcard? Custom framing?
 
 2. **Vsock port**: Fixed (52) or configurable?
 
-3. **Sandbox base OS**: Minimal busybox? Alpine-based? NixOS minimal?
+3. **Kernel version**: Track latest stable? LTS? Configurable?
 
-4. **Kernel version**: Track latest stable? LTS? Configurable?
+4. **Architecture support**: x86_64 only initially? aarch64?
 
-5. **Architecture support**: x86_64 only initially? aarch64?
+5. **Console access**: Should sandbox also expose console for debugging?
 
-6. **Console access**: Should sandbox also expose console for debugging?
+6. **OCI runtime**: crun (lightweight)? runc? youki (Rust)?
+
+7. **Container image storage**: Where to cache pulled images? Host-side or in VM?
+
+8. **Default main process**: `/bin/sh` or should we require explicit `.run()`?
 
 ## Summary
 
@@ -571,10 +878,13 @@ Default for sandbox shares: `squash_to_root()` (guest sees root ownership).
 | Custom kernel/initrd | ✓ | N/A | Override only |
 | `.virtio_fs()` | ✓ | ✓ | ✓ |
 | `.share()` auto-mount | ✗ | ✗ | ✓ |
+| `.run()` main process | ✗ | ✗ | ✓ |
+| `.oci()` containers | ✗ | ✗ | ✓ |
 | Guest agent | ✗ | ✗ | ✓ |
 | `vm.exec()` structured | ✗ | ✗ | ✓ |
 | File transfer | ✗ | ✗ | ✓ |
-| `wait_ready()` | ✗ | ✗ | ✓ |
+| `vm.shutdown()` | ✗ | ✗ | ✓ |
+| `vm.wait_ready()` | ✗ | ✗ | ✓ |
 | Known environment | ✗ | ✗ | ✓ |
 
 ## Related Documents
