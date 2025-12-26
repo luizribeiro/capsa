@@ -1,5 +1,10 @@
 # Device Attachment vs Guest-Side Configuration
 
+> **Series**: This is document 1 of 3 in the virtio-fs redesign series.
+> - **[1. Device vs Mount Separation](./01-device-vs-mount-separation.md)** (this document) - API honesty and separation of concerns
+> - [2. UID/GID Mapping](./02-virtio-fs-uid-mapping.md) - File ownership handling
+> - [3. Capsa Sandbox](./03-capsa-sandbox.md) - Blessed environment with guaranteed features
+
 ## Executive Summary
 
 The current `.share()` API is fundamentally broken. It implies auto-mounting at a guest path but actually:
@@ -521,8 +526,8 @@ console.exec(
 
 ## Related Documents
 
-- [UID/GID Mapping Design](./virtio-fs-uid-mapping.md) - `UidGidMapping` type used in `VirtioFsDevice`
-- [Capsa Sandbox](./capsa-sandbox.md) - Blessed environment where `.share()` actually works
+- [UID/GID Mapping Design](./02-virtio-fs-uid-mapping.md) - `UidGidMapping` type used in `VirtioFsDevice`
+- [Capsa Sandbox](./03-capsa-sandbox.md) - Blessed environment where `.share()` actually works
 
 ## Summary of Changes
 
