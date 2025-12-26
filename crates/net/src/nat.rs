@@ -690,9 +690,8 @@ impl NatTable {
                                 _ => continue,
                             };
 
-                            // On macOS, ICMP socket returns full IP packet (IP header + ICMP).
-                            // On Linux, it returns just ICMP data.
-                            // Detect IP header by checking if first byte is 0x4X (IPv4).
+                            // SOCK_DGRAM ICMP sockets return different formats per platform.
+                            // We detect and strip IP header if present (0x4X signature).
                             let icmp_data = if len > 20 && (buf[0] >> 4) == 4 {
                                 let ip_header_len = ((buf[0] & 0x0F) as usize) * 4;
                                 if len > ip_header_len {
@@ -704,20 +703,7 @@ impl NatTable {
                                 &buf[..len]
                             };
 
-                            // Validate ICMP identifier matches (ignore stray replies)
-                            if icmp_data.len() >= 8 {
-                                let received_id = u16::from_be_bytes([icmp_data[4], icmp_data[5]]);
-                                if received_id != icmp_id {
-                                    tracing::trace!(
-                                        "NAT: ICMP reply with wrong id {} (expected {})",
-                                        received_id,
-                                        icmp_id
-                                    );
-                                    continue;
-                                }
-                            }
-
-                            // Craft ICMP echo reply frame to guest
+                            // Craft ICMP echo reply using guest's original identifier
                             if let Some(frame) = craft_icmp_echo_reply(
                                 remote_ip,
                                 guest_ip,
