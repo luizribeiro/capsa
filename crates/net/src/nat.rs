@@ -621,14 +621,10 @@ impl NatTable {
         let src_ip: Ipv4Addr = ip_packet.src_addr();
         let dst_ip: Ipv4Addr = ip_packet.dst_addr();
 
-        // Parse echo request fields (identifier at offset 4, sequence at offset 6)
-        let icmp_data = icmp_packet.data();
-        if icmp_data.len() < 4 {
-            return false;
-        }
-        let identifier = u16::from_be_bytes([icmp_data[0], icmp_data[1]]);
-        let sequence = u16::from_be_bytes([icmp_data[2], icmp_data[3]]);
-        let payload = &icmp_data[4..];
+        // Use smoltcp's echo-specific accessors
+        let identifier = icmp_packet.echo_ident();
+        let sequence = icmp_packet.echo_seq_no();
+        let payload = icmp_packet.data();
 
         let key = IcmpKey {
             guest_ip: src_ip,
@@ -694,9 +690,23 @@ impl NatTable {
                                 _ => continue,
                             };
 
+                            // On macOS, ICMP socket returns full IP packet (IP header + ICMP).
+                            // On Linux, it returns just ICMP data.
+                            // Detect IP header by checking if first byte is 0x4X (IPv4).
+                            let icmp_data = if len > 20 && (buf[0] >> 4) == 4 {
+                                let ip_header_len = ((buf[0] & 0x0F) as usize) * 4;
+                                if len > ip_header_len {
+                                    &buf[ip_header_len..len]
+                                } else {
+                                    continue;
+                                }
+                            } else {
+                                &buf[..len]
+                            };
+
                             // Validate ICMP identifier matches (ignore stray replies)
-                            if len >= 8 {
-                                let received_id = u16::from_be_bytes([buf[4], buf[5]]);
+                            if icmp_data.len() >= 8 {
+                                let received_id = u16::from_be_bytes([icmp_data[4], icmp_data[5]]);
                                 if received_id != icmp_id {
                                     tracing::trace!(
                                         "NAT: ICMP reply with wrong id {} (expected {})",
@@ -712,7 +722,7 @@ impl NatTable {
                                 remote_ip,
                                 guest_ip,
                                 icmp_id,
-                                &buf[..len],
+                                icmp_data,
                                 gateway_mac,
                                 guest_mac,
                             ) {
@@ -720,6 +730,9 @@ impl NatTable {
                                     break;
                                 }
                             }
+                        }
+                        Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                            continue;
                         }
                         Err(e) => {
                             tracing::debug!("NAT: ICMP recv error for {}: {}", guest_ip, e);
@@ -1418,5 +1431,105 @@ mod tests {
 
         let frame = craft_icmp_echo_reply(src_ip, dst_ip, 1234, &icmp_data, gateway_mac, guest_mac);
         assert!(frame.is_none());
+    }
+
+    #[test]
+    fn test_smoltcp_icmp_echo_parsing() {
+        // This test verifies that smoltcp's ICMP parsing API works as we expect.
+        // Specifically, echo_ident() and echo_seq_no() return the echo-specific fields,
+        // while data() returns ONLY the payload (not including identifier/sequence).
+
+        // Build a raw ICMP echo request packet
+        let mut icmp_bytes = vec![
+            8, 0, // Type = echo request (8), Code = 0
+            0, 0, // Checksum placeholder
+            0x12, 0x34, // Identifier = 0x1234 = 4660
+            0x00, 0x05, // Sequence = 5
+            b't', b'e', b's', b't', // Payload = "test"
+        ];
+
+        // Calculate and fill checksum
+        let checksum = icmp_checksum(&icmp_bytes);
+        icmp_bytes[2..4].copy_from_slice(&checksum.to_be_bytes());
+
+        // Parse with smoltcp
+        let icmp = Icmpv4Packet::new_checked(&icmp_bytes).expect("Failed to parse ICMP");
+
+        // Verify smoltcp's echo-specific accessors
+        assert_eq!(icmp.msg_type(), Icmpv4Message::EchoRequest);
+        assert_eq!(icmp.echo_ident(), 0x1234);
+        assert_eq!(icmp.echo_seq_no(), 5);
+
+        // CRITICAL: data() returns ONLY the payload, NOT identifier/sequence
+        // This was the source of a bug where we incorrectly read identifier/sequence from data()
+        assert_eq!(icmp.data(), b"test");
+        assert_eq!(icmp.data().len(), 4); // Only "test", not 4 + 4 bytes
+    }
+
+    #[test]
+    fn test_icmp_request_parsing_from_ip_packet() {
+        // This tests the actual parsing path used in handle_icmp:
+        // 1. Parse Ethernet frame
+        // 2. Extract IP packet
+        // 3. Parse ICMP from IP payload using smoltcp's echo-specific accessors
+        // This regression test ensures we use echo_ident()/echo_seq_no()/data() correctly.
+
+        // Build a complete Ethernet + IP + ICMP echo request frame
+        let identifier: u16 = 0xABCD;
+        let sequence: u16 = 42;
+        let payload = b"hello world!"; // 12 bytes
+
+        // Build ICMP packet
+        let mut icmp_bytes = vec![0u8; 8 + payload.len()];
+        icmp_bytes[0] = 8; // Echo request
+        icmp_bytes[1] = 0; // Code
+        icmp_bytes[4..6].copy_from_slice(&identifier.to_be_bytes());
+        icmp_bytes[6..8].copy_from_slice(&sequence.to_be_bytes());
+        icmp_bytes[8..].copy_from_slice(payload);
+        let checksum = icmp_checksum(&icmp_bytes);
+        icmp_bytes[2..4].copy_from_slice(&checksum.to_be_bytes());
+
+        // Build IP packet around ICMP
+        let src_ip = Ipv4Addr::new(10, 0, 2, 15);
+        let dst_ip = Ipv4Addr::new(8, 8, 8, 8);
+        let ip_repr = Ipv4Repr {
+            src_addr: src_ip,
+            dst_addr: dst_ip,
+            next_header: IpProtocol::Icmp,
+            payload_len: icmp_bytes.len(),
+            hop_limit: 64,
+        };
+
+        let mut ip_bytes = vec![0u8; 20 + icmp_bytes.len()];
+        let mut ip_packet = Ipv4Packet::new_unchecked(&mut ip_bytes);
+        ip_repr.emit(&mut ip_packet, &ChecksumCapabilities::default());
+        ip_packet.payload_mut().copy_from_slice(&icmp_bytes);
+
+        // Build Ethernet frame around IP
+        let guest_mac = EthernetAddress([0x52, 0x54, 0x00, 0x00, 0x00, 0x02]);
+        let gateway_mac = EthernetAddress([0x52, 0x54, 0x00, 0x00, 0x00, 0x01]);
+        let eth_repr = EthernetRepr {
+            src_addr: guest_mac,
+            dst_addr: gateway_mac,
+            ethertype: EthernetProtocol::Ipv4,
+        };
+
+        let mut frame = vec![0u8; 14 + ip_bytes.len()];
+        let mut eth_frame = EthernetFrame::new_unchecked(&mut frame);
+        eth_repr.emit(&mut eth_frame);
+        eth_frame.payload_mut().copy_from_slice(&ip_bytes);
+
+        // Now parse the frame back - simulating handle_icmp's parsing path
+        let eth = EthernetFrame::new_checked(&frame).unwrap();
+        let ip = Ipv4Packet::new_checked(eth.payload()).unwrap();
+        let icmp = Icmpv4Packet::new_checked(ip.payload()).unwrap();
+
+        // Verify we extract fields correctly using smoltcp's echo-specific accessors
+        // (NOT by manually parsing icmp.data()[0:2] and [2:4]!)
+        assert_eq!(icmp.msg_type(), Icmpv4Message::EchoRequest);
+        assert_eq!(icmp.echo_ident(), identifier);
+        assert_eq!(icmp.echo_seq_no(), sequence);
+        assert_eq!(icmp.data(), payload);
+        assert_eq!(icmp.data().len(), payload.len());
     }
 }

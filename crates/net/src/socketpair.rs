@@ -72,7 +72,7 @@ impl FrameIO for SocketPairDevice {
 
     fn send(&mut self, frame: &[u8]) -> io::Result<()> {
         let fd = self.fd.as_raw_fd();
-        let n = unsafe { libc::send(fd, frame.as_ptr() as *const _, frame.len(), 0) };
+        let n = unsafe { libc::write(fd, frame.as_ptr() as *const _, frame.len()) };
         if n < 0 {
             Err(io::Error::last_os_error())
         } else if n as usize != frame.len() {

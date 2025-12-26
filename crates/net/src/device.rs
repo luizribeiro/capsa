@@ -56,7 +56,7 @@ impl<F: FrameIO> SmoltcpDevice<F> {
         self.rx_len = None;
     }
 
-    /// Send a frame directly, bypassing smoltcp.
+    /// Send a frame directly, bypassing smoltcp entirely.
     pub fn send_frame(&mut self, frame: &[u8]) -> std::io::Result<()> {
         self.frame_io.send(frame)
     }

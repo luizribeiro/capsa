@@ -235,11 +235,10 @@ impl<F: FrameIO> UserNatStack<F> {
                 self.device.poll_recv(&mut cx);
             }
 
-            // Check for NAT response frames to send back to guest
+            // Collect NAT frames to send after smoltcp poll
+            let mut nat_frames_to_send = Vec::new();
             while let Ok(frame) = self.nat_rx.try_recv() {
-                if let Err(e) = self.device.send_frame(&frame) {
-                    tracing::warn!("Failed to send NAT response frame: {}", e);
-                }
+                nat_frames_to_send.push(frame);
             }
 
             // Check if we have a frame destined to gateway (potential port forward response)
@@ -304,6 +303,13 @@ impl<F: FrameIO> UserNatStack<F> {
                 self.iface
                     .poll(timestamp, &mut self.device, &mut self.sockets);
                 self.process_dhcp();
+            }
+
+            // Send collected NAT frames after smoltcp poll
+            for frame in nat_frames_to_send {
+                if let Err(e) = self.device.send_frame(&frame) {
+                    tracing::warn!("Failed to send NAT response frame: {}", e);
+                }
             }
 
             // Periodic cleanup of idle NAT entries
