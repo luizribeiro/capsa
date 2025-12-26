@@ -129,6 +129,7 @@ struct VsockConnection {
 }
 
 /// Message from bridge to device.
+#[derive(Debug)]
 pub enum BridgeToDevice {
     /// Data received from Unix socket to send to guest
     Data { local_port: u32, data: Vec<u8> },
@@ -137,6 +138,7 @@ pub enum BridgeToDevice {
 }
 
 /// Message from device to bridge.
+#[derive(Debug)]
 pub enum DeviceToBridge {
     /// New connection request from guest
     Connect { local_port: u32 },
