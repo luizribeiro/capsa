@@ -1,9 +1,9 @@
 # Device Attachment vs Guest-Side Configuration
 
-> **Series**: This is document 1 of 3 in the virtio-fs redesign series.
-> - **[1. Device vs Mount Separation](./01-device-vs-mount-separation.md)** (this document) - API honesty and separation of concerns
-> - [2. UID/GID Mapping](./02-virtio-fs-uid-mapping.md) - File ownership handling
-> - [3. Capsa Sandbox](./03-capsa-sandbox.md) - Blessed environment with guaranteed features
+> **Series**: This is document 2 of 3 in the virtio-fs redesign series.
+> - [1. Capsa Sandbox](./01-capsa-sandbox.md) - Blessed environment with guaranteed features
+> - **[2. Device vs Mount Separation](./02-device-vs-mount-separation.md)** (this document) - API cleanup after sandbox exists
+> - [3. UID/GID Mapping](./03-virtio-fs-uid-mapping.md) - File ownership handling
 
 ## Executive Summary
 
@@ -12,7 +12,7 @@ The current `.share()` API is fundamentally broken. It implies auto-mounting at 
 - On vfkit: uses `guest_path` only for tag generation, still requires manual mount
 - Nowhere: actually mounts the filesystem
 
-This document proposes separating device attachment (universal) from guest-side mounting (Linux direct boot only), making the API honest and adding real auto-mount support.
+Now that we have [Capsa Sandbox](./01-capsa-sandbox.md) as a destination for working auto-mount, this document proposes separating device attachment (universal) from guest-side mounting (sandbox only), making the API honest.
 
 ## Current State: What The API Implies vs Reality
 
@@ -204,7 +204,7 @@ impl<B: BootConfigBuilder, P> VmBuilder<B, P> {
 
 **Important**: Auto-mounting requires a capsa-controlled initrd that understands our cmdline parameters. This is NOT possible with arbitrary user-provided kernels/initrds.
 
-See [Capsa Sandbox](./capsa-sandbox.md) for the full design.
+See [Capsa Sandbox](./01-capsa-sandbox.md) for the full design.
 
 ```rust
 impl<P> VmBuilder<CapsaSandboxConfig, P> {
@@ -526,8 +526,8 @@ console.exec(
 
 ## Related Documents
 
-- [UID/GID Mapping Design](./02-virtio-fs-uid-mapping.md) - `UidGidMapping` type used in `VirtioFsDevice`
-- [Capsa Sandbox](./03-capsa-sandbox.md) - Blessed environment where `.share()` actually works
+- [Capsa Sandbox](./01-capsa-sandbox.md) - Blessed environment where `.share()` actually works
+- [UID/GID Mapping Design](./03-virtio-fs-uid-mapping.md) - `UidGidMapping` type used in `VirtioFsDevice`
 
 ## Summary of Changes
 

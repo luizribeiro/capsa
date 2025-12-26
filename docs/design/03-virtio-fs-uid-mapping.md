@@ -1,9 +1,9 @@
 # Virtio-fs UID/GID Mapping
 
-> **Series**: This is document 2 of 3 in the virtio-fs redesign series.
-> - [1. Device vs Mount Separation](./01-device-vs-mount-separation.md) - API honesty and separation of concerns
-> - **[2. UID/GID Mapping](./02-virtio-fs-uid-mapping.md)** (this document) - File ownership handling
-> - [3. Capsa Sandbox](./03-capsa-sandbox.md) - Blessed environment with guaranteed features
+> **Series**: This is document 3 of 3 in the virtio-fs redesign series.
+> - [1. Capsa Sandbox](./01-capsa-sandbox.md) - Blessed environment with guaranteed features
+> - [2. Device vs Mount Separation](./02-device-vs-mount-separation.md) - API cleanup after sandbox exists
+> - **[3. UID/GID Mapping](./03-virtio-fs-uid-mapping.md)** (this document) - File ownership handling
 
 ## Problem Statement
 
@@ -119,7 +119,7 @@ impl UidGidMapping {
 
 ### Integration with VirtioFsDevice
 
-See [Device vs Mount Separation](./01-device-vs-mount-separation.md) for the full API redesign.
+See [Device vs Mount Separation](./02-device-vs-mount-separation.md) for the full API redesign.
 
 The `UidGidMapping` config belongs in `VirtioFsDevice`, the new device-level configuration type:
 
@@ -199,7 +199,7 @@ Capsa::sandbox()
     )
 ```
 
-See [Capsa Sandbox](./03-capsa-sandbox.md) for why `.share()` is only available on sandboxes.
+See [Capsa Sandbox](./01-capsa-sandbox.md) for why `.share()` is only available on sandboxes.
 
 ### Integration with Internal VirtioFs Device
 
@@ -317,8 +317,8 @@ Currently all shares would use the same mapping. Could extend `SharedDir` to all
 
 ## Related Documents
 
-- [Device vs Mount Separation](./01-device-vs-mount-separation.md) - API design for `.virtio_fs()` and `.share()`
-- [Capsa Sandbox](./03-capsa-sandbox.md) - Blessed environment where `.share()` works
+- [Capsa Sandbox](./01-capsa-sandbox.md) - Blessed environment where `.share()` works
+- [Device vs Mount Separation](./02-device-vs-mount-separation.md) - API design for `.virtio_fs()` and `.share()`
 
 ## References
 

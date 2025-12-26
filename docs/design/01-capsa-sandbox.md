@@ -1,9 +1,9 @@
 # Capsa Sandbox
 
-> **Series**: This is document 3 of 3 in the virtio-fs redesign series.
-> - [1. Device vs Mount Separation](./01-device-vs-mount-separation.md) - API honesty and separation of concerns
-> - [2. UID/GID Mapping](./02-virtio-fs-uid-mapping.md) - File ownership handling
-> - **[3. Capsa Sandbox](./03-capsa-sandbox.md)** (this document) - Blessed environment with guaranteed features
+> **Series**: This is document 1 of 3 in the virtio-fs redesign series.
+> - **[1. Capsa Sandbox](./01-capsa-sandbox.md)** (this document) - Blessed environment with guaranteed features
+> - [2. Device vs Mount Separation](./02-device-vs-mount-separation.md) - API cleanup after sandbox exists
+> - [3. UID/GID Mapping](./03-virtio-fs-uid-mapping.md) - File ownership handling
 
 ## Executive Summary
 
@@ -12,6 +12,8 @@ Introduce `CapsaSandbox`, a new VM type with a capsa-controlled kernel and initr
 - **Auto-mounting** of shared directories via cmdline
 - **Guest agent** for structured command execution, file transfers, and health checks
 - **Known environment** with predictable kernel version, modules, and capabilities
+
+This is the foundation for fixing our broken `.share()` API. By building a controlled environment first, we have a proper destination for auto-mount functionality before cleaning up the existing APIs.
 
 This complements the existing "raw" VM types (`LinuxDirectBootConfig`, `UefiBootConfig`) which make no assumptions about the guest.
 
@@ -30,7 +32,7 @@ We cannot make any guarantees about what's in that initrd:
 - Does it parse our cmdline args?
 - Does it have a guest agent?
 
-This is why `.share()` with auto-mount is fundamentally broken for raw VMs (see [Device vs Mount Separation](./01-device-vs-mount-separation.md)).
+This is why `.share()` with auto-mount is fundamentally broken for raw VMs (see [Device vs Mount Separation](./02-device-vs-mount-separation.md)).
 
 ### The Solution: A Blessed Environment
 
@@ -577,5 +579,5 @@ Default for sandbox shares: `squash_to_root()` (guest sees root ownership).
 
 ## Related Documents
 
-- [Device vs Mount Separation](./01-device-vs-mount-separation.md) - Why `.share()` only works on sandbox
-- [UID/GID Mapping](./02-virtio-fs-uid-mapping.md) - `UidGidMapping` in `VirtioFsDevice`
+- [Device vs Mount Separation](./02-device-vs-mount-separation.md) - Why `.share()` only works on sandbox
+- [UID/GID Mapping](./03-virtio-fs-uid-mapping.md) - `UidGidMapping` in `VirtioFsDevice`
