@@ -88,47 +88,31 @@ exec("(cmd1 | cmd2) && echo DONE", timeout).await
 
 ## 3. ICMP NAT Not Implemented
 
-**Status**: Open (by design, but should be documented)
+**Status**: Fixed
 **Severity**: Low
 **Affects**: Any test using `ping` to external hosts
 
 ### Description
 
-The NAT stack only handles TCP and UDP protocols. ICMP packets to external hosts are passed to the NAT but silently dropped because there's no ICMP handler.
+The NAT stack previously only handled TCP and UDP protocols. ICMP packets to external hosts were silently dropped.
 
-### Evidence
+### Root Cause
 
-From `crates/net/src/nat.rs`:
-```rust
-IpProtocol::Udp => self.handle_udp(guest_mac, &ip_packet).await,
-IpProtocol::Tcp => self.handle_tcp(guest_mac, &ip_packet).await,
-// ICMP is not handled
-```
+ICMP (ping) wasn't handled in the NAT's `process_frame` method - only TCP and UDP had handlers.
 
-### Current Behavior
+### Resolution
 
-- Ping to gateway (10.0.2.2) works - handled by smoltcp
-- Ping to external hosts (e.g., 8.8.8.8) silently fails - not NAT'd
+Implemented ICMP NAT for echo request/reply (`crates/net/src/nat.rs`):
 
-### Workaround
+1. **ICMP socket creation**: Uses non-privileged ICMP sockets via `socket2` with `SOCK_DGRAM` + `IPPROTO_ICMP` (works without root on Linux/macOS)
 
-Tests that need to verify connectivity to specific IPs should use DNS lookups (UDP) or TCP connections instead of ping:
+2. **Echo request handling**: Guest ICMP echo requests to external IPs are intercepted, and equivalent requests are sent from the host
 
-```rust
-// Instead of ping:
-// console.exec("ping -c 1 8.8.8.8", ...).await?;
+3. **Echo reply routing**: Replies are routed back to the guest based on ICMP identifier matching
 
-// Use DNS lookup:
-console.exec("nslookup example.com 8.8.8.8", ...).await?;
-```
+4. **Safety limits**: Maximum 64 ICMP bindings per guest IP to prevent socket exhaustion
 
-### Resolution Options
-
-1. **Document as limitation** - ICMP NAT is complex and may not be needed
-2. **Implement ICMP NAT** - Would require:
-   - ICMP echo request/reply handling in `nat.rs`
-   - Tracking ICMP identifier for response routing
-   - Host-side raw socket or ICMP socket support
+5. **Integration test**: Added `test_usernat_ping_external` to verify ping to 8.8.8.8 works
 
 ---
 

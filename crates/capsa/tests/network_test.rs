@@ -201,6 +201,40 @@ async fn test_usernat_ping_gateway() {
     }
 }
 
+/// Tests that guest can ping external hosts via ICMP NAT.
+///
+/// This verifies ICMP NAT is working for external destinations (not just gateway).
+#[apple_main::harness_test]
+async fn test_usernat_ping_external() {
+    #[cfg(feature = "vfkit")]
+    {
+        eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
+        return;
+    }
+
+    #[cfg(not(feature = "vfkit"))]
+    {
+        let (vm, console) =
+            setup_vm_with_dhcp(NetworkMode::UserNat(UserNatConfig::default())).await;
+
+        // Ping Google DNS (tests ICMP NAT to external host)
+        let output = console
+            .exec(
+                "ping -c 3 -W 5 8.8.8.8 && echo EXTERNAL_PING_SUCCESS",
+                Duration::from_secs(20),
+            )
+            .await
+            .expect("Ping to external host failed - ICMP NAT may not be working");
+
+        assert!(
+            output.contains("EXTERNAL_PING_SUCCESS"),
+            "Ping to external host should succeed"
+        );
+
+        vm.kill().await.expect("Failed to kill VM");
+    }
+}
+
 // =============================================================================
 // Port Forwarding Tests
 // =============================================================================
