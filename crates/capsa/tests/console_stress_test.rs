@@ -57,6 +57,55 @@ async fn test_kvm_no_character_duplication() {
     }
 }
 
+/// Tests that fork-requiring commands work on KVM.
+///
+/// This is a regression test for the fork/exec fix. Previously, any command
+/// that required forking a child process would hang because interrupts were
+/// not being delivered correctly to the guest.
+#[apple_main::harness_test]
+async fn test_kvm_fork_exec_works() {
+    #[cfg(not(feature = "linux-kvm"))]
+    {
+        eprintln!("Skipping: test is specific to KVM backend");
+        return;
+    }
+
+    #[cfg(feature = "linux-kvm")]
+    {
+        let vm = test_vm("default")
+            .no_network()
+            .build()
+            .await
+            .expect("Failed to build VM");
+        let console = vm.console().await.expect("Failed to get console");
+
+        console
+            .wait_for_timeout("Boot successful", Duration::from_secs(30))
+            .await
+            .expect("VM did not boot");
+
+        // Test subshell (requires fork)
+        console
+            .exec("(echo subshell_works)", Duration::from_secs(5))
+            .await
+            .expect("Subshell command failed - fork/exec regression");
+
+        // Test pipe (requires fork for both sides)
+        console
+            .exec("echo pipe_test | cat", Duration::from_secs(5))
+            .await
+            .expect("Pipe command failed - fork/exec regression");
+
+        // Test external command (requires exec)
+        console
+            .exec("ls /", Duration::from_secs(5))
+            .await
+            .expect("External command failed - fork/exec regression");
+
+        vm.kill().await.expect("Failed to kill VM");
+    }
+}
+
 /// Simple test to verify exec works.
 #[apple_main::harness_test]
 async fn test_exec_10_commands() {
@@ -200,19 +249,16 @@ async fn test_exec_variable_output() {
 
 /// Diagnostic test to investigate fork/exec behavior on different backends.
 ///
-/// This test explores known issues with command execution:
-/// - macOS: Pipes hang but subshell workaround `(cmd | cmd)` works
-/// - KVM: ALL forked commands hang (not just pipes)
-///
-/// See docs/known-issues.md for details.
+/// This test explores command execution across different hypervisor backends.
+/// See docs/known-issues.md for historical context.
 ///
 /// Run with: cargo test test_exec_pipe_diagnostic --features <backend> -- --nocapture
 #[apple_main::harness_test]
 async fn test_exec_pipe_diagnostic() {
     #[cfg(feature = "linux-kvm")]
-    eprintln!("Running on KVM backend - known issue: all fork-requiring commands fail");
+    eprintln!("Running on KVM backend");
     #[cfg(not(feature = "linux-kvm"))]
-    eprintln!("Running on macOS backend - known issue: pipe commands hang");
+    eprintln!("Running on macOS backend");
 
     let vm = test_vm("default")
         .no_network()

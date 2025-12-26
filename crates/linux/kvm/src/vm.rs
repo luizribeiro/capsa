@@ -260,26 +260,12 @@ pub async fn start_vm(config: &VmConfig) -> Result<Box<dyn BackendVmHandle>> {
     // Register virtio-console device if console is enabled
     let virtio_console = if let Some(fd) = virtio_console_fd {
         let writer = ConsolePipeWriter(fd);
-        let console = Arc::new(Mutex::new(VirtioConsole::new(Box::new(writer))));
+        let console = Arc::new(Mutex::new(VirtioConsole::new(
+            Box::new(writer),
+            vm_fd.clone(),
+            VIRTIO_CONSOLE_IRQ,
+        )));
         console.lock().unwrap().set_memory(memory.clone());
-
-        // Register irqfd for virtio-console interrupts
-        let evt = console
-            .lock()
-            .unwrap()
-            .interrupt_evt()
-            .try_clone()
-            .map_err(|e| {
-                Error::StartFailed(format!(
-                    "failed to clone virtio-console interrupt fd: {}",
-                    e
-                ))
-            })?;
-        vm_fd_ref
-            .register_irqfd(&evt, VIRTIO_CONSOLE_IRQ)
-            .map_err(|e| {
-                Error::StartFailed(format!("failed to register virtio-console irqfd: {}", e))
-            })?;
 
         register_mmio_device(
             &mut io_manager,

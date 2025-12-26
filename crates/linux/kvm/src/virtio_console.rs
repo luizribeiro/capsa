@@ -8,12 +8,12 @@ use std::io::Write;
 use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
+use kvm_ioctls::VmFd;
 use virtio_queue::desc::split::Descriptor;
 use virtio_queue::{Queue, QueueT};
 use vm_device::MutDeviceMmio;
 use vm_device::bus::{MmioAddress, MmioAddressOffset};
 use vm_memory::{Bytes, GuestAddress, GuestMemoryMmap};
-use vmm_sys_util::eventfd::EventFd;
 
 // Virtio device type for console
 const VIRTIO_ID_CONSOLE: u32 = 3;
@@ -101,7 +101,10 @@ pub struct VirtioConsole {
 
     // Interrupt handling
     interrupt_status: AtomicU32,
-    interrupt_evt: Arc<EventFd>,
+    /// VmFd for direct interrupt injection via set_irq_line
+    vm_fd: Arc<VmFd>,
+    /// IRQ number for this device
+    irq: u32,
 
     // Console I/O
     output: Mutex<Box<dyn Write + Send>>,
@@ -112,7 +115,11 @@ pub struct VirtioConsole {
 }
 
 impl VirtioConsole {
-    pub fn new(output: Box<dyn Write + Send>) -> Self {
+    /// Create a new virtio-console device.
+    ///
+    /// The `vm_fd` is used for direct interrupt injection via set_irq_line.
+    /// The `irq` is the IRQ number for this device (typically 5).
+    pub fn new(output: Box<dyn Write + Send>, vm_fd: Arc<VmFd>, irq: u32) -> Self {
         Self {
             device_features: VIRTIO_F_VERSION_1, // Required for virtio 1.0+
             driver_features: 0,
@@ -122,7 +129,8 @@ impl VirtioConsole {
             queue_sel: 0,
             queues: [VirtioQueueState::default(), VirtioQueueState::default()],
             interrupt_status: AtomicU32::new(0),
-            interrupt_evt: Arc::new(EventFd::new(0).expect("failed to create eventfd")),
+            vm_fd,
+            irq,
             output: Mutex::new(output),
             input_buffer: Mutex::new(VecDeque::new()),
             memory: None,
@@ -131,10 +139,6 @@ impl VirtioConsole {
 
     pub fn set_memory(&mut self, memory: Arc<GuestMemoryMmap>) {
         self.memory = Some(memory);
-    }
-
-    pub fn interrupt_evt(&self) -> &EventFd {
-        &self.interrupt_evt
     }
 
     pub fn enqueue_input(&mut self, data: &[u8]) {
@@ -148,7 +152,9 @@ impl VirtioConsole {
     fn signal_used_queue(&self) {
         self.interrupt_status
             .fetch_or(VIRTIO_INT_USED_RING, Ordering::SeqCst);
-        let _ = self.interrupt_evt.write(1);
+        // Edge-triggered interrupt: assert then de-assert
+        let _ = self.vm_fd.set_irq_line(self.irq, true);
+        let _ = self.vm_fd.set_irq_line(self.irq, false);
     }
 
     fn is_activated(&self) -> bool {

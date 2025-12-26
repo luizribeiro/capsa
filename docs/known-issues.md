@@ -73,61 +73,41 @@ cargo test-linux --test console_stress_test test_kvm_no_character_duplication --
 
 ---
 
-## 3. KVM Console: Fork/Exec Fails (All Non-Builtin Commands)
+## 3. ~~KVM Console: Fork/Exec Fails (All Non-Builtin Commands)~~ RESOLVED
 
-**Status**: Under investigation
+**Status**: Resolved
 **Discovered**: 2025-12-25
-**Affects**: KVM backend console I/O
+**Resolved**: 2025-12-25
 **Backend**: Linux (KVM)
 
-### Description
+### Original Issue
 
-On the KVM backend, any command that requires forking a child process fails
-to produce output. This includes:
-- External commands (e.g., `cat`, `ls`)
-- Subshells (e.g., `(echo hello)`)
-- Pipelines (e.g., `echo hello | cat`)
-- Redirections to external commands
+On the KVM backend, any command that required forking a child process failed
+to produce output. This included external commands, subshells, and pipelines.
+Only shell builtins worked correctly.
 
-Only shell builtins running in the main shell process work correctly.
+### Root Cause
 
-### Reproduction
+The virtio-console was using irqfd/EventFd for interrupt delivery, which was
+not functioning correctly. The guest was not receiving completion notifications
+for TX queue operations, causing forked processes to hang waiting for I/O.
 
-```rust
-// These work (shell builtins, no fork):
-console.exec("echo hello", Duration::from_secs(5)).await      // OK
-console.exec("pwd", Duration::from_secs(5)).await             // OK
+### Fix
 
-// These ALL fail (require fork):
-console.exec("cat /etc/hosts", Duration::from_secs(5)).await  // Timeout
-console.exec("(echo hello)", Duration::from_secs(5)).await    // Timeout
-console.exec("echo hi | cat", Duration::from_secs(5)).await   // Timeout
-console.exec("ls", Duration::from_secs(5)).await              // Timeout
+Changed interrupt delivery to use direct `set_irq_line` calls with
+edge-triggered behavior (assert then de-assert), matching the virtio_net
+implementation which worked correctly.
+
+### Test
+
+```bash
+cargo test-linux --test console_stress_test test_exec_pipe_diagnostic -- --nocapture
 ```
 
-### Observations
-
-1. **Forking is the issue**: The common factor is that all failing commands
-   require the shell to fork() a child process.
-
-2. **No output at all**: Failing commands produce zero output - not even
-   the command echo or error messages.
-
-3. **Shell becomes unresponsive**: After a fork-requiring command, the shell
-   stops responding entirely.
-
-### Root Cause Theories
-
-1. **Console FD inheritance**: Child processes may not properly inherit
-   the virtio-console file descriptors, causing their stdout to go nowhere.
-
-2. **IRQ delivery issues**: The irqfd mechanism for virtio-console
-   interrupts may not be working correctly, preventing the guest from
-   receiving completion notifications.
-
-### Next Steps
-
-1. **Check FD inheritance**: Verify that child processes can write to
-   the console by testing with explicit `/dev/hvc0` writes
-
-2. **Review irqfd setup**: Ensure interrupt delivery is working correctly
+All command types now work:
+| Test | Result |
+|------|--------|
+| Shell builtin (`echo`) | ✓ works |
+| Subshell (`(echo hello)`) | ✓ works |
+| Pipe (`echo \| cat`) | ✓ works |
+| External command (`ls /`) | ✓ works |
