@@ -109,142 +109,127 @@ async fn test_kvm_fork_exec_works() {
 /// Simple test to verify exec works.
 #[apple_main::harness_test]
 async fn test_exec_10_commands() {
+    let mut builder = test_vm("default");
+
     #[cfg(feature = "linux-kvm")]
     {
-        eprintln!("Skipping: KVM backend doesn't support console input yet");
-        return;
+        builder = builder.no_network();
     }
 
-    #[cfg(not(feature = "linux-kvm"))]
-    {
-        let vm = test_vm("default")
-            .build()
-            .await
-            .expect("Failed to build VM");
-        let console = vm.console().await.expect("Failed to get console");
+    let vm = builder.build().await.expect("Failed to build VM");
+    let console = vm.console().await.expect("Failed to get console");
 
-        console
-            .wait_for_timeout("Boot successful", Duration::from_secs(30))
-            .await
-            .expect("VM did not boot");
+    console
+        .wait_for_timeout("Boot successful", Duration::from_secs(30))
+        .await
+        .expect("VM did not boot");
 
-        // Execute single command
-        eprintln!("Executing first command...");
-        let output = console
-            .exec("echo 'test output'", Duration::from_secs(10))
-            .await
-            .expect("Failed to exec command");
-        eprintln!("First command output: {:?}", output);
+    // Execute single command
+    eprintln!("Executing first command...");
+    let output = console
+        .exec("echo 'test output'", Duration::from_secs(10))
+        .await
+        .expect("Failed to exec command");
+    eprintln!("First command output: {:?}", output);
 
-        assert!(
-            output.contains("test output"),
-            "Output missing expected content"
-        );
+    assert!(
+        output.contains("test output"),
+        "Output missing expected content"
+    );
 
-        // Execute second command
-        eprintln!("Executing second command...");
-        let output2 = console
-            .exec("echo 'second test'", Duration::from_secs(10))
-            .await
-            .expect("Failed to exec second command");
-        eprintln!("Second command output: {:?}", output2);
+    // Execute second command
+    eprintln!("Executing second command...");
+    let output2 = console
+        .exec("echo 'second test'", Duration::from_secs(10))
+        .await
+        .expect("Failed to exec second command");
+    eprintln!("Second command output: {:?}", output2);
 
-        assert!(
-            output2.contains("second test"),
-            "Second output missing expected content"
-        );
+    assert!(
+        output2.contains("second test"),
+        "Second output missing expected content"
+    );
 
-        vm.kill().await.expect("Failed to kill VM");
-    }
+    vm.kill().await.expect("Failed to kill VM");
 }
 
 /// Executes 30 commands in rapid sequence - aggressive stress test.
 #[apple_main::harness_test]
 async fn test_exec_30_commands() {
+    let mut builder = test_vm("default");
+
     #[cfg(feature = "linux-kvm")]
     {
-        eprintln!("Skipping: KVM backend doesn't support console input yet");
-        return;
+        builder = builder.no_network();
     }
 
-    #[cfg(not(feature = "linux-kvm"))]
-    {
-        let vm = test_vm("default")
-            .build()
-            .await
-            .expect("Failed to build VM");
-        let console = vm.console().await.expect("Failed to get console");
+    let vm = builder.build().await.expect("Failed to build VM");
+    let console = vm.console().await.expect("Failed to get console");
 
+    console
+        .wait_for_timeout("Boot successful", Duration::from_secs(30))
+        .await
+        .expect("VM did not boot");
+
+    for i in 1..=30 {
         console
-            .wait_for_timeout("Boot successful", Duration::from_secs(30))
+            .exec(
+                &format!("echo 'Rapid command {}'", i),
+                Duration::from_secs(5),
+            )
             .await
-            .expect("VM did not boot");
-
-        for i in 1..=30 {
-            console
-                .exec(
-                    &format!("echo 'Rapid command {}'", i),
-                    Duration::from_secs(5),
-                )
-                .await
-                .unwrap_or_else(|e| panic!("Rapid command {} failed: {}", i, e));
-        }
-
-        vm.kill().await.expect("Failed to kill VM");
+            .unwrap_or_else(|e| panic!("Rapid command {} failed: {}", i, e));
     }
+
+    vm.kill().await.expect("Failed to kill VM");
 }
 
 /// Tests commands with variable output lengths.
 #[apple_main::harness_test]
 async fn test_exec_variable_output() {
+    let mut builder = test_vm("default");
+
     #[cfg(feature = "linux-kvm")]
     {
-        eprintln!("Skipping: KVM backend doesn't support console input yet");
-        return;
+        builder = builder.no_network();
     }
 
-    #[cfg(not(feature = "linux-kvm"))]
-    {
-        let vm = test_vm("default")
-            .build()
-            .await
-            .expect("Failed to build VM");
-        let console = vm.console().await.expect("Failed to get console");
+    let vm = builder.build().await.expect("Failed to build VM");
+    let console = vm.console().await.expect("Failed to get console");
 
-        console
-            .wait_for_timeout("Boot successful", Duration::from_secs(30))
-            .await
-            .expect("VM did not boot");
+    console
+        .wait_for_timeout("Boot successful", Duration::from_secs(30))
+        .await
+        .expect("VM did not boot");
 
-        // Short output
-        console
-            .exec("echo short", Duration::from_secs(5))
-            .await
-            .expect("Short output failed");
+    // Short output
+    console
+        .exec("echo short", Duration::from_secs(5))
+        .await
+        .expect("Short output failed");
 
-        // Medium output (list /etc)
-        console
-            .exec("ls /etc", Duration::from_secs(5))
-            .await
-            .expect("Medium output failed");
+    // Medium output (list /etc)
+    console
+        .exec("ls /etc", Duration::from_secs(5))
+        .await
+        .expect("Medium output failed");
 
-        // Longer output (50 lines)
-        console
-            .exec(
-                "for i in $(seq 1 50); do echo \"Line $i\"; done",
-                Duration::from_secs(10),
-            )
-            .await
-            .expect("Long output failed");
+    // Longer output (50 lines)
+    console
+        .exec(
+            "for i in $(seq 1 50); do echo \"Line $i\"; done",
+            Duration::from_secs(10),
+        )
+        .await
+        .expect("Long output failed");
 
-        // Back to short
-        console
-            .exec("echo done", Duration::from_secs(5))
-            .await
-            .expect("Final short output failed");
+    // Back to short
+    console
+        .exec("echo done", Duration::from_secs(5))
+        .await
+        .expect("Final short output failed");
 
-        vm.kill().await.expect("Failed to kill VM");
-    }
+    vm.kill().await.expect("Failed to kill VM");
 }
 
 /// Diagnostic test to investigate fork/exec behavior on different backends.
@@ -328,55 +313,50 @@ async fn test_exec_pipe_diagnostic() {
 /// Tests mixed execution times.
 #[apple_main::harness_test]
 async fn test_exec_mixed_times() {
+    let mut builder = test_vm("default");
+
     #[cfg(feature = "linux-kvm")]
     {
-        eprintln!("Skipping: KVM backend doesn't support console input yet");
-        return;
+        builder = builder.no_network();
     }
 
-    #[cfg(not(feature = "linux-kvm"))]
-    {
-        let vm = test_vm("default")
-            .build()
-            .await
-            .expect("Failed to build VM");
-        let console = vm.console().await.expect("Failed to get console");
+    let vm = builder.build().await.expect("Failed to build VM");
+    let console = vm.console().await.expect("Failed to get console");
 
-        console
-            .wait_for_timeout("Boot successful", Duration::from_secs(30))
-            .await
-            .expect("VM did not boot");
+    console
+        .wait_for_timeout("Boot successful", Duration::from_secs(30))
+        .await
+        .expect("VM did not boot");
 
-        // Instant
-        console
-            .exec("echo instant", Duration::from_secs(5))
-            .await
-            .expect("Instant failed");
+    // Instant
+    console
+        .exec("echo instant", Duration::from_secs(5))
+        .await
+        .expect("Instant failed");
 
-        // 100ms delay
-        console
-            .exec("sleep 0.1 && echo 'after 100ms'", Duration::from_secs(5))
-            .await
-            .expect("100ms delay failed");
+    // 100ms delay
+    console
+        .exec("sleep 0.1 && echo 'after 100ms'", Duration::from_secs(5))
+        .await
+        .expect("100ms delay failed");
 
-        // Another instant
-        console
-            .exec("echo instant2", Duration::from_secs(5))
-            .await
-            .expect("Instant 2 failed");
+    // Another instant
+    console
+        .exec("echo instant2", Duration::from_secs(5))
+        .await
+        .expect("Instant 2 failed");
 
-        // 200ms delay
-        console
-            .exec("sleep 0.2 && echo 'after 200ms'", Duration::from_secs(5))
-            .await
-            .expect("200ms delay failed");
+    // 200ms delay
+    console
+        .exec("sleep 0.2 && echo 'after 200ms'", Duration::from_secs(5))
+        .await
+        .expect("200ms delay failed");
 
-        // Final instant
-        console
-            .exec("echo final", Duration::from_secs(5))
-            .await
-            .expect("Final failed");
+    // Final instant
+    console
+        .exec("echo final", Duration::from_secs(5))
+        .await
+        .expect("Final failed");
 
-        vm.kill().await.expect("Failed to kill VM");
-    }
+    vm.kill().await.expect("Failed to kill VM");
 }
