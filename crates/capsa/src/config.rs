@@ -1,5 +1,6 @@
 use crate::builder::{BootConfigBuilder, VmBuilder};
 use crate::pool::Yes;
+use crate::sandbox::{NoMainProcess, SandboxBuilder};
 
 /// Trait for VM boot configurations.
 ///
@@ -107,5 +108,68 @@ impl Capsa {
     /// ```
     pub fn pool<C: BootConfig>(config: C) -> VmBuilder<C, Yes> {
         config.into_pool_builder()
+    }
+
+    /// Creates a builder for a sandbox VM.
+    ///
+    /// A sandbox is a VM with a capsa-controlled kernel and initrd that provides
+    /// guaranteed features:
+    /// - Auto-mounting of shared directories
+    /// - Main process support via `.run()` or `.oci()`
+    /// - Guest agent for structured command execution
+    /// - Known environment with predictable capabilities
+    ///
+    /// Unlike raw VMs, the sandbox requires specifying a main process via
+    /// `.run()` or `.oci()` before calling `.build()`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// use capsa::{Capsa, MountMode};
+    ///
+    /// let vm = Capsa::sandbox()
+    ///     .share("./workspace", "/mnt", MountMode::ReadWrite)
+    ///     .cpus(2)
+    ///     .memory_mb(1024)
+    ///     .run("/bin/sh", &["-c", "ls /mnt"])
+    ///     .build()
+    ///     .await?;
+    ///
+    /// vm.wait_ready().await?;
+    /// let result = vm.exec("ls /mnt").await?;
+    /// ```
+    pub fn sandbox() -> SandboxBuilder<NoMainProcess> {
+        SandboxBuilder::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sandbox_returns_builder() {
+        let builder = Capsa::sandbox();
+        assert!(builder.main_process.is_none());
+    }
+
+    #[test]
+    fn sandbox_builder_can_chain_share() {
+        use capsa_core::MountMode;
+
+        let builder = Capsa::sandbox()
+            .share("./workspace", "/mnt", MountMode::ReadWrite)
+            .cpus(4)
+            .memory_mb(2048);
+
+        assert_eq!(builder.shares.len(), 1);
+        assert_eq!(builder.resources.cpus, 4);
+        assert_eq!(builder.resources.memory_mb, 2048);
+    }
+
+    #[test]
+    fn sandbox_builder_can_chain_run() {
+        let builder = Capsa::sandbox().run("/bin/sh", &["-c", "echo hello"]);
+        assert!(builder.main_process.is_some());
     }
 }
