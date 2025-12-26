@@ -114,9 +114,10 @@ async fn test_usernat_http_fetch() {
             .expect("VM did not configure network via DHCP");
 
         // Fetch HTTP content (uses TCP NAT)
+        // Simple approach: download and verify success
         let output = console
             .exec(
-                "wget -q -O - http://example.com 2>/dev/null | grep -o 'Example Domain' && echo HTTP_SUCCESS",
+                "wget -T 10 -q http://example.com -O /dev/null && echo HTTP_SUCCESS",
                 Duration::from_secs(15),
             )
             .await

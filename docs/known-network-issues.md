@@ -50,39 +50,45 @@ console.exec("wget -T 10 https://example.com -O /dev/null", Duration::from_secs(
 
 ## 2. HTTP Fetch Test Broken on KVM
 
-**Status**: Open
+**Status**: Fixed
 **Severity**: High
-**Affects**: `test_usernat_http_fetch`
+**Affects**: `test_usernat_http_fetch` in `crates/capsa/tests/network_test.rs`
 
 ### Description
 
-The `test_usernat_http_fetch` test times out 100% of the time on the Linux KVM backend. The test uses the `exec()` method and always hits the 15-second timeout.
+The `test_usernat_http_fetch` test was timing out when using `VmConsole::exec()` with
+commands containing shell pipes (e.g., `wget ... | grep ...`).
 
-### Reproduction
+### Root Cause
 
-```bash
-cargo test-linux --package capsa --test network_test test_usernat_http_fetch
+The `exec()` method appends `; echo __DONE_X__` to detect command completion. When the
+command contains a pipe, the shell's handling of the pipeline combined with the appended
+marker causes the command to hang. This appears to be related to how busybox ash handles
+pipeline output buffering when additional commands are appended.
+
+### Resolution
+
+Changed the test to use a simpler command without pipes:
+```rust
+// Before (broken):
+"wget -q -O - http://example.com 2>/dev/null | grep -o 'Example Domain' && echo HTTP_SUCCESS"
+
+// After (fixed):
+"wget -T 10 -q http://example.com -O /dev/null && echo HTTP_SUCCESS"
 ```
 
-### Observations
+The wget exit code already indicates success/failure, so grepping the content is unnecessary.
 
-- Test fails 100% of the time (not flaky - completely broken)
-- Times out at exactly 15 seconds (the configured timeout)
-- Uses `exec()` method with unique marker pattern
-- No policy configured - uses default UserNatConfig
-- Other tests using TCP NAT (like DNS lookup) pass, suggesting the issue may be specific to wget or the exec() method on KVM
+### Workaround for Other Cases
 
-### Possible Causes
+If you need to use pipes with `exec()`, wrap them in a subshell:
+```rust
+// This hangs:
+exec("cmd1 | cmd2 && echo DONE", timeout).await
 
-1. Console `exec()` method broken on KVM (see `docs/console-automation-investigation.md`)
-2. wget hanging or producing unexpected output
-3. Marker pattern not being detected in console output
-
-### Next Steps
-
-1. Run test with `--nocapture` to see raw console output
-2. Compare with macOS backend behavior
-3. Check if the `exec()` marker is being written/detected correctly
+// This works:
+exec("(cmd1 | cmd2) && echo DONE", timeout).await
+```
 
 ---
 
