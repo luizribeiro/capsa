@@ -195,20 +195,24 @@ impl<B: BootConfigBuilder, P> VmBuilder<B, P> {
 }
 ```
 
-#### Linux Direct Boot Only: Auto-Mount Convenience
+#### Capsa Sandbox Only: Auto-Mount Convenience
+
+**Important**: Auto-mounting requires a capsa-controlled initrd that understands our cmdline parameters. This is NOT possible with arbitrary user-provided kernels/initrds.
+
+See [Capsa Sandbox](./capsa-sandbox.md) for the full design.
 
 ```rust
-impl<P> VmBuilder<LinuxDirectBootConfig, P> {
+impl<P> VmBuilder<CapsaSandboxConfig, P> {
     /// Share a directory with automatic mounting.
     ///
-    /// This attaches a virtio-fs device AND configures the initrd
+    /// This attaches a virtio-fs device AND configures the sandbox initrd
     /// to automatically mount it at the specified guest path.
     ///
-    /// Only available for Linux direct boot (requires initrd modification).
+    /// Only available for Capsa Sandbox (requires capsa-controlled initrd).
     ///
     /// # Example
     /// ```rust,ignore
-    /// let vm = Capsa::vm(LinuxDirectBootConfig::new(kernel, initrd))
+    /// let vm = Capsa::sandbox()
     ///     .share("./workspace", "/mnt/workspace", MountMode::ReadWrite)
     ///     .build().await?;
     ///
@@ -244,7 +248,7 @@ impl<P> VmBuilder<LinuxDirectBootConfig, P> {
             .auto_mount(tag, guest_path)
     }
 
-    // Internal: records mount for initrd/cmdline generation
+    // Internal: records mount for cmdline generation
     fn auto_mount(mut self, tag: String, guest_path: String) -> Self {
         self.auto_mounts.push(AutoMount { tag, guest_path });
         self
@@ -258,53 +262,32 @@ impl<P> VmBuilder<LinuxDirectBootConfig, P> {
 
 ### Auto-Mount Implementation
 
-For Linux direct boot, auto-mounting can be achieved by:
+Auto-mounting is ONLY supported in `CapsaSandbox` because it requires:
 
-#### Option A: Kernel Command Line (Limited)
+1. **Custom cmdline parameter**: `capsa.mount=<tag>:<path>`
+2. **Initrd support**: Script that parses cmdline and mounts
 
-Add to cmdline:
-```
-virtiofs.mount=<tag>:<path>
-```
-
-**Problem**: Requires kernel support, may need custom initrd.
-
-#### Option B: Init Script Injection (Recommended)
-
-Modify initrd to include a mount script that runs early in boot:
+The sandbox initrd includes:
 
 ```bash
 #!/bin/sh
-# /etc/init.d/capsa-mounts or similar
-mount -t virtiofs share0 /mnt/workspace
-mount -t virtiofs share1 /mnt/data
+# Parse capsa.mount=<tag>:<path> from cmdline
+for arg in $(cat /proc/cmdline); do
+    case "$arg" in
+        capsa.mount=*)
+            spec="${arg#capsa.mount=}"
+            tag="${spec%%:*}"
+            path="${spec#*:}"
+            mkdir -p "$path"
+            mount -t virtiofs "$tag" "$path"
+            ;;
+    esac
+done
 ```
 
-**Implementation**:
-1. Store mount info in `LinuxDirectBootConfig`
-2. When building, generate mount script
-3. Inject into initrd (or use overlayfs approach)
+**Why not raw VMs?**
 
-#### Option C: Systemd Units (If Guest Uses Systemd)
-
-Generate `.mount` units:
-
-```ini
-# /etc/systemd/system/mnt-workspace.mount
-[Mount]
-What=share0
-Where=/mnt/workspace
-Type=virtiofs
-
-[Install]
-WantedBy=local-fs.target
-```
-
-**Complexity**: Requires knowing guest init system.
-
-#### Recommended Approach
-
-Start with **Option B** for the test VM (NixOS-based, we control the initrd). Document that auto-mount requires compatible initrd, and provide `virtio_fs()` for users who need manual control.
+Linux has no built-in cmdline support for mounting virtiofs at arbitrary paths (only for root via `root=virtiofs:<tag>`). We cannot assume user-provided initrds will understand our custom parameters.
 
 ### Internal Storage Changes
 
@@ -424,11 +407,12 @@ console.wait_for("# ").await?;
 console.exec("mkdir -p /mnt && mount -t virtiofs ws /mnt", timeout).await?;
 ```
 
-### Linux Direct Boot (Auto-Mount)
+### Linux Direct Boot (Device Only, Manual Mount)
 
 ```rust
+// Raw kernel/initrd - we can't assume initrd supports our cmdline args
 let vm = Capsa::vm(LinuxDirectBootConfig::new(kernel, initrd))
-    .share("./workspace", "/mnt", MountMode::ReadWrite)
+    .virtio_fs(VirtioFsDevice::new("./workspace").tag("ws"))
     .console_enabled()
     .build()
     .await?;
@@ -436,14 +420,31 @@ let vm = Capsa::vm(LinuxDirectBootConfig::new(kernel, initrd))
 let console = vm.console().await?;
 console.wait_for("# ").await?;
 
-// Already mounted!
-console.exec("ls /mnt", timeout).await?;
+// Manual mount required - no .share() on raw VMs
+console.exec("mkdir -p /mnt && mount -t virtiofs ws /mnt", timeout).await?;
 ```
 
-### Linux Direct Boot (Explicit Device Config)
+### Capsa Sandbox (Auto-Mount)
 
 ```rust
-let vm = Capsa::vm(LinuxDirectBootConfig::new(kernel, initrd))
+// Sandbox uses capsa-controlled kernel/initrd with guaranteed features
+let vm = Capsa::sandbox()
+    .share("./workspace", "/mnt", MountMode::ReadWrite)
+    .build()
+    .await?;
+
+// Wait for agent (not just console boot)
+vm.wait_ready().await?;
+
+// Already mounted! Use structured exec via agent
+let result = vm.exec("ls /mnt").await?;
+println!("files: {}", result.stdout);
+```
+
+### Capsa Sandbox (Explicit Device Config)
+
+```rust
+let vm = Capsa::sandbox()
     .share_with_config(
         VirtioFsDevice::new("./workspace")
             .tag("myshare")
@@ -454,58 +455,74 @@ let vm = Capsa::vm(LinuxDirectBootConfig::new(kernel, initrd))
     .await?;
 ```
 
-### Linux Direct Boot (Device Only, No Auto-Mount)
+### Capsa Sandbox (Device Only, No Auto-Mount)
 
 ```rust
-// User wants device but will mount manually (e.g., conditional mounting)
-let vm = Capsa::vm(LinuxDirectBootConfig::new(kernel, initrd))
+// Want device but will mount manually (e.g., conditional mounting)
+let vm = Capsa::sandbox()
     .virtio_fs(VirtioFsDevice::new("./workspace").tag("ws"))
     .build()
     .await?;
 
-// Must mount manually
+// Must mount manually via agent
+vm.exec("mkdir -p /mnt && mount -t virtiofs ws /mnt").await?;
 ```
 
 ## Testing Updates
 
 Current tests manually mount. After this change:
 
-**Before:**
+**Before (raw VM with broken .share()):**
 ```rust
 let vm = Capsa::vm(config)
     .share(&share_dir, "/mnt/share", MountMode::ReadWrite)
     .build().await?;
 
-// Manual mount 😢
+// Manual mount 😢 (share() didn't actually mount anything!)
 console.exec(
     "mkdir -p /mnt/share && mount -t virtiofs share0 /mnt/share",
     timeout,
 ).await?;
 ```
 
-**After:**
+**After (sandbox with real .share()):**
 ```rust
-let vm = Capsa::vm(config)
+let vm = Capsa::sandbox()
     .share(&share_dir, "/mnt/share", MountMode::ReadWrite)
     .build().await?;
 
-// Auto-mounted! 🎉
-console.exec("ls /mnt/share", timeout).await?;
+vm.wait_ready().await?;
+
+// Auto-mounted! 🎉 Use structured exec via agent
+let result = vm.exec("ls /mnt/share").await?;
+```
+
+**After (raw VM with honest API):**
+```rust
+let vm = Capsa::vm(LinuxDirectBootConfig::new(kernel, initrd))
+    .virtio_fs(VirtioFsDevice::new(&share_dir).tag("share0"))
+    .console_enabled()
+    .build().await?;
+
+// Honest: device only, manual mount required
+console.exec(
+    "mkdir -p /mnt/share && mount -t virtiofs share0 /mnt/share",
+    timeout,
+).await?;
 ```
 
 ## Open Questions
 
-1. **Auto-mount implementation**: Which option (cmdline, initrd injection, systemd)? Recommend initrd injection for test VM.
+1. **Virtio-9p**: Should follow same pattern? Lower priority since virtio-fs is preferred.
 
-2. **Virtio-9p**: Should follow same pattern? Lower priority since virtio-fs is preferred.
+2. **Tag uniqueness**: Should we validate tags are unique across devices?
 
-3. **Tag uniqueness**: Should we validate tags are unique across devices?
-
-4. **Max devices**: Should we limit number of virtio-fs devices? (IRQ allocation)
+3. **Max devices**: Should we limit number of virtio-fs devices? (IRQ allocation)
 
 ## Related Documents
 
 - [UID/GID Mapping Design](./virtio-fs-uid-mapping.md) - `UidGidMapping` type used in `VirtioFsDevice`
+- [Capsa Sandbox](./capsa-sandbox.md) - Blessed environment where `.share()` actually works
 
 ## Summary of Changes
 
@@ -514,10 +531,12 @@ console.exec("ls /mnt/share", timeout).await?;
 | `VirtioFsDevice` | New type for device config |
 | `UidGidMapping` | New type (from UID mapping design) |
 | `.virtio_fs()` | New method on all builders |
-| `.share()` | Move to `VmBuilder<LinuxDirectBootConfig>` only, implement auto-mount |
+| `.share()` | Move to `VmBuilder<CapsaSandboxConfig>` only |
+| `CapsaSandboxConfig` | New boot config with capsa-controlled kernel/initrd |
+| `Capsa::sandbox()` | New entry point for sandboxes |
 | `SharedDir` | Deprecate |
 | `ShareMechanism` | Deprecate |
 | `VmConfig.shares` | Replace with `virtio_fs_devices` + `auto_mounts` |
-| KVM backend | Use `VirtioFsDevice`, implement auto-mount |
+| KVM backend | Use `VirtioFsDevice` |
 | vfkit backend | Use `VirtioFsDevice` |
-| Tests | Remove manual mount commands |
+| Tests | Migrate to sandbox for auto-mount, or use explicit `.virtio_fs()` |

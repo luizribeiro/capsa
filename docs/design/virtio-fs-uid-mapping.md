@@ -170,7 +170,7 @@ impl VirtioFsDevice {
 Usage examples:
 
 ```rust
-// Device attachment only (all boot types)
+// Device attachment only (all boot types - manual mount required)
 .virtio_fs(VirtioFsDevice::new("./src").tag("src"))
 
 // With custom UID mapping
@@ -180,17 +180,21 @@ Usage examples:
         .passthrough_ownership()
 )
 
-// Linux direct boot: auto-mount with defaults (squash to root)
-.share("./src", "/mnt/src", MountMode::ReadOnly)
+// Capsa Sandbox only: auto-mount with defaults (squash to root)
+Capsa::sandbox()
+    .share("./src", "/mnt/src", MountMode::ReadOnly)
 
-// Linux direct boot: auto-mount with custom config
-.share_with_config(
-    VirtioFsDevice::new("./src")
-        .tag("myshare")
-        .uid_gid_mapping(UidGidMapping::squash(1000, 1000)),
-    "/mnt/src",
-)
+// Capsa Sandbox only: auto-mount with custom config
+Capsa::sandbox()
+    .share_with_config(
+        VirtioFsDevice::new("./src")
+            .tag("myshare")
+            .uid_gid_mapping(UidGidMapping::squash(1000, 1000)),
+        "/mnt/src",
+    )
 ```
+
+See [Capsa Sandbox](./capsa-sandbox.md) for why `.share()` is only available on sandboxes.
 
 ### Integration with Internal VirtioFs Device
 
@@ -305,6 +309,11 @@ Currently all shares would use the same mapping. Could extend `SharedDir` to all
 1. **Unit tests** for `metadata_to_attr()` with each mapping mode
 2. **Unit tests** for `handle_setattr()` chown behavior
 3. **Integration tests** verifying file ownership appears correctly in guest
+
+## Related Documents
+
+- [Device vs Mount Separation](./device-vs-mount-separation.md) - API design for `.virtio_fs()` and `.share()`
+- [Capsa Sandbox](./capsa-sandbox.md) - Blessed environment where `.share()` works
 
 ## References
 
