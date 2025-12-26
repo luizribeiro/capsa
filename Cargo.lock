@@ -194,6 +194,7 @@ dependencies = [
  "capsa-core",
  "capsa-linux-kvm",
  "capsa-net",
+ "capsa-sandbox-protocol",
  "core-foundation",
  "criterion",
  "dispatch",

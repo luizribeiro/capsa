@@ -1,7 +1,13 @@
 //! Sandbox builder with typestate pattern.
 
 use super::config::{CapsaSandboxConfig, MainProcess, ShareConfig};
-use capsa_core::{MountMode, NetworkMode, ResourceConfig, VsockConfig};
+use crate::backend::select_backend;
+use crate::handle::VmHandle;
+use capsa_core::{
+    BootMethod, Error, GuestOs, MountMode, NetworkMode, ResourceConfig, Result, SharedDir,
+    VmConfig, VsockConfig,
+};
+use capsa_sandbox_protocol::AGENT_VSOCK_PORT;
 use std::marker::PhantomData;
 use std::path::PathBuf;
 
@@ -147,6 +153,111 @@ impl<M> SandboxBuilder<M> {
     }
 }
 
+impl SandboxBuilder<HasMainProcess> {
+    /// Builds and starts the sandbox VM.
+    ///
+    /// This requires specifying a kernel and initrd override until the
+    /// default sandbox kernel/initrd are built.
+    pub async fn build(self) -> Result<VmHandle> {
+        let kernel = self.config.kernel_override.clone().ok_or_else(|| {
+            Error::InvalidConfig(
+                "sandbox kernel not specified - use .kernel() until default sandbox is built"
+                    .into(),
+            )
+        })?;
+
+        let initrd = self.config.initrd_override.clone().ok_or_else(|| {
+            Error::InvalidConfig(
+                "sandbox initrd not specified - use .initrd() until default sandbox is built"
+                    .into(),
+            )
+        })?;
+
+        let cmdline = self.generate_cmdline();
+        let shares = self.generate_shares();
+
+        let mut vsock = self.vsock;
+        vsock.add_port(capsa_core::VsockPortConfig::listen(
+            AGENT_VSOCK_PORT,
+            generate_temp_vsock_path(AGENT_VSOCK_PORT),
+        ));
+
+        let config = VmConfig {
+            boot: BootMethod::LinuxDirect {
+                kernel,
+                initrd,
+                cmdline,
+            },
+            root_disk: None,
+            disks: Vec::new(),
+            resources: self.resources.clone(),
+            shares,
+            network: self.network,
+            console_enabled: self.console_enabled,
+            vsock,
+            cluster_network_fd: None,
+        };
+
+        let backend = select_backend()?;
+        let backend_handle = backend.start(&config).await?;
+
+        Ok(VmHandle::new(
+            backend_handle,
+            GuestOs::Linux,
+            self.resources,
+        ))
+    }
+
+    fn generate_cmdline(&self) -> String {
+        let mut parts = vec![
+            "console=hvc0".to_string(),
+            "panic=-1".to_string(),
+            "quiet".to_string(),
+        ];
+
+        for (i, share) in self.shares.iter().enumerate() {
+            let tag = format!("share{}", i);
+            parts.push(format!("capsa.mount={}:{}", tag, share.guest_path));
+        }
+
+        match &self.main_process {
+            Some(MainProcess::Run { path, args }) => {
+                let mut run_parts = vec![path.clone()];
+                run_parts.extend(args.iter().cloned());
+                parts.push(format!("capsa.run={}", run_parts.join(":")));
+            }
+            Some(MainProcess::Oci { image, args }) => {
+                let mut oci_parts = vec![image.clone()];
+                oci_parts.extend(args.iter().cloned());
+                parts.push(format!("capsa.oci={}", oci_parts.join(":")));
+            }
+            None => unreachable!("HasMainProcess guarantees main_process is Some"),
+        }
+
+        parts.join(" ")
+    }
+
+    fn generate_shares(&self) -> Vec<SharedDir> {
+        self.shares
+            .iter()
+            .enumerate()
+            .map(|(i, share)| {
+                let mode = if share.read_only {
+                    MountMode::ReadOnly
+                } else {
+                    MountMode::ReadWrite
+                };
+                SharedDir::new(&share.host_path, format!("share{}", i), mode)
+            })
+            .collect()
+    }
+}
+
+fn generate_temp_vsock_path(port: u32) -> PathBuf {
+    let uuid_short = &uuid::Uuid::new_v4().to_string()[..8];
+    PathBuf::from("/tmp").join(format!("capsa-{}-{}.sock", uuid_short, port))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -266,6 +377,85 @@ mod tests {
         fn console_enabled_by_default() {
             let builder = SandboxBuilder::new();
             assert!(builder.console_enabled);
+        }
+    }
+
+    mod cmdline_generation {
+        use super::*;
+
+        #[test]
+        fn basic_cmdline() {
+            let builder = SandboxBuilder::new().run("/bin/sh", &[]);
+            let cmdline = builder.generate_cmdline();
+
+            assert!(cmdline.contains("console=hvc0"));
+            assert!(cmdline.contains("panic=-1"));
+            assert!(cmdline.contains("quiet"));
+            assert!(cmdline.contains("capsa.run=/bin/sh"));
+        }
+
+        #[test]
+        fn cmdline_with_shares() {
+            let builder = SandboxBuilder::new()
+                .share("./src", "/mnt/src", MountMode::ReadOnly)
+                .share("./data", "/mnt/data", MountMode::ReadWrite)
+                .run("/bin/sh", &[]);
+            let cmdline = builder.generate_cmdline();
+
+            assert!(cmdline.contains("capsa.mount=share0:/mnt/src"));
+            assert!(cmdline.contains("capsa.mount=share1:/mnt/data"));
+        }
+
+        #[test]
+        fn cmdline_with_run_args() {
+            let builder = SandboxBuilder::new().run("/bin/sh", &["-c", "echo hello"]);
+            let cmdline = builder.generate_cmdline();
+
+            assert!(cmdline.contains("capsa.run=/bin/sh:-c:echo hello"));
+        }
+
+        #[test]
+        fn shares_use_sequential_tags() {
+            let builder = SandboxBuilder::new()
+                .share("./a", "/mnt/a", MountMode::ReadOnly)
+                .share("./b", "/mnt/b", MountMode::ReadOnly)
+                .share("./c", "/mnt/c", MountMode::ReadOnly)
+                .run("/bin/sh", &[]);
+            let shares = builder.generate_shares();
+
+            assert_eq!(shares.len(), 3);
+            assert_eq!(shares[0].guest_path, "share0");
+            assert_eq!(shares[1].guest_path, "share1");
+            assert_eq!(shares[2].guest_path, "share2");
+        }
+
+        #[test]
+        fn cmdline_with_oci_basic() {
+            let builder = SandboxBuilder::new().oci("python:3.11", &[]);
+            let cmdline = builder.generate_cmdline();
+
+            assert!(cmdline.contains("capsa.oci=python:3.11"));
+            assert!(!cmdline.contains("capsa.run="));
+        }
+
+        #[test]
+        fn cmdline_with_oci_args() {
+            let builder = SandboxBuilder::new().oci("python:3.11", &["python", "/app/main.py"]);
+            let cmdline = builder.generate_cmdline();
+
+            assert!(cmdline.contains("capsa.oci=python:3.11:python:/app/main.py"));
+        }
+
+        #[test]
+        fn generate_shares_respects_readonly_flag() {
+            let builder = SandboxBuilder::new()
+                .share("./ro", "/ro", MountMode::ReadOnly)
+                .share("./rw", "/rw", MountMode::ReadWrite)
+                .run("/bin/sh", &[]);
+            let shares = builder.generate_shares();
+
+            assert_eq!(shares[0].mode, MountMode::ReadOnly);
+            assert_eq!(shares[1].mode, MountMode::ReadWrite);
         }
     }
 }
