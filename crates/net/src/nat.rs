@@ -12,6 +12,7 @@ use smoltcp::wire::{
 use std::collections::HashMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpStream, UdpSocket};
@@ -81,8 +82,8 @@ struct TcpNatEntry {
     state: TcpState,
     /// Guest's MAC address for crafting responses
     guest_mac: EthernetAddress,
-    /// Our sequence number for responses to guest
-    our_seq: u32,
+    /// Our sequence number for responses to guest (shared with forwarding task)
+    our_seq: Arc<AtomicU32>,
     /// Next expected sequence from guest
     guest_next_seq: u32,
     /// Handle to the bidirectional forwarding task
@@ -207,6 +208,18 @@ impl NatTable {
                 // Pure ACK - just acknowledge
                 return true;
             }
+        } else {
+            // No existing connection for non-SYN packet - this can happen
+            // when connection was closed but guest sends late ACKs
+            tracing::trace!(
+                "NAT: TCP {} -> {} no connection (flags: syn={}, ack={}, fin={}, rst={})",
+                guest_addr,
+                remote_addr,
+                syn,
+                ack,
+                fin,
+                rst
+            );
         }
 
         false
@@ -231,7 +244,10 @@ impl NatTable {
 
         // Try to connect to the remote host
         let stream = match TcpStream::connect(SocketAddr::V4(key.remote_addr)).await {
-            Ok(s) => s,
+            Ok(s) => {
+                tracing::debug!("NAT: TCP connect to {} succeeded", key.remote_addr);
+                s
+            }
             Err(e) => {
                 tracing::debug!("NAT: TCP connect to {} failed: {}", key.remote_addr, e);
                 // Send RST back to guest
@@ -255,12 +271,15 @@ impl NatTable {
         // Create channel for sending data to the socket
         let (data_tx, mut data_rx) = mpsc::channel::<Vec<u8>>(64);
 
+        // Shared sequence number between task and NAT entry for ACK consistency
+        let our_seq_shared = Arc::new(AtomicU32::new(our_isn.wrapping_add(1))); // After SYN-ACK
+        let our_seq_for_task = our_seq_shared.clone();
+
         // Spawn bidirectional forwarding task
         let tx_to_guest = self.tx_to_guest.clone();
         let gateway_mac = self.gateway_mac;
         let guest_addr = key.guest_addr;
         let remote_addr = key.remote_addr;
-        let mut our_seq = our_isn.wrapping_add(1); // After SYN-ACK
         let mut guest_ack = guest_isn.wrapping_add(1);
 
         let task_handle = tokio::spawn(async move {
@@ -282,6 +301,7 @@ impl NatTable {
                         match result {
                             Ok(0) => {
                                 // Remote closed - send FIN to guest
+                                let our_seq = our_seq_for_task.load(Ordering::Relaxed);
                                 if let Some(frame) = craft_tcp_fin(
                                     remote_addr,
                                     guest_addr,
@@ -295,23 +315,37 @@ impl NatTable {
                                 break;
                             }
                             Ok(n) => {
-                                // Send data to guest
-                                if let Some(frame) = craft_tcp_data(
-                                    remote_addr,
-                                    guest_addr,
-                                    our_seq,
-                                    guest_ack,
-                                    &buf[..n],
-                                    gateway_mac,
-                                    guest_mac,
-                                ) {
-                                    if tx_to_guest.send(frame).await.is_err() {
-                                        break;
+                                // Send data to guest in MSS-sized segments
+                                // MSS = MTU (1500) - IP header (20) - TCP header (20) = 1460 bytes
+                                const MAX_SEGMENT_SIZE: usize = 1460;
+                                let data = &buf[..n];
+                                let mut offset = 0;
+
+                                while offset < data.len() {
+                                    let end = (offset + MAX_SEGMENT_SIZE).min(data.len());
+                                    let segment = &data[offset..end];
+                                    let our_seq = our_seq_for_task.load(Ordering::Relaxed);
+
+                                    if let Some(frame) = craft_tcp_data(
+                                        remote_addr,
+                                        guest_addr,
+                                        our_seq,
+                                        guest_ack,
+                                        segment,
+                                        gateway_mac,
+                                        guest_mac,
+                                    ) {
+                                        if tx_to_guest.send(frame).await.is_err() {
+                                            break;
+                                        }
+                                        our_seq_for_task.fetch_add(segment.len() as u32, Ordering::Relaxed);
                                     }
-                                    our_seq = our_seq.wrapping_add(n as u32);
+                                    offset = end;
                                 }
                             }
-                            Err(_) => break,
+                            Err(_) => {
+                                break;
+                            }
                         }
                     }
                 }
@@ -335,7 +369,7 @@ impl NatTable {
             TcpNatEntry {
                 state: TcpState::SynReceived,
                 guest_mac,
-                our_seq: our_isn.wrapping_add(1),
+                our_seq: our_seq_shared,
                 guest_next_seq: guest_isn.wrapping_add(1),
                 task_handle,
                 data_tx,
@@ -369,11 +403,11 @@ impl NatTable {
         // Update expected sequence
         entry.guest_next_seq = entry.guest_next_seq.wrapping_add(payload.len() as u32);
 
-        // Send ACK back to guest
+        // Send ACK back to guest (load current seq from atomic to stay in sync with task)
         if let Some(frame) = craft_tcp_ack(
             key.remote_addr,
             key.guest_addr,
-            entry.our_seq,
+            entry.our_seq.load(Ordering::Relaxed),
             entry.guest_next_seq,
             self.gateway_mac,
             entry.guest_mac,
@@ -396,7 +430,7 @@ impl NatTable {
         if let Some(frame) = craft_tcp_ack(
             key.remote_addr,
             key.guest_addr,
-            entry.our_seq,
+            entry.our_seq.load(Ordering::Relaxed),
             fin_seq.wrapping_add(1),
             self.gateway_mac,
             entry.guest_mac,

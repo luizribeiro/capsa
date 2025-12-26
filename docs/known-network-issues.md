@@ -4,47 +4,41 @@ This document tracks known issues with the UserNat networking stack that need in
 
 ## 1. HTTPS Fails When Network Policy is Enabled
 
-**Status**: Open
+**Status**: Fixed
 **Severity**: Medium
 **Affects**: `test_policy_allow_https_only`, `test_policy_deny_specific_port`
 
 ### Description
 
-When a network policy is configured (even one that explicitly allows port 443), HTTPS wget requests fail silently. The wget command hangs until timeout, and subsequent console commands also timeout, suggesting the VM gets into a bad state.
+HTTPS requests were timing out regardless of network policy configuration. The issue was incorrectly attributed to policy enforcement, but was actually caused by two unrelated bugs.
 
-### Reproduction
+### Root Causes
 
-```rust
-let policy = NetworkPolicy::deny_all().allow_dns().allow_https();
+**Bug 1: VmConsole::exec() false matches on command echo**
 
-let vm = test_vm("default")
-    .network(NetworkMode::user_nat().policy(policy).build())
-    .build()
-    .await?;
+The `exec()` method used a marker pattern `\n__DONE_N__` to detect command completion. When commands were long enough to wrap at the 80-column terminal width, the marker could appear at the start of a wrapped line in the command echo, causing false pattern matches. Tests would complete in ~2ms (impossibly fast) because they matched the echo, not actual output.
 
-// This times out even though port 443 is allowed
-console.exec("wget -T 10 https://example.com -O /dev/null", Duration::from_secs(15)).await?;
-```
+**Bug 2: TCP NAT sequence number desynchronization**
 
-### Observations
+The NAT's bidirectional forwarding task maintained a local `our_seq` variable that tracked bytes sent to the guest. However, the `TcpNatEntry` stored a separate `our_seq` field that was never updated. When sending ACKs back to the guest (in `handle_tcp_data`), the stale sequence number was used, confusing the guest's TCP stack during the TLS handshake.
 
-- DNS lookups work correctly with policy enabled
-- HTTP wget works without any policy
-- HTTP wget with `allow_all()` policy works
-- HTTPS wget fails as soon as ANY policy is configured
-- After HTTPS fails, subsequent console commands also timeout
+**Bug 3: MTU violation for large TCP responses**
 
-### Possible Causes
+TLS ServerHello+Certificates responses (~3900 bytes) were sent as single TCP frames, exceeding the 1500-byte ethernet MTU. The oversized frames couldn't be transmitted through the socketpair, breaking the TLS handshake.
 
-1. Policy enforcement may be blocking something required for TLS (e.g., specific ports for TLS handshake)
-2. The policy checker might not be correctly allowing port 443 traffic
-3. There may be an issue with how TCP connections are tracked through the NAT when policy is enabled
+### Resolution
 
-### Files to Investigate
+1. **exec() marker fix** (`crates/capsa/src/console.rs`):
+   - Changed marker format to `X=__DONE_N__` and used `printf '\n%s\n'`
+   - The `X=` prefix ensures command echo (which has a quote before X) doesn't match the output pattern
 
-- `crates/net/src/policy.rs` - Policy enforcement logic
-- `crates/net/src/stack.rs` - Where policy is applied (lines 228-262)
-- `crates/net/src/nat.rs` - TCP NAT handling
+2. **Sequence number synchronization** (`crates/net/src/nat.rs`):
+   - Changed `our_seq` in `TcpNatEntry` from `u32` to `Arc<AtomicU32>`
+   - Both the forwarding task and ACK handlers now share the same atomic counter
+
+3. **MSS segmentation** (`crates/net/src/nat.rs`):
+   - Added segmentation loop for large responses
+   - TCP data is now split into 1460-byte MSS-sized segments before sending to guest
 
 ---
 
@@ -140,6 +134,9 @@ console.exec("nslookup example.com 8.8.8.8", ...).await?;
 
 ## Related: Console Timing Fix
 
-These issues were discovered while fixing console test flakiness. The original problem was that `wait_for()` patterns would match in command echoes, causing false positives.
+The HTTPS issue investigation revealed additional bugs in `VmConsole::exec()`. The original method used `__DONE_N__` markers, but these could match falsely when long commands wrapped at terminal width.
 
-**Solution implemented**: Added `VmConsole::exec()` method that uses unique markers (`__DONE_N__`) to reliably detect command completion. See `crates/capsa/src/console.rs`.
+**Current implementation** (`crates/capsa/src/console.rs`):
+- Uses marker format `X=__DONE_N__` with `printf '\n%s\n'`
+- Pattern `\nX=__DONE_N__` matches output but not command echo (which has `"X=...`)
+- Each command gets a unique incrementing ID to avoid cross-command matches

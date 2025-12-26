@@ -88,6 +88,53 @@ async fn test_usernat_dns_lookup() {
     }
 }
 
+/// Tests that guest can fetch HTTPS content (TCP NAT + TLS).
+///
+/// This is a baseline test to verify HTTPS works without any policy.
+/// If this test fails, the issue is with TLS/HTTPS handling in general,
+/// not specifically with policy enforcement.
+#[apple_main::harness_test]
+async fn test_usernat_https_fetch() {
+    #[cfg(feature = "vfkit")]
+    {
+        eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
+        return;
+    }
+
+    #[cfg(not(feature = "vfkit"))]
+    {
+        let vm = test_vm("default")
+            .network(NetworkMode::UserNat(UserNatConfig::default()))
+            .build()
+            .await
+            .expect("Failed to build VM");
+
+        let console = vm.console().await.expect("Failed to get console");
+
+        // Wait for boot and DHCP to complete
+        console
+            .wait_for_timeout("Network configured via DHCP", Duration::from_secs(30))
+            .await
+            .expect("VM did not configure network via DHCP");
+
+        // Fetch HTTPS content (uses TCP NAT + TLS handshake)
+        // This tests that TLS handshake works through the NAT
+        let output = console
+            .exec(
+                "wget -T 15 -q https://example.com -O /dev/null && echo HTTPS_SUCCESS",
+                Duration::from_secs(20),
+            )
+            .await
+            .expect("HTTPS fetch failed - TCP NAT may have TLS issues");
+        assert!(
+            output.contains("HTTPS_SUCCESS"),
+            "HTTPS fetch should succeed"
+        );
+
+        vm.kill().await.expect("Failed to kill VM");
+    }
+}
+
 /// Tests that guest can fetch HTTP content (TCP NAT).
 #[apple_main::harness_test]
 async fn test_usernat_http_fetch() {
@@ -394,15 +441,74 @@ async fn test_policy_deny_all_allow_dns() {
 /// With deny_all + allow_https + allow_dns:
 /// - HTTPS (port 443) should work
 /// - HTTP (port 80) should be blocked
-///
-/// NOTE: This test is currently skipped due to a known issue where HTTPS wget
-/// fails even when port 443 is allowed. The policy enforcement for HTTPS needs
-/// investigation. See the console timing investigation for details.
 #[apple_main::harness_test]
 async fn test_policy_allow_https_only() {
-    // TODO: Investigate why HTTPS wget fails with policy even when port 443 is allowed.
-    // This appears to be a policy enforcement bug, not a console timing issue.
-    eprintln!("Skipping: HTTPS with policy has a known issue - needs investigation");
+    #[cfg(feature = "linux-kvm")]
+    {
+        eprintln!("Skipping: KVM has timing issues with wget timeouts in policy tests");
+        return;
+    }
+
+    #[cfg(feature = "vfkit")]
+    {
+        eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
+        return;
+    }
+
+    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    {
+        // Policy: deny all except HTTPS and DNS
+        let policy = NetworkPolicy::deny_all().allow_dns().allow_https();
+
+        let vm = test_vm("default")
+            .network(NetworkMode::user_nat().policy(policy).build())
+            .build()
+            .await
+            .expect("Failed to build VM");
+
+        let console = vm.console().await.expect("Failed to get console");
+
+        // Wait for boot and DHCP to complete
+        console
+            .wait_for_timeout("Network configured via DHCP", Duration::from_secs(30))
+            .await
+            .expect("VM did not configure network via DHCP");
+
+        // HTTPS should work (allowed)
+        let output = console
+            .exec(
+                "wget -T 15 -q https://example.com -O /dev/null && echo HTTPS_ALLOWED",
+                Duration::from_secs(20),
+            )
+            .await
+            .expect("HTTPS fetch should be allowed but failed");
+        assert!(output.contains("HTTPS_ALLOWED"), "HTTPS should be allowed");
+
+        // Verify console still works after HTTPS
+        let output = console
+            .exec("echo CONSOLE_STILL_WORKS", Duration::from_secs(5))
+            .await
+            .expect("Console should still work after HTTPS");
+        assert!(
+            output.contains("CONSOLE_STILL_WORKS"),
+            "Console should respond after HTTPS"
+        );
+
+        // HTTP should be blocked - use timeout to detect failure
+        let output = console
+            .exec(
+                "wget -T 3 -q http://example.com -O /dev/null 2>&1 || echo HTTP_BLOCKED",
+                Duration::from_secs(10),
+            )
+            .await
+            .expect("HTTP check failed");
+        assert!(
+            output.contains("HTTP_BLOCKED"),
+            "HTTP should be blocked by policy"
+        );
+
+        vm.kill().await.expect("Failed to kill VM");
+    }
 }
 
 /// Tests policy that allows specific IP addresses.
@@ -472,6 +578,113 @@ async fn test_policy_allow_specific_ip() {
     }
 }
 
+/// Tests that console works with allow_all policy (no network traffic).
+#[apple_main::harness_test]
+async fn test_policy_console_only() {
+    #[cfg(feature = "vfkit")]
+    {
+        eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
+        return;
+    }
+
+    #[cfg(not(feature = "vfkit"))]
+    {
+        // Policy: allow all (explicit)
+        let policy = NetworkPolicy::allow_all();
+
+        let vm = test_vm("default")
+            .network(NetworkMode::user_nat().policy(policy).build())
+            .build()
+            .await
+            .expect("Failed to build VM");
+
+        let console = vm.console().await.expect("Failed to get console");
+
+        // Wait for boot and DHCP to complete
+        console
+            .wait_for_timeout("Network configured via DHCP", Duration::from_secs(30))
+            .await
+            .expect("VM did not configure network via DHCP");
+
+        // Multiple echo commands without any network traffic
+        for i in 0..5 {
+            let output = console
+                .exec(&format!("echo TEST_{}", i), Duration::from_secs(5))
+                .await
+                .expect(&format!("Console command {} should work", i));
+            assert!(
+                output.contains(&format!("TEST_{}", i)),
+                "Output should contain TEST_{}",
+                i
+            );
+        }
+
+        vm.kill().await.expect("Failed to kill VM");
+    }
+}
+
+/// Tests that allow_all policy permits HTTPS traffic.
+#[apple_main::harness_test]
+async fn test_policy_allow_all_https() {
+    #[cfg(feature = "vfkit")]
+    {
+        eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
+        return;
+    }
+
+    #[cfg(not(feature = "vfkit"))]
+    {
+        // Policy: allow all (explicit)
+        let policy = NetworkPolicy::allow_all();
+
+        let vm = test_vm("default")
+            .network(NetworkMode::user_nat().policy(policy).build())
+            .build()
+            .await
+            .expect("Failed to build VM");
+
+        let console = vm.console().await.expect("Failed to get console");
+
+        // Wait for boot and DHCP to complete
+        console
+            .wait_for_timeout("Network configured via DHCP", Duration::from_secs(30))
+            .await
+            .expect("VM did not configure network via DHCP");
+
+        // Verify console works before HTTPS
+        let output = console
+            .exec("echo BEFORE_HTTPS", Duration::from_secs(5))
+            .await
+            .expect("Console should work before HTTPS");
+        assert!(
+            output.contains("BEFORE_HTTPS"),
+            "Console should work before HTTPS"
+        );
+
+        // HTTPS should work with allow_all policy
+        let output = console
+            .exec(
+                "wget -T 15 -q https://example.com -O /dev/null && echo HTTPS_ALLOWED",
+                Duration::from_secs(20),
+            )
+            .await
+            .expect("HTTPS fetch should work with allow_all policy");
+        assert!(output.contains("HTTPS_ALLOWED"), "HTTPS should be allowed");
+
+        // Verify console still works after HTTPS
+        let output = console
+            .exec("echo AFTER_HTTPS", Duration::from_secs(10))
+            .await
+            .expect("Console should still work after HTTPS");
+        assert!(
+            output.contains("AFTER_HTTPS"),
+            "Console should respond after HTTPS"
+        );
+
+        vm.kill().await.expect("Failed to kill VM");
+    }
+}
+
 /// Tests that allow_all policy permits all traffic (default behavior).
 #[apple_main::harness_test]
 async fn test_policy_allow_all() {
@@ -516,13 +729,67 @@ async fn test_policy_allow_all() {
 
 /// Tests policy with multiple rules (deny specific port).
 ///
-/// NOTE: This test is currently skipped due to a known issue where HTTPS wget
-/// fails with policy enabled. The policy enforcement for HTTPS needs investigation.
+/// With allow_all default but deny port 80:
+/// - HTTPS (port 443) should work
+/// - HTTP (port 80) should be blocked
 #[apple_main::harness_test]
 async fn test_policy_deny_specific_port() {
-    // TODO: Investigate why HTTPS wget fails with policy even when not denied.
-    // This appears to be a policy enforcement bug, not a console timing issue.
-    eprintln!("Skipping: HTTPS with policy has a known issue - needs investigation");
+    #[cfg(feature = "linux-kvm")]
+    {
+        eprintln!("Skipping: KVM has timing issues with wget timeouts in policy tests");
+        return;
+    }
+
+    #[cfg(feature = "vfkit")]
+    {
+        eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
+        return;
+    }
+
+    #[cfg(not(any(feature = "linux-kvm", feature = "vfkit")))]
+    {
+        // Policy: allow all but deny port 80
+        let policy = NetworkPolicy::allow_all().deny_port(80);
+
+        let vm = test_vm("default")
+            .network(NetworkMode::user_nat().policy(policy).build())
+            .build()
+            .await
+            .expect("Failed to build VM");
+
+        let console = vm.console().await.expect("Failed to get console");
+
+        // Wait for boot and DHCP to complete
+        console
+            .wait_for_timeout("Network configured via DHCP", Duration::from_secs(30))
+            .await
+            .expect("VM did not configure network via DHCP");
+
+        // HTTPS should work (not denied)
+        let output = console
+            .exec(
+                "wget -T 15 -q https://example.com -O /dev/null && echo HTTPS_ALLOWED",
+                Duration::from_secs(20),
+            )
+            .await
+            .expect("HTTPS fetch should work");
+        assert!(output.contains("HTTPS_ALLOWED"), "HTTPS should be allowed");
+
+        // HTTP should be blocked (port 80 denied)
+        let output = console
+            .exec(
+                "wget -T 3 -q http://example.com -O /dev/null 2>&1 || echo HTTP_BLOCKED",
+                Duration::from_secs(10),
+            )
+            .await
+            .expect("HTTP check failed");
+        assert!(
+            output.contains("HTTP_BLOCKED"),
+            "HTTP should be blocked by policy"
+        );
+
+        vm.kill().await.expect("Failed to kill VM");
+    }
 }
 
 // =============================================================================
@@ -603,5 +870,106 @@ async fn test_port_forward_with_policy() {
         assert!(output.contains("PORT_FORWARD_WITH_POLICY_OK"));
 
         vm.kill().await.expect("Failed to kill VM");
+    }
+}
+
+/// Diagnostic test to understand HTTPS behavior.
+///
+/// Run with: cargo test-macos-native -p capsa --test network_test test_https_diagnostic -- --nocapture
+#[apple_main::harness_test]
+async fn test_https_diagnostic() {
+    #[cfg(feature = "vfkit")]
+    {
+        eprintln!("Skipping: vfkit backend doesn't support VZFileHandleNetworkDeviceAttachment");
+        return;
+    }
+
+    #[cfg(not(feature = "vfkit"))]
+    {
+        let vm = test_vm("default")
+            .network(NetworkMode::UserNat(UserNatConfig::default()))
+            .build()
+            .await
+            .expect("Failed to build VM");
+
+        let console = vm.console().await.expect("Failed to get console");
+
+        // Wait for boot and DHCP to complete
+        console
+            .wait_for_timeout("Network configured via DHCP", Duration::from_secs(30))
+            .await
+            .expect("VM did not configure network via DHCP");
+
+        // Check network config
+        eprintln!("\n=== Network Configuration ===");
+        let output = console
+            .exec(
+                "ip addr show eth0 2>&1 || cat /etc/network/interfaces",
+                Duration::from_secs(5),
+            )
+            .await
+            .expect("Failed to get network config");
+        eprintln!("{}", output);
+
+        // Check DNS
+        eprintln!("\n=== DNS Test ===");
+        let output = console
+            .exec("nslookup example.com 8.8.8.8 2>&1", Duration::from_secs(10))
+            .await
+            .expect("DNS test failed");
+        eprintln!("{}", output);
+
+        // Try HTTP (should work)
+        eprintln!("\n=== HTTP Test ===");
+        let output = console
+            .exec(
+                "wget -S http://example.com -O /dev/null 2>&1",
+                Duration::from_secs(15),
+            )
+            .await
+            .expect("HTTP test failed");
+        eprintln!("{}", output);
+
+        // Try HTTPS with verbose output (BusyBox wget uses -S for server response)
+        eprintln!("\n=== HTTPS Test ===");
+        let output = console
+            .exec(
+                "wget -S -T 10 --no-check-certificate https://example.com -O /dev/null 2>&1",
+                Duration::from_secs(20),
+            )
+            .await;
+        match output {
+            Ok(out) => eprintln!("Success:\n{}", out),
+            Err(e) => eprintln!("Failed: {:?}", e),
+        }
+
+        // Try nc to test TCP connection to port 443
+        eprintln!("\n=== TCP Connection Test (port 443) ===");
+        let output = console
+            .exec(
+                "nc -v -w 5 example.com 443 < /dev/null 2>&1",
+                Duration::from_secs(15),
+            )
+            .await;
+        match output {
+            Ok(out) => eprintln!("Success:\n{}", out),
+            Err(e) => eprintln!("nc failed: {:?}", e),
+        }
+
+        // Try HTTPS without TLS certificate check
+        eprintln!("\n=== HTTPS Simple Test ===");
+        let output = console
+            .exec(
+                "wget -q -T 10 --no-check-certificate https://example.com -O /dev/null && echo HTTPS_OK || echo HTTPS_FAIL",
+                Duration::from_secs(20),
+            )
+            .await;
+        match output {
+            Ok(out) => eprintln!("Result:\n{}", out),
+            Err(e) => eprintln!("Failed: {:?}", e),
+        }
+
+        vm.kill().await.expect("Failed to kill VM");
+        eprintln!("\n=== Diagnostic complete ===");
     }
 }

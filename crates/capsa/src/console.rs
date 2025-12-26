@@ -238,18 +238,21 @@ impl VmConsole {
     /// ```
     pub async fn exec(&self, cmd: &str, timeout_duration: Duration) -> Result<String> {
         let cmd_id = CMD_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let marker = format!("__DONE_{}__", cmd_id);
+        // Use a distinctive marker format: X=__DONE_N__
+        // When the terminal wraps long commands, the marker might appear at the
+        // start of a line in the command echo. By using format "X=marker", the
+        // command echo shows: echo "X=__DONE_N__" but output shows: X=__DONE_N__
+        // The pattern "\nX=__DONE_N__" matches output but not command echo (which
+        // has a quote before X).
+        let marker = format!("X=__DONE_{}__", cmd_id);
 
-        // Append marker to command. The marker appears in:
-        // - Command echo: "cmd ; echo __DONE_X__" (marker after "echo ")
-        // - Output: "__DONE_X__" (marker at line start)
-        // By waiting for "\n__DONE_X__", we match output only.
         let separator = if cmd.trim_end().ends_with('&') {
             ""
         } else {
             " ;"
         };
-        self.write_line(&format!("{}{} echo {}", cmd, separator, marker))
+        // Use printf for consistent output format (no trailing newline issues)
+        self.write_line(&format!("{}{} printf '\\n{}\\n'", cmd, separator, marker))
             .await?;
 
         // Wait for marker at start of line (output, not command echo)
