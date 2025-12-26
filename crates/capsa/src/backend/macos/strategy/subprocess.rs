@@ -115,17 +115,17 @@ impl ExecutionStrategy for SubprocessStrategy {
         // 5. The parent's copies will be closed when Pty/ClusterPort are dropped
         unsafe {
             cmd.pre_exec(move || {
-                if let Some(slave_fd) = pty_slave_fd {
-                    if slave_fd != 3 {
-                        nix::unistd::dup2(slave_fd, 3).map_err(std::io::Error::other)?;
-                        nix::unistd::close(slave_fd).map_err(std::io::Error::other)?;
-                    }
+                if let Some(slave_fd) = pty_slave_fd
+                    && slave_fd != 3
+                {
+                    nix::unistd::dup2(slave_fd, 3).map_err(std::io::Error::other)?;
+                    nix::unistd::close(slave_fd).map_err(std::io::Error::other)?;
                 }
-                if let Some(net_fd) = network_guest_fd {
-                    if net_fd != 4 {
-                        nix::unistd::dup2(net_fd, 4).map_err(std::io::Error::other)?;
-                        nix::unistd::close(net_fd).map_err(std::io::Error::other)?;
-                    }
+                if let Some(net_fd) = network_guest_fd
+                    && net_fd != 4
+                {
+                    nix::unistd::dup2(net_fd, 4).map_err(std::io::Error::other)?;
+                    nix::unistd::close(net_fd).map_err(std::io::Error::other)?;
                 }
                 Ok(())
             });
