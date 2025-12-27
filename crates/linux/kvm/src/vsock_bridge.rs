@@ -145,7 +145,7 @@ impl VsockBridge {
                 }
                 DeviceToBridge::Connected {
                     local_port,
-                    peer_port: _,
+                    _peer_port: _,
                 } => {
                     // Guest accepted our connection (connect mode)
                     let mut pending = pending_connect_hosts.lock().await;
@@ -494,7 +494,7 @@ mod tests {
         bridge_tx
             .send(DeviceToBridge::Connected {
                 local_port: 2048,
-                peer_port: 49152,
+                _peer_port: 49152,
             })
             .unwrap();
 

@@ -35,8 +35,12 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
+    // Use enable_io() and enable_time() instead of enable_all() because
+    // enable_all() also enables io_uring which may not be available in
+    // minimal kernels (requires CONFIG_IO_URING)
     let rt = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
+        .enable_io()
+        .enable_time()
         .build()?;
 
     rt.block_on(async_main())

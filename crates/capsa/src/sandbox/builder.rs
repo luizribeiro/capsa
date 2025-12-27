@@ -214,15 +214,16 @@ impl SandboxBuilder<HasMainProcess> {
     /// when available. Use `.kernel()` and `.initrd()` to override.
     pub async fn build(self) -> Result<VmHandle> {
         let (kernel, initrd) = self.resolve_kernel_initrd()?;
-
         let cmdline = self.generate_cmdline();
         let shares = self.generate_shares();
 
+        let socket_path = generate_temp_vsock_path(AGENT_VSOCK_PORT);
         let mut vsock = self.vsock;
-        vsock.add_port(capsa_core::VsockPortConfig::listen(
+        vsock.add_port(capsa_core::VsockPortConfig::connect(
             AGENT_VSOCK_PORT,
-            generate_temp_vsock_path(AGENT_VSOCK_PORT),
+            socket_path,
         ));
+        let vsock_for_handle = vsock.clone();
 
         let config = VmConfig {
             boot: BootMethod::LinuxDirect {
@@ -243,17 +244,21 @@ impl SandboxBuilder<HasMainProcess> {
         let backend = select_backend()?;
         let backend_handle = backend.start(&config).await?;
 
-        Ok(VmHandle::new(
-            backend_handle,
-            GuestOs::Linux,
-            self.resources,
-        ))
+        Ok(
+            VmHandle::new(backend_handle, GuestOs::Linux, self.resources)
+                .with_vsock_config(&vsock_for_handle),
+        )
     }
 
     fn generate_cmdline(&self) -> String {
+        use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
+
         let mut parts = vec![
             "console=hvc0".to_string(),
+            "reboot=t".to_string(),
             "panic=-1".to_string(),
+            "threadirqs".to_string(),
+            "acpi=off".to_string(),
             "quiet".to_string(),
         ];
 
@@ -264,13 +269,24 @@ impl SandboxBuilder<HasMainProcess> {
 
         match &self.main_process {
             Some(MainProcess::Run { path, args }) => {
-                let mut run_parts = vec![path.clone()];
-                run_parts.extend(args.iter().cloned());
+                // Percent-encode each argument to handle spaces and special characters
+                let encoded_path = utf8_percent_encode(path, NON_ALPHANUMERIC).to_string();
+                let encoded_args: Vec<String> = args
+                    .iter()
+                    .map(|s| utf8_percent_encode(s, NON_ALPHANUMERIC).to_string())
+                    .collect();
+                let mut run_parts = vec![encoded_path];
+                run_parts.extend(encoded_args);
                 parts.push(format!("capsa.run={}", run_parts.join(":")));
             }
             Some(MainProcess::Oci { image, args }) => {
-                let mut oci_parts = vec![image.clone()];
-                oci_parts.extend(args.iter().cloned());
+                let encoded_image = utf8_percent_encode(image, NON_ALPHANUMERIC).to_string();
+                let encoded_args: Vec<String> = args
+                    .iter()
+                    .map(|s| utf8_percent_encode(s, NON_ALPHANUMERIC).to_string())
+                    .collect();
+                let mut oci_parts = vec![encoded_image];
+                oci_parts.extend(encoded_args);
                 parts.push(format!("capsa.oci={}", oci_parts.join(":")));
             }
             None => unreachable!("HasMainProcess guarantees main_process is Some"),
@@ -433,7 +449,8 @@ mod tests {
             assert!(cmdline.contains("console=hvc0"));
             assert!(cmdline.contains("panic=-1"));
             assert!(cmdline.contains("quiet"));
-            assert!(cmdline.contains("capsa.run=/bin/sh"));
+            // Path is percent-encoded: / -> %2F
+            assert!(cmdline.contains("capsa.run=%2Fbin%2Fsh"));
         }
 
         #[test]
@@ -453,7 +470,8 @@ mod tests {
             let builder = SandboxBuilder::new().run("/bin/sh", &["-c", "echo hello"]);
             let cmdline = builder.generate_cmdline();
 
-            assert!(cmdline.contains("capsa.run=/bin/sh:-c:echo hello"));
+            // All non-alphanumeric chars are percent-encoded: / -> %2F, - -> %2D, space -> %20
+            assert!(cmdline.contains("capsa.run=%2Fbin%2Fsh:%2Dc:echo%20hello"));
         }
 
         #[test]
@@ -476,7 +494,8 @@ mod tests {
             let builder = SandboxBuilder::new().oci("python:3.11", &[]);
             let cmdline = builder.generate_cmdline();
 
-            assert!(cmdline.contains("capsa.oci=python:3.11"));
+            // Image name is percent-encoded: : -> %3A, . -> %2E
+            assert!(cmdline.contains("capsa.oci=python%3A3%2E11"));
             assert!(!cmdline.contains("capsa.run="));
         }
 
@@ -485,7 +504,8 @@ mod tests {
             let builder = SandboxBuilder::new().oci("python:3.11", &["python", "/app/main.py"]);
             let cmdline = builder.generate_cmdline();
 
-            assert!(cmdline.contains("capsa.oci=python:3.11:python:/app/main.py"));
+            // All non-alphanumeric chars are percent-encoded
+            assert!(cmdline.contains("capsa.oci=python%3A3%2E11:python:%2Fapp%2Fmain%2Epy"));
         }
 
         #[test]

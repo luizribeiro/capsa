@@ -137,6 +137,12 @@ esac
     # VSock (VM sockets for host-guest communication)
     VSOCKETS = true;
     VIRTIO_VSOCKETS = true;
+
+    # Event poll and eventfd (required by tokio and other async runtimes)
+    EPOLL = true;
+    EVENTFD = true;
+    SIGNALFD = true;
+    TIMERFD = true;
   };
 
   mkKernel = { name, linuxArch, kernelImage, kernelTarget, config ? {}, initramfsDir ? null }:
@@ -241,9 +247,9 @@ esac
       cp ${sandboxInit} initrd-root/init
       chmod +x initrd-root/init
 
-      # Sandbox agent
-      cp ${sandboxAgent} initrd-root/sandbox-agent
-      chmod +x initrd-root/sandbox-agent
+      # Sandbox agent (must match path in capsa-sandbox-init: /capsa-sandbox-agent)
+      cp ${sandboxAgent} initrd-root/capsa-sandbox-agent
+      chmod +x initrd-root/capsa-sandbox-agent
 
       (cd initrd-root && find . | cpio -o -H newc | lz4 -l) > $out
     '';

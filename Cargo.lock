@@ -199,6 +199,7 @@ dependencies = [
  "criterion",
  "dispatch",
  "nix 0.29.0",
+ "percent-encoding",
  "serde",
  "serde_json",
  "tarpc",
@@ -349,6 +350,7 @@ name = "capsa-sandbox-init"
 version = "0.1.0"
 dependencies = [
  "nix 0.29.0",
+ "percent-encoding",
 ]
 
 [[package]]

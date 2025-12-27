@@ -10,9 +10,10 @@
 use nix::mount::{MsFlags, mount};
 use nix::sys::signal::{self, Signal};
 use nix::sys::wait::{WaitPidFlag, WaitStatus, waitpid};
-use nix::unistd::{ForkResult, Pid, execv, fork};
+use nix::unistd::{ForkResult, Pid, dup2, execv, fork};
 use std::ffi::CString;
-use std::fs;
+use std::fs::{self, File};
+use std::os::unix::io::AsRawFd;
 use std::os::unix::process::CommandExt;
 use std::process::Command;
 
@@ -28,9 +29,13 @@ fn main() {
 }
 
 fn run() -> Result<(), Box<dyn std::error::Error>> {
-    println!("capsa-sandbox-init starting...");
-
+    // Mount basic filesystems first so /dev/console exists
     setup_basic_filesystems()?;
+
+    // Redirect stdout/stderr to console so we can see output
+    setup_console()?;
+
+    println!("capsa-sandbox-init starting...");
 
     let config = parse_cmdline()?;
     println!("config: {:?}", config);
@@ -68,6 +73,17 @@ fn setup_basic_filesystems() -> Result<(), Box<dyn std::error::Error>> {
     mount_and_create("sysfs", "/sys", "sysfs")?;
     mount_and_create("devtmpfs", "/dev", "devtmpfs")?;
     mount_and_create("tmpfs", "/tmp", "tmpfs")?;
+    Ok(())
+}
+
+fn setup_console() -> Result<(), Box<dyn std::error::Error>> {
+    let console = File::options().read(true).write(true).open("/dev/hvc0")?;
+
+    let fd = console.as_raw_fd();
+    dup2(fd, 0)?;
+    dup2(fd, 1)?;
+    dup2(fd, 2)?;
+
     Ok(())
 }
 

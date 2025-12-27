@@ -126,6 +126,10 @@ struct VsockConnection {
     fwd_cnt: u32,
     /// Peer's buf_alloc
     peer_buf_alloc: u32,
+    /// The host's port in this connection (src_port when sending to guest)
+    host_port: u32,
+    /// The guest's port in this connection (dst_port when sending to guest)
+    guest_port: u32,
 }
 
 /// Message from bridge to device.
@@ -145,7 +149,7 @@ pub enum DeviceToBridge {
     /// New connection request from guest (listen mode)
     Connect { local_port: u32 },
     /// Guest accepted our connection request (connect mode)
-    Connected { local_port: u32, peer_port: u32 },
+    Connected { local_port: u32, _peer_port: u32 },
     /// Data from guest to send to Unix socket
     Data { local_port: u32, data: Vec<u8> },
     /// Connection closed from guest side
@@ -282,7 +286,14 @@ impl VirtioVsock {
         // Track this pending connection
         self.pending_host_connects.insert(local_port, peer_port);
 
-        // Send REQUEST to guest (host is initiating connection to guest)
+        // Only send REQUEST if device is activated; otherwise it will be sent
+        // when the device becomes ready (see send_pending_connect_requests)
+        if self.is_activated() {
+            self.send_connect_request(local_port, peer_port);
+        }
+    }
+
+    fn send_connect_request(&mut self, local_port: u32, peer_port: u32) {
         let req = VsockHeader {
             src_cid: VSOCK_HOST_CID,
             dst_cid: VSOCK_GUEST_CID,
@@ -293,12 +304,23 @@ impl VirtioVsock {
             buf_alloc: VSOCK_BUF_ALLOC,
             ..Default::default()
         };
-
         self.rx_queue.push_back(req.to_bytes().to_vec());
     }
 
+    fn send_pending_connect_requests(&mut self) {
+        // Send REQUEST packets for all pending host-initiated connections
+        let pending: Vec<_> = self
+            .pending_host_connects
+            .iter()
+            .map(|(&local, &peer)| (local, peer))
+            .collect();
+
+        for (local_port, peer_port) in pending {
+            self.send_connect_request(local_port, peer_port);
+        }
+    }
+
     fn handle_bridge_data(&mut self, local_port: u32, data: Vec<u8>) {
-        // Find the connection for this port
         let key = self
             .connections
             .keys()
@@ -306,14 +328,15 @@ impl VirtioVsock {
             .copied();
 
         if let Some(key) = key {
-            let fwd_cnt = self.connections.get(&key).map(|c| c.fwd_cnt).unwrap_or(0);
-
-            // Build RW packet to send data to guest
+            let conn = self.connections.get(&key).unwrap();
+            let fwd_cnt = conn.fwd_cnt;
+            let host_port = conn.host_port;
+            let guest_port = conn.guest_port;
             let hdr = VsockHeader {
                 src_cid: VSOCK_HOST_CID,
                 dst_cid: VSOCK_GUEST_CID,
-                src_port: key.local_port,
-                dst_port: key.peer_port,
+                src_port: host_port,
+                dst_port: guest_port,
                 len: data.len() as u32,
                 type_: VSOCK_TYPE_STREAM,
                 op: VSOCK_OP_RW,
@@ -337,14 +360,14 @@ impl VirtioVsock {
             .copied();
 
         if let Some(key) = key {
-            self.connections.remove(&key);
+            let conn = self.connections.remove(&key).unwrap();
 
-            // Send RST to guest
+            // Send RST to guest using correct port semantics
             let hdr = VsockHeader {
                 src_cid: VSOCK_HOST_CID,
                 dst_cid: VSOCK_GUEST_CID,
-                src_port: key.local_port,
-                dst_port: key.peer_port,
+                src_port: conn.host_port,
+                dst_port: conn.guest_port,
                 type_: VSOCK_TYPE_STREAM,
                 op: VSOCK_OP_RST,
                 ..Default::default()
@@ -442,20 +465,18 @@ impl VirtioVsock {
 
     fn handle_connect_response(&mut self, hdr: &VsockHeader) {
         // Guest accepted our connection request (connect mode)
-        // hdr.src_port is the guest's port (what we call local_port)
-        // hdr.dst_port is our ephemeral port (peer_port)
         let local_port = hdr.src_port;
         let peer_port = hdr.dst_port;
 
-        // Check if we have a pending connection for this port
         if let Some(expected_peer_port) = self.pending_host_connects.remove(&local_port) {
             if expected_peer_port != peer_port {
-                // Port mismatch, reject
                 self.send_rst(hdr);
                 return;
             }
 
-            // Create connection state
+            // In connect mode: local_port is guest's port, peer_port is host's ephemeral port
+            let host_port = peer_port;
+            let guest_port = local_port;
             let key = ConnKey {
                 local_port,
                 peer_port,
@@ -463,16 +484,16 @@ impl VirtioVsock {
             let conn = VsockConnection {
                 fwd_cnt: 0,
                 peer_buf_alloc: hdr.buf_alloc,
+                host_port,
+                guest_port,
             };
             self.connections.insert(key, conn);
 
-            // Notify bridge that connection is established
             let _ = self.bridge_tx.send(DeviceToBridge::Connected {
                 local_port,
-                peer_port,
+                _peer_port: peer_port,
             });
         } else {
-            // No pending connection, reject
             self.send_rst(hdr);
         }
     }
@@ -501,9 +522,16 @@ impl VirtioVsock {
         });
 
         // Create connection state
+        // In listen mode: guest connects to host
+        // - hdr.dst_port = host's listening port (our port)
+        // - hdr.src_port = guest's ephemeral port (their port)
+        let host_port = hdr.dst_port;
+        let guest_port = hdr.src_port;
         let conn = VsockConnection {
             fwd_cnt: 0,
             peer_buf_alloc: hdr.buf_alloc,
+            host_port,
+            guest_port,
         };
         self.connections.insert(key, conn);
 
@@ -511,8 +539,8 @@ impl VirtioVsock {
         let resp = VsockHeader {
             src_cid: VSOCK_HOST_CID,
             dst_cid: VSOCK_GUEST_CID,
-            src_port: hdr.dst_port,
-            dst_port: hdr.src_port,
+            src_port: host_port,
+            dst_port: guest_port,
             type_: VSOCK_TYPE_STREAM,
             op: VSOCK_OP_RESPONSE,
             buf_alloc: VSOCK_BUF_ALLOC,
@@ -524,23 +552,26 @@ impl VirtioVsock {
     }
 
     fn handle_rw_packet(&mut self, hdr: &VsockHeader, packet_data: &[u8]) {
-        let key = ConnKey {
-            local_port: hdr.dst_port,
-            peer_port: hdr.src_port,
-        };
+        let src_port = hdr.src_port;
+        let dst_port = hdr.dst_port;
 
-        if let Some(conn) = self.connections.get_mut(&key) {
-            // Update peer's credit info
+        let key = self
+            .connections
+            .iter()
+            .find(|(_, conn)| conn.host_port == dst_port && conn.guest_port == src_port)
+            .map(|(k, _)| *k);
+
+        if let Some(key) = key {
+            let conn = self.connections.get_mut(&key).unwrap();
             conn.peer_buf_alloc = hdr.buf_alloc;
 
-            // Extract data and send to bridge
             let data_len = hdr.len as usize;
             if packet_data.len() >= VSOCK_HDR_SIZE + data_len {
                 let data = packet_data[VSOCK_HDR_SIZE..VSOCK_HDR_SIZE + data_len].to_vec();
                 conn.fwd_cnt = conn.fwd_cnt.wrapping_add(data_len as u32);
 
                 let _ = self.bridge_tx.send(DeviceToBridge::Data {
-                    local_port: hdr.dst_port,
+                    local_port: key.local_port,
                     data,
                 });
             }
@@ -548,56 +579,90 @@ impl VirtioVsock {
     }
 
     fn handle_shutdown(&mut self, hdr: &VsockHeader) {
-        let key = ConnKey {
-            local_port: hdr.dst_port,
-            peer_port: hdr.src_port,
-        };
+        // Find connection by matching host_port and guest_port
+        let src_port = hdr.src_port;
+        let dst_port = hdr.dst_port;
 
-        if self.connections.remove(&key).is_some() {
+        let key = self
+            .connections
+            .iter()
+            .find(|(_, conn)| conn.host_port == dst_port && conn.guest_port == src_port)
+            .map(|(k, _)| *k);
+
+        if let Some(key) = key {
+            self.connections.remove(&key);
             let _ = self.bridge_tx.send(DeviceToBridge::Shutdown {
-                local_port: hdr.dst_port,
+                local_port: key.local_port,
             });
             self.send_rst(hdr);
         }
     }
 
     fn handle_rst(&mut self, hdr: &VsockHeader) {
-        let key = ConnKey {
-            local_port: hdr.dst_port,
-            peer_port: hdr.src_port,
-        };
+        let src_port = hdr.src_port;
+        let dst_port = hdr.dst_port;
 
-        if self.connections.remove(&key).is_some() {
+        // Check if this RST is for a pending connect request
+        // In pending_host_connects: key=local_port (guest port), value=peer_port (host ephemeral)
+        // RST will have src_port=local_port, dst_port=peer_port
+        if let Some(&peer_port) = self.pending_host_connects.get(&src_port)
+            && peer_port == dst_port
+        {
+            self.pending_host_connects.remove(&src_port);
+            // Notify bridge to clean up and allow retry
             let _ = self.bridge_tx.send(DeviceToBridge::Shutdown {
-                local_port: hdr.dst_port,
+                local_port: src_port,
+            });
+            return;
+        }
+
+        // Find established connection by matching host_port and guest_port
+        let key = self
+            .connections
+            .iter()
+            .find(|(_, conn)| conn.host_port == dst_port && conn.guest_port == src_port)
+            .map(|(k, _)| *k);
+
+        if let Some(key) = key {
+            self.connections.remove(&key);
+            let _ = self.bridge_tx.send(DeviceToBridge::Shutdown {
+                local_port: key.local_port,
             });
         }
     }
 
     fn handle_credit_update(&mut self, hdr: &VsockHeader) {
-        let key = ConnKey {
-            local_port: hdr.dst_port,
-            peer_port: hdr.src_port,
-        };
+        // Find connection by matching host_port and guest_port
+        let src_port = hdr.src_port;
+        let dst_port = hdr.dst_port;
 
-        if let Some(conn) = self.connections.get_mut(&key) {
+        let conn = self
+            .connections
+            .values_mut()
+            .find(|conn| conn.host_port == dst_port && conn.guest_port == src_port);
+
+        if let Some(conn) = conn {
             conn.peer_buf_alloc = hdr.buf_alloc;
         }
     }
 
     fn handle_credit_request(&mut self, hdr: &VsockHeader) {
-        let key = ConnKey {
-            local_port: hdr.dst_port,
-            peer_port: hdr.src_port,
-        };
+        // Find connection by matching host_port and guest_port
+        let src_port = hdr.src_port;
+        let dst_port = hdr.dst_port;
 
-        if let Some(conn) = self.connections.get(&key) {
-            // Send credit update
+        let conn = self
+            .connections
+            .values()
+            .find(|conn| conn.host_port == dst_port && conn.guest_port == src_port);
+
+        if let Some(conn) = conn {
+            // Send credit update using the connection's stored ports
             let update = VsockHeader {
                 src_cid: VSOCK_HOST_CID,
                 dst_cid: VSOCK_GUEST_CID,
-                src_port: hdr.dst_port,
-                dst_port: hdr.src_port,
+                src_port: conn.host_port,
+                dst_port: conn.guest_port,
                 type_: VSOCK_TYPE_STREAM,
                 op: VSOCK_OP_CREDIT_UPDATE,
                 buf_alloc: VSOCK_BUF_ALLOC,
@@ -758,7 +823,12 @@ impl VirtioVsock {
                         return;
                     }
                 }
+                let queue_idx = self.queue_sel;
                 self.current_queue_mut().ready = val == 1;
+
+                if val == 1 && queue_idx == RX_QUEUE_INDEX as u32 && !self.rx_queue.is_empty() {
+                    self.process_rx_queue();
+                }
             }
             VIRTIO_MMIO_QUEUE_NOTIFY => {
                 if self.is_activated() {
@@ -767,7 +837,6 @@ impl VirtioVsock {
                     } else if val == RX_QUEUE_INDEX as u32 {
                         self.process_rx_queue();
                     }
-                    // EVENT_QUEUE not used for now
                 }
             }
             VIRTIO_MMIO_INTERRUPT_ACK => {
@@ -775,7 +844,8 @@ impl VirtioVsock {
             }
             VIRTIO_MMIO_STATUS => {
                 if val == 0 {
-                    // Device reset
+                    // Device reset - preserve pending_host_connects for connections
+                    // initiated before guest driver was ready
                     self.device_status = 0;
                     self.queues = [
                         VirtioQueueState::default(),
@@ -783,10 +853,16 @@ impl VirtioVsock {
                         VirtioQueueState::default(),
                     ];
                     self.connections.clear();
-                    self.pending_host_connects.clear();
                     self.rx_queue.clear();
                 } else {
+                    let was_activated = self.is_activated();
                     self.device_status = val;
+
+                    // When device becomes activated, send any pending connect requests
+                    if !was_activated && self.is_activated() {
+                        self.send_pending_connect_requests();
+                        self.process_rx_queue();
+                    }
                 }
             }
             VIRTIO_MMIO_QUEUE_DESC_LOW => {

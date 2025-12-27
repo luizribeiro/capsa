@@ -2,9 +2,13 @@
 //!
 //! Parses parameters:
 //! - `capsa.mount=tag:path` - virtiofs mount specification
-//! - `capsa.run=path:arg1:arg2` - main process to run
+//! - `capsa.run=path:arg1:arg2` - main process to run (arguments are percent-encoded)
 //! - `capsa.oci=image:arg1:arg2` - OCI container to run (not yet implemented)
+//!
+//! Arguments are percent-encoded to allow spaces and special characters.
+//! For example: `capsa.run=/bin/sh:-c:sleep%20infinity`
 
+use percent_encoding::percent_decode_str;
 use std::fs;
 use std::path::Path;
 
@@ -101,10 +105,13 @@ fn parse_cmdline_str(cmdline: &str) -> Result<CapsaConfig, ParseError> {
         } else if let Some(run_spec) = part.strip_prefix("capsa.run=") {
             let parts: Vec<&str> = run_spec.split(':').collect();
             if !parts.is_empty() {
-                main_process = Some(MainProcessConfig {
-                    path: parts[0].to_string(),
-                    args: parts[1..].iter().map(|s| s.to_string()).collect(),
-                });
+                // Decode percent-encoded arguments
+                let path = percent_decode_str(parts[0]).decode_utf8_lossy().to_string();
+                let args: Vec<String> = parts[1..]
+                    .iter()
+                    .map(|s| percent_decode_str(s).decode_utf8_lossy().to_string())
+                    .collect();
+                main_process = Some(MainProcessConfig { path, args });
             }
         }
     }
@@ -218,5 +225,25 @@ mod tests {
         let config = parse_cmdline_str("capsa.run=/bin/sh capsa.run=/bin/bash").unwrap();
         let main = config.main_process.unwrap();
         assert_eq!(main.path, "/bin/bash");
+    }
+
+    #[test]
+    fn parse_percent_encoded_run() {
+        // This is what the host actually sends: %2F = /, %2D = -, %20 = space
+        let config = parse_cmdline_str("capsa.run=%2Fbin%2Fsh:%2Dc:sleep%20infinity").unwrap();
+        let main = config.main_process.unwrap();
+        assert_eq!(main.path, "/bin/sh");
+        assert_eq!(main.args, vec!["-c", "sleep infinity"]);
+    }
+
+    #[test]
+    fn parse_percent_encoded_full_cmdline() {
+        // Realistic cmdline from sandbox builder
+        let cmdline = "console=hvc0 reboot=t panic=-1 threadirqs acpi=off quiet capsa.run=%2Fbin%2Fsh:%2Dc:sleep%20infinity";
+        let config = parse_cmdline_str(cmdline).unwrap();
+
+        let main = config.main_process.unwrap();
+        assert_eq!(main.path, "/bin/sh");
+        assert_eq!(main.args, vec!["-c", "sleep infinity"]);
     }
 }
