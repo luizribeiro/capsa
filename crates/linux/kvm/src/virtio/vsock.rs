@@ -113,6 +113,12 @@ impl VsockHeader {
     }
 }
 
+// TODO: Refactor connection key design. Currently `ConnKey { local_port, peer_port }` has
+// inconsistent semantics between listen mode (local=host's port, peer=guest's ephemeral) and
+// connect mode (local=guest's port, peer=host's ephemeral). We added `host_port`/`guest_port`
+// to VsockConnection to track semantic meaning, but this forces O(n) iteration to find
+// connections instead of O(1) HashMap lookup. Fix: use `(host_port, guest_port)` as the key.
+
 /// Connection key for tracking vsock connections.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 struct ConnKey {
