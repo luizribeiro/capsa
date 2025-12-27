@@ -21,7 +21,12 @@ let
   sandboxBinaries = pkgs.pkgsStatic.rustPlatform.buildRustPackage {
     name = "capsa-sandbox";
     src = ../..;
-    cargoLock.lockFile = ../../Cargo.lock;
+    cargoLock = {
+      lockFile = ../../Cargo.lock;
+      outputHashes = {
+        "apple-main-0.1.0" = "sha256-TnOkBourbvRGFj+eL1D1rAtM183jsrv2Ivq8+JkX/lY=";
+      };
+    };
     cargoBuildFlags = [ "-p" "capsa-sandbox-init" "-p" "capsa-sandbox-agent" ];
     doCheck = false;
   };

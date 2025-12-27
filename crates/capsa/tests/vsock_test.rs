@@ -27,7 +27,7 @@ async fn test_vsock_ping_pong() {
         .expect("VM did not boot");
 
     console
-        .exec("/bin/vsock-pong 1024 &", Duration::from_secs(5))
+        .exec("/bin/vsock-pong connect 1024 &", Duration::from_secs(5))
         .await
         .expect("Failed to start vsock-pong");
 
@@ -105,6 +105,70 @@ async fn test_vsock_multiple_ports() {
     assert_eq!(sockets.len(), 2);
     assert!(sockets.contains_key(&1024));
     assert!(sockets.contains_key(&1025));
+
+    vm.kill().await.expect("Failed to kill VM");
+}
+
+/// Tests host-to-guest vsock connection (connect mode).
+/// In this mode, the guest listens and the host initiates the connection.
+#[tokio::test]
+async fn test_vsock_host_to_guest() {
+    // Start VM with vsock connect mode on port 2049
+    let vm = test_vm("default")
+        .vsock_connect(2049)
+        .build()
+        .await
+        .expect("Failed to build VM");
+
+    let console = vm.console().await.expect("Failed to get console");
+
+    // Wait for boot
+    console
+        .wait_for_timeout("Boot successful", Duration::from_secs(30))
+        .await
+        .expect("VM did not boot");
+
+    // Start vsock-pong in listen mode (guest will listen for connections)
+    console
+        .exec("/bin/vsock-pong listen 2049 &", Duration::from_secs(5))
+        .await
+        .expect("Failed to start vsock-pong in listen mode");
+
+    // Give the guest time to start listening
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Get the vsock socket and connect (host initiates connection to guest)
+    let socket = vm
+        .vsock_socket(2049)
+        .expect("vsock socket for port 2049 not found");
+
+    let mut stream = socket
+        .connect()
+        .await
+        .expect("Failed to connect to vsock socket");
+
+    // Send ping
+    stream
+        .write_all(b"ping")
+        .await
+        .expect("Failed to write ping");
+
+    // Read pong response
+    let mut buf = [0u8; 16];
+    let n = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf))
+        .await
+        .expect("Timeout waiting for pong")
+        .expect("Failed to read pong");
+
+    let response = String::from_utf8_lossy(&buf[..n]);
+    assert_eq!(
+        response, "pong",
+        "Expected 'pong' response, got '{}'",
+        response
+    );
+
+    // Send quit to cleanly close the connection
+    let _ = stream.write_all(b"quit").await;
 
     vm.kill().await.expect("Failed to kill VM");
 }
