@@ -28,10 +28,8 @@ impl PathSets {
             paths.add_read_write(path);
         }
 
-        // Baseline runtime dependencies on macOS.
-        paths.add_read_only(Path::new("/usr/lib"));
-        paths.add_read_only(Path::new("/System"));
-
+        // Runtime dependencies discovered from the target binary and its linked dylibs.
+        // Keep this explicit rather than granting broad read access to /System or /usr/lib.
         for dylib in linked_dylibs_recursive(program) {
             paths.add_read_only(&dylib);
         }
@@ -84,6 +82,9 @@ impl PathSets {
     fn add_traversal_ancestors(&mut self, path: &Path) {
         if let Some(parent) = path.parent() {
             for ancestor in parent.ancestors() {
+                if ancestor == Path::new("/") {
+                    break;
+                }
                 Self::push_unique(&mut self.traversal_paths, ancestor.to_path_buf());
             }
         }

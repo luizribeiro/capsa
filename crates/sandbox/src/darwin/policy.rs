@@ -34,19 +34,23 @@ pub(super) fn build_policy(
     }
 
     for path in &paths.read_only_paths {
-        policy.allow_literal(&["file-read*"], path);
-        policy.allow_subpath(&["file-read*"], path);
-        policy.allow_literal(&["file-map-executable"], path);
-        policy.allow_subpath(&["file-map-executable"], path);
+        if is_directory(path) {
+            policy.allow_subpath(&["file-read*"], path);
+            policy.allow_subpath(&["file-map-executable"], path);
+        } else {
+            policy.allow_literal(&["file-read*"], path);
+            policy.allow_literal(&["file-map-executable"], path);
+        }
     }
 
     for path in &paths.read_write_paths {
-        policy.allow_literal(&["file-read*"], path);
-        policy.allow_subpath(&["file-read*"], path);
-        policy.allow_literal(&["file-write*"], path);
-        policy.allow_subpath(&["file-write*"], path);
-        policy.allow_literal(&["file-ioctl"], path);
-        policy.allow_subpath(&["file-ioctl"], path);
+        if is_directory(path) {
+            policy.allow_subpath(&["file-read*"], path);
+            policy.allow_subpath(&["file-write*"], path);
+        } else {
+            policy.allow_literal(&["file-read*"], path);
+            policy.allow_literal(&["file-write*"], path);
+        }
     }
 
     if spec.allow_network {
@@ -54,4 +58,10 @@ pub(super) fn build_policy(
     }
 
     policy
+}
+
+fn is_directory(path: &Path) -> bool {
+    std::fs::metadata(path)
+        .map(|metadata| metadata.is_dir())
+        .unwrap_or(false)
 }
