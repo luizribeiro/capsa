@@ -17,6 +17,11 @@ pub struct SandboxSpec {
     pub read_only_paths: Vec<PathBuf>,
     /// Paths that should be writable from inside the sandbox.
     pub read_write_paths: Vec<PathBuf>,
+    /// Paths that should be allowed to perform ioctl operations.
+    ///
+    /// Backends may apply this with different precision depending on platform
+    /// sandbox capabilities.
+    pub ioctl_paths: Vec<PathBuf>,
 }
 
 impl SandboxSpec {
