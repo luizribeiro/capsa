@@ -61,6 +61,8 @@ fn syd_rules(program: &Path, spec: &SandboxSpec) -> Vec<String> {
         rules.push("sandbox/net:on".to_string());
     }
 
+    rules.push("sandbox/lock:on".to_string());
+
     // Allow common filesystem types touched by capsa-vmm and host runtime.
     for fs in ["ext", "tmpfs", "proc", "sysfs", "cgroup"] {
         rules.push(format!("allow/fs+{fs}"));
@@ -129,6 +131,12 @@ fn syd_rules(program: &Path, spec: &SandboxSpec) -> Vec<String> {
         }
     }
 
+    for path in &spec.ioctl_paths {
+        for candidate in path_candidates(path) {
+            push_with_ancestors(&mut read_paths, &candidate);
+        }
+    }
+
     for dylib in linked_dylibs(program) {
         for candidate in path_candidates(&dylib) {
             push_with_ancestors(&mut read_paths, &candidate);
@@ -154,10 +162,21 @@ fn syd_rules(program: &Path, spec: &SandboxSpec) -> Vec<String> {
 
     for path in read_paths {
         add_allow_rule(&mut rules, "allow/read,stat", &path);
+        add_lock_allow_rule(&mut rules, "allow/lock/read", &path);
     }
 
     for path in exec_paths {
         add_allow_rule(&mut rules, "allow/exec", &path);
+        add_lock_allow_rule(&mut rules, "allow/lock/exec", &path);
+    }
+
+    let mut lock_ioctl_paths = vec![PathBuf::from("/dev/kvm")];
+    lock_ioctl_paths.extend(spec.ioctl_paths.iter().cloned());
+
+    for path in lock_ioctl_paths {
+        for candidate in path_candidates(&path) {
+            add_lock_allow_rule(&mut rules, "allow/lock/ioctl", &candidate);
+        }
     }
 
     rules.push("sandbox/write,create,truncate,delete:on".to_string());
@@ -172,6 +191,7 @@ fn syd_rules(program: &Path, spec: &SandboxSpec) -> Vec<String> {
     for path in write_paths {
         for candidate in path_candidates(&path) {
             add_allow_rule(&mut rules, "allow/write,create,truncate,delete", &candidate);
+            add_lock_allow_rule(&mut rules, "allow/lock/write", &candidate);
         }
     }
 
@@ -185,6 +205,15 @@ fn add_allow_rule(rules: &mut Vec<String>, prefix: &str, path: &Path) {
     if path.is_dir() {
         rules.push(format!("{prefix}+{escaped}/***"));
     }
+}
+
+fn add_lock_allow_rule(rules: &mut Vec<String>, prefix: &str, path: &Path) {
+    if !path.exists() {
+        return;
+    }
+
+    let escaped = escape_syd_path(path);
+    rules.push(format!("{prefix}+{escaped}"));
 }
 
 fn linked_dylibs(binary: &Path) -> Vec<PathBuf> {
