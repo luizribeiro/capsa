@@ -112,6 +112,7 @@ fn syd_rules(program: &Path, spec: &SandboxSpec) -> Vec<String> {
     }
 
     let mut read_paths = Vec::new();
+    let mut read_recursive_paths = Vec::new();
     let mut exec_paths = Vec::new();
 
     for candidate in path_candidates(program) {
@@ -122,12 +123,18 @@ fn syd_rules(program: &Path, spec: &SandboxSpec) -> Vec<String> {
     for path in &spec.read_only_paths {
         for candidate in path_candidates(path) {
             push_with_ancestors(&mut read_paths, &candidate);
+            if candidate.is_dir() {
+                push_unique(&mut read_recursive_paths, candidate);
+            }
         }
     }
 
     for path in &spec.read_write_paths {
         for candidate in path_candidates(path) {
             push_with_ancestors(&mut read_paths, &candidate);
+            if candidate.is_dir() {
+                push_unique(&mut read_recursive_paths, candidate);
+            }
         }
     }
 
@@ -160,9 +167,17 @@ fn syd_rules(program: &Path, spec: &SandboxSpec) -> Vec<String> {
         }
     }
 
+    for candidate in path_candidates(Path::new("/dev/kvm")) {
+        push_with_ancestors(&mut read_paths, &candidate);
+    }
+
     for path in read_paths {
         add_allow_rule(&mut rules, "allow/read,stat", &path);
         add_lock_allow_rule(&mut rules, "allow/lock/read", &path);
+    }
+
+    for path in read_recursive_paths {
+        add_allow_recursive_rule(&mut rules, "allow/read,stat", &path);
     }
 
     for path in exec_paths {
@@ -190,7 +205,15 @@ fn syd_rules(program: &Path, spec: &SandboxSpec) -> Vec<String> {
 
     for path in write_paths {
         for candidate in path_candidates(&path) {
-            add_allow_rule(&mut rules, "allow/write,create,truncate,delete", &candidate);
+            if candidate.is_dir() {
+                add_allow_recursive_rule(
+                    &mut rules,
+                    "allow/write,create,truncate,delete",
+                    &candidate,
+                );
+            } else {
+                add_allow_rule(&mut rules, "allow/write,create,truncate,delete", &candidate);
+            }
             add_lock_allow_rule(&mut rules, "allow/lock/write", &candidate);
         }
     }
@@ -201,8 +224,13 @@ fn syd_rules(program: &Path, spec: &SandboxSpec) -> Vec<String> {
 fn add_allow_rule(rules: &mut Vec<String>, prefix: &str, path: &Path) {
     let escaped = escape_syd_path(path);
     rules.push(format!("{prefix}+{escaped}"));
+}
+
+fn add_allow_recursive_rule(rules: &mut Vec<String>, prefix: &str, path: &Path) {
+    add_allow_rule(rules, prefix, path);
 
     if path.is_dir() {
+        let escaped = escape_syd_path(path);
         rules.push(format!("{prefix}+{escaped}/***"));
     }
 }
