@@ -1,71 +1,32 @@
-use std::ffi::{c_char, CString};
-use std::fs::File;
-use std::io::Read;
+use std::ffi::CString;
 use std::marker::PhantomData;
 use std::path::Path;
 use std::ptr;
 
 use anyhow::{anyhow, bail, Context, Result};
 
-#[cfg(unix)]
+use super::error::{check_rc, os_error_from_neg_errno};
+use super::ffi;
+use crate::boot::kernel_format::{detect_kernel_image_format, KernelImageFormat};
+
 use std::os::fd::AsRawFd;
-#[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
-
-const KRUN_LOG_LEVEL_ERROR: u32 = 1;
-const KRUN_LOG_LEVEL_INFO: u32 = 3;
-const KRUN_LOG_LEVEL_DEBUG: u32 = 4;
-const KRUN_LOG_STYLE_AUTO: u32 = 0;
-const KRUN_LOG_OPTION_NO_ENV: u32 = 1;
-const KRUN_KERNEL_FORMAT_RAW: u32 = 0;
-const KRUN_KERNEL_FORMAT_ELF: u32 = 1;
-const KRUN_KERNEL_FORMAT_IMAGE_BZ2: u32 = 3;
-const KRUN_KERNEL_FORMAT_IMAGE_GZ: u32 = 4;
-const KRUN_KERNEL_FORMAT_IMAGE_ZSTD: u32 = 5;
-const VIRGLRENDERER_VENUS: u32 = 1 << 6;
-const VIRGLRENDERER_NO_VIRGL: u32 = 1 << 7;
-
-unsafe extern "C" {
-    fn krun_create_ctx() -> i32;
-    fn krun_free_ctx(ctx_id: u32) -> i32;
-    fn krun_init_log(target_fd: i32, level: u32, style: u32, options: u32) -> i32;
-    fn krun_set_vm_config(ctx_id: u32, num_vcpus: u8, ram_mib: u32) -> i32;
-    fn krun_set_gpu_options2(ctx_id: u32, virgl_flags: u32, shm_size: u64) -> i32;
-    fn krun_set_root(ctx_id: u32, root_path: *const c_char) -> i32;
-    fn krun_set_kernel(
-        ctx_id: u32,
-        kernel_path: *const c_char,
-        kernel_format: u32,
-        initramfs: *const c_char,
-        cmdline: *const c_char,
-    ) -> i32;
-    fn krun_set_kernel_console(ctx_id: u32, console_id: *const c_char) -> i32;
-    fn krun_disable_implicit_console(ctx_id: u32) -> i32;
-    fn krun_add_virtio_console_default(
-        ctx_id: u32,
-        input_fd: i32,
-        output_fd: i32,
-        err_fd: i32,
-    ) -> i32;
-    fn krun_get_shutdown_eventfd(ctx_id: u32) -> i32;
-    fn krun_start_enter(ctx_id: u32) -> i32;
-}
 
 pub(crate) fn init_logging(verbosity: u8) -> Result<()> {
     let level = match verbosity {
-        0 => KRUN_LOG_LEVEL_ERROR,
-        1 => KRUN_LOG_LEVEL_INFO,
-        _ => KRUN_LOG_LEVEL_DEBUG,
+        0 => ffi::KRUN_LOG_LEVEL_ERROR,
+        1 => ffi::KRUN_LOG_LEVEL_INFO,
+        _ => ffi::KRUN_LOG_LEVEL_DEBUG,
     };
 
     // SAFETY: primitive scalar arguments to libkrun.
     check_rc(
         unsafe {
-            krun_init_log(
+            ffi::krun_init_log(
                 std::io::stderr().as_raw_fd(),
                 level,
-                KRUN_LOG_STYLE_AUTO,
-                KRUN_LOG_OPTION_NO_ENV,
+                ffi::KRUN_LOG_STYLE_AUTO,
+                ffi::KRUN_LOG_OPTION_NO_ENV,
             )
         },
         "failed to initialize libkrun logging",
@@ -88,7 +49,7 @@ struct KrunContext {
 impl Drop for KrunContext {
     fn drop(&mut self) {
         // SAFETY: id originates from successful krun_create_ctx.
-        let rc = unsafe { krun_free_ctx(self.id) };
+        let rc = unsafe { ffi::krun_free_ctx(self.id) };
         if cfg!(debug_assertions) && rc < 0 {
             eprintln!(
                 "warning: krun_free_ctx({}) failed: {}",
@@ -102,7 +63,7 @@ impl Drop for KrunContext {
 impl KrunVm<Created> {
     pub(crate) fn new() -> Result<Self> {
         // SAFETY: no args.
-        let ctx_id = unsafe { krun_create_ctx() };
+        let ctx_id = unsafe { ffi::krun_create_ctx() };
         if ctx_id < 0 {
             bail!(
                 "failed to create libkrun context: {}",
@@ -119,15 +80,15 @@ impl KrunVm<Created> {
     pub(crate) fn configure(self, vcpus: u8, memory_mib: u32) -> Result<KrunVm<Configured>> {
         // SAFETY: primitive scalar arguments.
         check_rc(
-            unsafe { krun_set_vm_config(self.ctx.id, vcpus, memory_mib) },
+            unsafe { ffi::krun_set_vm_config(self.ctx.id, vcpus, memory_mib) },
             "failed to set VM config",
         )?;
 
         // Mirror krunkit defaults on macOS.
-        let virgl_flags = VIRGLRENDERER_VENUS | VIRGLRENDERER_NO_VIRGL;
+        let virgl_flags = ffi::VIRGLRENDERER_VENUS | ffi::VIRGLRENDERER_NO_VIRGL;
         let rounded_mem_gib = (u64::from(memory_mib) / 1024 + 1) * 1024;
         let vram = (63488u64.saturating_sub(rounded_mem_gib)) * 1024 * 1024;
-        let _ = unsafe { krun_set_gpu_options2(self.ctx.id, virgl_flags, vram) };
+        let _ = unsafe { ffi::krun_set_gpu_options2(self.ctx.id, virgl_flags, vram) };
 
         Ok(self.into_state())
     }
@@ -139,20 +100,20 @@ impl KrunVm<Configured> {
 
         // SAFETY: pointer valid for duration of call.
         check_rc(
-            unsafe { krun_set_kernel_console(self.ctx.id, kernel_console.as_ptr()) },
+            unsafe { ffi::krun_set_kernel_console(self.ctx.id, kernel_console.as_ptr()) },
             "failed to set kernel console",
         )?;
 
         // SAFETY: disable implicit console so we only have one deterministic
         // console path for both input and output.
         check_rc(
-            unsafe { krun_disable_implicit_console(self.ctx.id) },
+            unsafe { ffi::krun_disable_implicit_console(self.ctx.id) },
             "failed to disable implicit console",
         )?;
 
         // SAFETY: pass through host stdio file descriptors for interactive console.
         check_rc(
-            unsafe { krun_add_virtio_console_default(self.ctx.id, 0, 1, 2) },
+            unsafe { ffi::krun_add_virtio_console_default(self.ctx.id, 0, 1, 2) },
             "failed to attach virtio console to host stdio",
         )?;
 
@@ -165,7 +126,8 @@ impl KrunVm<Configured> {
         initramfs: Option<&Path>,
         kernel_cmdline: Option<&str>,
     ) -> Result<KrunVm<BootConfigured>> {
-        let kernel_format = detect_kernel_format(kernel)
+        let kernel_format = detect_kernel_image_format(kernel)
+            .map(map_kernel_image_format)
             .with_context(|| format!("failed to detect kernel format for {}", kernel.display()))?;
         let kernel = path_to_cstring(kernel).context("kernel path contains NUL")?;
         let initramfs = initramfs
@@ -178,7 +140,7 @@ impl KrunVm<Configured> {
         // SAFETY: pointers are valid for duration of call.
         check_rc(
             unsafe {
-                krun_set_kernel(
+                ffi::krun_set_kernel(
                     self.ctx.id,
                     kernel.as_ptr(),
                     kernel_format,
@@ -197,7 +159,7 @@ impl KrunVm<Configured> {
 
         // SAFETY: pointer valid for duration of call.
         check_rc(
-            unsafe { krun_set_root(self.ctx.id, root.as_ptr()) },
+            unsafe { ffi::krun_set_root(self.ctx.id, root.as_ptr()) },
             "failed to configure VM root",
         )?;
 
@@ -208,10 +170,10 @@ impl KrunVm<Configured> {
 impl KrunVm<BootConfigured> {
     pub(crate) fn start_enter(self) -> Result<()> {
         // SAFETY: optional preflight used by krunkit.
-        let _ = unsafe { krun_get_shutdown_eventfd(self.ctx.id) };
+        let _ = unsafe { ffi::krun_get_shutdown_eventfd(self.ctx.id) };
 
         check_rc(
-            unsafe { krun_start_enter(self.ctx.id) },
+            unsafe { ffi::krun_start_enter(self.ctx.id) },
             "failed to start VM",
         )
     }
@@ -226,68 +188,16 @@ impl<State> KrunVm<State> {
     }
 }
 
-fn check_rc(rc: i32, context: &str) -> Result<()> {
-    if rc < 0 {
-        bail!("{context}: {}", os_error_from_neg_errno(rc));
+fn map_kernel_image_format(format: KernelImageFormat) -> u32 {
+    match format {
+        KernelImageFormat::Raw => ffi::KRUN_KERNEL_FORMAT_RAW,
+        KernelImageFormat::Elf => ffi::KRUN_KERNEL_FORMAT_ELF,
+        KernelImageFormat::ImageBz2 => ffi::KRUN_KERNEL_FORMAT_IMAGE_BZ2,
+        KernelImageFormat::ImageGz => ffi::KRUN_KERNEL_FORMAT_IMAGE_GZ,
+        KernelImageFormat::ImageZstd => ffi::KRUN_KERNEL_FORMAT_IMAGE_ZSTD,
     }
-    Ok(())
 }
 
-fn detect_kernel_format(kernel: &Path) -> Result<u32> {
-    // Read enough bytes to also detect embedded compressed payloads in wrapped
-    // kernel images (e.g. x86_64 bzImage that starts with an MZ header).
-    const MAX_PROBE_BYTES: usize = 2 * 1024 * 1024;
-
-    let mut file = File::open(kernel)?;
-    let mut buf = vec![0u8; MAX_PROBE_BYTES];
-    let n = file.read(&mut buf)?;
-    buf.truncate(n);
-
-    if starts_with_magic(&buf, &[0x7F, b'E', b'L', b'F']) {
-        return Ok(KRUN_KERNEL_FORMAT_ELF);
-    }
-
-    if starts_with_magic(&buf, &[0x28, 0xB5, 0x2F, 0xFD]) {
-        return Ok(KRUN_KERNEL_FORMAT_IMAGE_ZSTD);
-    }
-
-    if starts_with_magic(&buf, &[0x1F, 0x8B]) {
-        return Ok(KRUN_KERNEL_FORMAT_IMAGE_GZ);
-    }
-
-    if starts_with_magic(&buf, b"BZh") {
-        return Ok(KRUN_KERNEL_FORMAT_IMAGE_BZ2);
-    }
-
-    // PE/COFF-wrapped kernels often carry a compressed payload later in the
-    // image. Detect the embedded stream and choose the corresponding libkrun
-    // image format.
-    if starts_with_magic(&buf, b"MZ") {
-        if contains_magic(&buf, &[0x28, 0xB5, 0x2F, 0xFD]) {
-            return Ok(KRUN_KERNEL_FORMAT_IMAGE_ZSTD);
-        }
-
-        if contains_magic(&buf, &[0x1F, 0x8B]) {
-            return Ok(KRUN_KERNEL_FORMAT_IMAGE_GZ);
-        }
-
-        if contains_magic(&buf, b"BZh") {
-            return Ok(KRUN_KERNEL_FORMAT_IMAGE_BZ2);
-        }
-    }
-
-    Ok(KRUN_KERNEL_FORMAT_RAW)
-}
-
-fn starts_with_magic(buf: &[u8], magic: &[u8]) -> bool {
-    buf.len() >= magic.len() && &buf[..magic.len()] == magic
-}
-
-fn contains_magic(buf: &[u8], magic: &[u8]) -> bool {
-    !magic.is_empty() && buf.windows(magic.len()).any(|window| window == magic)
-}
-
-#[cfg(unix)]
 fn path_to_cstring(path: &Path) -> Result<CString> {
     CString::new(path.as_os_str().as_bytes()).map_err(|e| anyhow!(e))
 }
@@ -298,8 +208,4 @@ fn path_to_cstring(path: &Path) -> Result<CString> {
         .to_str()
         .ok_or_else(|| anyhow!("path is not valid UTF-8 on this platform"))?;
     CString::new(s).map_err(|e| anyhow!(e))
-}
-
-fn os_error_from_neg_errno(rc: i32) -> std::io::Error {
-    std::io::Error::from_raw_os_error(-rc)
 }

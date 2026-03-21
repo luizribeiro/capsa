@@ -1,12 +1,12 @@
 use anyhow::Result;
 
-use crate::{ffi, VmConfig};
+use crate::{libkrun, VmConfig};
 
 #[doc(hidden)]
 pub fn start_vm(config: &VmConfig) -> Result<()> {
-    ffi::init_logging(config.verbosity)?;
+    libkrun::init_logging(config.verbosity)?;
 
-    let vm = ffi::KrunVm::new()?
+    let vm = libkrun::KrunVm::new()?
         .configure(config.vcpus, config.memory_mib)?
         .configure_host_tty_console()?;
 

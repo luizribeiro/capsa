@@ -1,6 +1,7 @@
+mod boot;
 mod config;
-mod ffi;
 mod launcher;
+mod libkrun;
 mod runtime;
 
 pub use config::VmConfig;
