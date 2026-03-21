@@ -8,6 +8,7 @@ pub(super) struct PathSets {
     pub(super) executable_paths: Vec<PathBuf>,
     pub(super) read_only_paths: Vec<PathBuf>,
     pub(super) read_write_paths: Vec<PathBuf>,
+    pub(super) ioctl_paths: Vec<PathBuf>,
     pub(super) traversal_paths: Vec<PathBuf>,
 }
 
@@ -28,6 +29,10 @@ impl PathSets {
             paths.add_read_write(path);
         }
 
+        for path in &spec.ioctl_paths {
+            paths.add_ioctl(path);
+        }
+
         // Runtime dependencies discovered from the target binary and its linked dylibs.
         // Keep this explicit rather than granting broad read access to /System or /usr/lib.
         for dylib in linked_dylibs_recursive(program) {
@@ -36,9 +41,9 @@ impl PathSets {
 
         // Interactive terminal support for libkrun console handling.
         for tty in stdio_tty_paths() {
-            paths.add_read_write(&tty);
+            paths.add_ioctl(&tty);
         }
-        paths.add_read_write(Path::new("/dev/tty"));
+        paths.add_ioctl(Path::new("/dev/tty"));
 
         paths.add_read_write(private_tmp);
 
@@ -55,6 +60,13 @@ impl PathSets {
     fn add_read_write(&mut self, path: &Path) {
         for candidate in Self::path_candidates(path) {
             Self::push_unique(&mut self.read_write_paths, candidate.clone());
+            self.add_traversal_ancestors(&candidate);
+        }
+    }
+
+    fn add_ioctl(&mut self, path: &Path) {
+        for candidate in Self::path_candidates(path) {
+            Self::push_unique(&mut self.ioctl_paths, candidate.clone());
             self.add_traversal_ancestors(&candidate);
         }
     }
