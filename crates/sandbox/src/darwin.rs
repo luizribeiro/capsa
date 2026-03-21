@@ -43,8 +43,12 @@ pub fn spawn_with_sandbox_exec(
 #[derive(Debug, Clone, Default)]
 struct ExpandedSpec {
     allow_network: bool,
+    /// Explicitly allowlisted read-only targets.
     read_only_paths: Vec<PathBuf>,
+    /// Explicitly allowlisted read-write targets.
     read_write_paths: Vec<PathBuf>,
+    /// Ancestors needed only for path traversal/lookup.
+    traversal_paths: Vec<PathBuf>,
 }
 
 fn expand_spec_for_darwin(program: &Path, spec: &SandboxSpec) -> ExpandedSpec {
@@ -89,6 +93,13 @@ fn render_seatbelt_profile(spec: &ExpandedSpec) -> String {
     out.push_str("(allow pseudo-tty)\n");
     out.push_str("(allow file-read* file-write* file-ioctl (literal \"/dev/tty\"))\n");
     out.push_str("(allow file-read* file-write* file-ioctl (regex \"^/dev/ttys[0-9]*\"))\n");
+
+    for path in &spec.traversal_paths {
+        let escaped = escape_sb_string(path);
+        out.push_str("(allow file-read-metadata (literal \"");
+        out.push_str(&escaped);
+        out.push_str("\"))\n");
+    }
 
     for path in &spec.read_only_paths {
         let escaped = escape_sb_string(path);
@@ -155,16 +166,15 @@ fn render_seatbelt_profile(spec: &ExpandedSpec) -> String {
 
 fn add_read_only(spec: &mut ExpandedSpec, path: &Path) {
     for candidate in path_candidates(path) {
-        push_with_ancestors(&mut spec.read_only_paths, &candidate);
+        push_unique(&mut spec.read_only_paths, candidate.clone());
+        add_traversal_ancestors(spec, &candidate);
     }
 }
 
 fn add_read_write(spec: &mut ExpandedSpec, path: &Path) {
     for candidate in path_candidates(path) {
         push_unique(&mut spec.read_write_paths, candidate.clone());
-        if let Some(parent) = candidate.parent() {
-            push_with_ancestors(&mut spec.read_only_paths, parent);
-        }
+        add_traversal_ancestors(spec, &candidate);
     }
 }
 
@@ -188,9 +198,11 @@ fn path_candidates(path: &Path) -> Vec<PathBuf> {
     out
 }
 
-fn push_with_ancestors(paths: &mut Vec<PathBuf>, path: &Path) {
-    for ancestor in path.ancestors() {
-        push_unique(paths, ancestor.to_path_buf());
+fn add_traversal_ancestors(spec: &mut ExpandedSpec, path: &Path) {
+    if let Some(parent) = path.parent() {
+        for ancestor in parent.ancestors() {
+            push_unique(&mut spec.traversal_paths, ancestor.to_path_buf());
+        }
     }
 }
 
