@@ -28,13 +28,20 @@ fn spawn_with_syd_binary(
     args: &[String],
     spec: &SandboxSpec,
 ) -> Result<SandboxedChild> {
+    let private_tmp = create_private_tmp_dir()?;
     let mut command = Command::new(syd);
 
-    for rule in syd_rules(program, spec) {
+    for rule in syd_rules(program, spec, &private_tmp) {
         command.arg("-m").arg(rule);
     }
 
-    command.arg("--").arg(program).args(args);
+    command
+        .env("TMPDIR", &private_tmp)
+        .env("TMP", &private_tmp)
+        .env("TEMP", &private_tmp)
+        .arg("--")
+        .arg(program)
+        .args(args);
 
     let child = command.spawn().with_context(|| {
         format!(
@@ -44,10 +51,10 @@ fn spawn_with_syd_binary(
         )
     })?;
 
-    Ok(SandboxedChild::new(child, vec![]))
+    Ok(SandboxedChild::new(child, vec![private_tmp]))
 }
 
-fn syd_rules(program: &Path, spec: &SandboxSpec) -> Vec<String> {
+fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<String> {
     // Keep policy focused on path-based controls plus fs/ioctl allowlists.
     let mut rules = vec![
         "sandbox/read,stat:on".to_string(),
@@ -171,6 +178,13 @@ fn syd_rules(program: &Path, spec: &SandboxSpec) -> Vec<String> {
         push_with_ancestors(&mut read_paths, &candidate);
     }
 
+    for candidate in path_candidates(private_tmp) {
+        push_with_ancestors(&mut read_paths, &candidate);
+        if candidate.is_dir() {
+            push_unique(&mut read_recursive_paths, candidate);
+        }
+    }
+
     for path in read_paths {
         add_allow_rule(&mut rules, "allow/read,stat", &path);
         add_lock_allow_rule(&mut rules, "allow/lock/read", &path);
@@ -196,11 +210,7 @@ fn syd_rules(program: &Path, spec: &SandboxSpec) -> Vec<String> {
 
     rules.push("sandbox/write,create,truncate,delete:on".to_string());
 
-    let mut write_paths = vec![
-        PathBuf::from("/tmp"),
-        PathBuf::from("/var/tmp"),
-        PathBuf::from("/dev/kvm"),
-    ];
+    let mut write_paths = vec![PathBuf::from("/dev/kvm"), private_tmp.to_path_buf()];
     write_paths.extend(spec.read_write_paths.iter().cloned());
 
     for path in write_paths {
@@ -335,6 +345,27 @@ fn escape_syd_path(path: &Path) -> String {
         .replace('\\', "\\\\")
         .replace(':', "\\:")
         .replace(',', "\\,")
+}
+
+fn create_private_tmp_dir() -> Result<PathBuf> {
+    let base = std::env::temp_dir().join("capsa-sandbox");
+    std::fs::create_dir_all(&base)
+        .with_context(|| format!("failed to create sandbox temp base {}", base.display()))?;
+
+    let unique = format!(
+        "linux-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    );
+    let dir = base.join(unique);
+
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("failed to create private temp dir {}", dir.display()))?;
+
+    Ok(dir)
 }
 
 fn find_in_path(binary_name: &str) -> Option<PathBuf> {
