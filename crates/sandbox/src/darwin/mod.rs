@@ -8,6 +8,10 @@ use anyhow::{Context, Result};
 
 use crate::{SandboxSpec, SandboxedChild};
 
+mod seatbelt;
+
+use seatbelt::SeatbeltPolicy;
+
 pub fn spawn_with_sandbox_exec(
     program: &Path,
     args: &[String],
@@ -17,7 +21,13 @@ pub fn spawn_with_sandbox_exec(
     let private_tmp = create_private_tmp_dir()?;
     add_read_write(&mut effective, &private_tmp);
 
-    let profile = render_seatbelt_profile(&effective);
+    let policy = SeatbeltPolicy::from_parts(
+        effective.allow_network,
+        &effective.traversal_paths,
+        &effective.read_only_paths,
+        &effective.read_write_paths,
+    );
+    let profile: String = policy.into();
     let profile_path = write_temp_profile(&profile)?;
 
     let child = Command::new("/usr/bin/sandbox-exec")
@@ -80,86 +90,6 @@ fn expand_spec_for_darwin(program: &Path, spec: &SandboxSpec) -> ExpandedSpec {
         add_read_write(&mut out, &tty);
     }
     add_read_write(&mut out, Path::new("/dev/tty"));
-
-    out
-}
-
-fn render_seatbelt_profile(spec: &ExpandedSpec) -> String {
-    let mut out = String::new();
-    out.push_str("(version 1)\n");
-    out.push_str("(deny default)\n");
-    out.push_str("(import \"system.sb\")\n");
-    out.push_str("(allow process*)\n");
-    out.push_str("(allow pseudo-tty)\n");
-    out.push_str("(allow file-read* file-write* file-ioctl (literal \"/dev/tty\"))\n");
-    out.push_str("(allow file-read* file-write* file-ioctl (regex \"^/dev/ttys[0-9]*\"))\n");
-
-    for path in &spec.traversal_paths {
-        let escaped = escape_sb_string(path);
-        out.push_str("(allow file-read-metadata (literal \"");
-        out.push_str(&escaped);
-        out.push_str("\"))\n");
-    }
-
-    for path in &spec.read_only_paths {
-        let escaped = escape_sb_string(path);
-        out.push_str("(allow file-read* (literal \"");
-        out.push_str(&escaped);
-        out.push_str("\"))\n");
-        out.push_str("(allow file-read* (subpath \"");
-        out.push_str(&escaped);
-        out.push_str("\"))\n");
-        out.push_str("(allow process-exec (literal \"");
-        out.push_str(&escaped);
-        out.push_str("\"))\n");
-        out.push_str("(allow process-exec (subpath \"");
-        out.push_str(&escaped);
-        out.push_str("\"))\n");
-        out.push_str("(allow file-map-executable (literal \"");
-        out.push_str(&escaped);
-        out.push_str("\"))\n");
-        out.push_str("(allow file-map-executable (subpath \"");
-        out.push_str(&escaped);
-        out.push_str("\"))\n");
-    }
-
-    for path in &spec.read_write_paths {
-        let escaped = escape_sb_string(path);
-        out.push_str("(allow file-read* (literal \"");
-        out.push_str(&escaped);
-        out.push_str("\"))\n");
-        out.push_str("(allow file-read* (subpath \"");
-        out.push_str(&escaped);
-        out.push_str("\"))\n");
-        out.push_str("(allow file-write* (literal \"");
-        out.push_str(&escaped);
-        out.push_str("\"))\n");
-        out.push_str("(allow file-write* (subpath \"");
-        out.push_str(&escaped);
-        out.push_str("\"))\n");
-        out.push_str("(allow file-ioctl (literal \"");
-        out.push_str(&escaped);
-        out.push_str("\"))\n");
-        out.push_str("(allow file-ioctl (subpath \"");
-        out.push_str(&escaped);
-        out.push_str("\"))\n");
-        out.push_str("(allow process-exec (literal \"");
-        out.push_str(&escaped);
-        out.push_str("\"))\n");
-        out.push_str("(allow process-exec (subpath \"");
-        out.push_str(&escaped);
-        out.push_str("\"))\n");
-        out.push_str("(allow file-map-executable (literal \"");
-        out.push_str(&escaped);
-        out.push_str("\"))\n");
-        out.push_str("(allow file-map-executable (subpath \"");
-        out.push_str(&escaped);
-        out.push_str("\"))\n");
-    }
-
-    if spec.allow_network {
-        out.push_str("(allow network*)\n");
-    }
 
     out
 }
@@ -343,11 +273,4 @@ fn write_temp_profile(profile: &str) -> Result<PathBuf> {
         .with_context(|| format!("failed writing seatbelt profile to {}", path.display()))?;
 
     Ok(path)
-}
-
-fn escape_sb_string(path: &Path) -> String {
-    path.display()
-        .to_string()
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
 }
