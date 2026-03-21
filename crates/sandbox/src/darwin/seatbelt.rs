@@ -82,56 +82,27 @@ pub(super) struct SeatbeltPolicy {
 }
 
 impl SeatbeltPolicy {
-    pub(super) fn from_parts(
-        allow_network: bool,
-        traversal_paths: &[PathBuf],
-        read_only_paths: &[PathBuf],
-        read_write_paths: &[PathBuf],
-    ) -> Self {
-        let mut rules = vec![
-            SeatbeltRule::allow(&["process*"]),
-            SeatbeltRule::allow(&["pseudo-tty"]),
-            SeatbeltRule::allow_literal(
-                &["file-read*", "file-write*", "file-ioctl"],
-                Path::new("/dev/tty"),
-            ),
-            SeatbeltRule::allow_regex(
-                &["file-read*", "file-write*", "file-ioctl"],
-                "^/dev/ttys[0-9]*",
-            ),
-        ];
+    pub(super) fn new() -> Self {
+        Self::default()
+    }
 
-        for path in traversal_paths {
-            rules.push(SeatbeltRule::allow_literal(&["file-read-metadata"], path));
-        }
+    pub(super) fn allow(&mut self, operations: &[&'static str]) {
+        self.rules.push(SeatbeltRule::allow(operations));
+    }
 
-        for path in read_only_paths {
-            rules.push(SeatbeltRule::allow_literal(&["file-read*"], path));
-            rules.push(SeatbeltRule::allow_subpath(&["file-read*"], path));
-            rules.push(SeatbeltRule::allow_literal(&["process-exec"], path));
-            rules.push(SeatbeltRule::allow_subpath(&["process-exec"], path));
-            rules.push(SeatbeltRule::allow_literal(&["file-map-executable"], path));
-            rules.push(SeatbeltRule::allow_subpath(&["file-map-executable"], path));
-        }
+    pub(super) fn allow_literal(&mut self, operations: &[&'static str], path: &Path) {
+        self.rules
+            .push(SeatbeltRule::allow_literal(operations, path));
+    }
 
-        for path in read_write_paths {
-            rules.push(SeatbeltRule::allow_literal(&["file-read*"], path));
-            rules.push(SeatbeltRule::allow_subpath(&["file-read*"], path));
-            rules.push(SeatbeltRule::allow_literal(&["file-write*"], path));
-            rules.push(SeatbeltRule::allow_subpath(&["file-write*"], path));
-            rules.push(SeatbeltRule::allow_literal(&["file-ioctl"], path));
-            rules.push(SeatbeltRule::allow_subpath(&["file-ioctl"], path));
-            rules.push(SeatbeltRule::allow_literal(&["process-exec"], path));
-            rules.push(SeatbeltRule::allow_subpath(&["process-exec"], path));
-            rules.push(SeatbeltRule::allow_literal(&["file-map-executable"], path));
-            rules.push(SeatbeltRule::allow_subpath(&["file-map-executable"], path));
-        }
+    pub(super) fn allow_subpath(&mut self, operations: &[&'static str], path: &Path) {
+        self.rules
+            .push(SeatbeltRule::allow_subpath(operations, path));
+    }
 
-        if allow_network {
-            rules.push(SeatbeltRule::allow(&["network*"]));
-        }
-
-        Self { rules }
+    pub(super) fn allow_regex(&mut self, operations: &[&'static str], pattern: &'static str) {
+        self.rules
+            .push(SeatbeltRule::allow_regex(operations, pattern));
     }
 }
 
