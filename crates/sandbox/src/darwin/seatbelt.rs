@@ -78,12 +78,24 @@ impl SeatbeltRule {
 
 #[derive(Debug, Clone, Default)]
 pub(super) struct SeatbeltPolicy {
+    imports: Vec<String>,
     rules: Vec<SeatbeltRule>,
 }
 
 impl SeatbeltPolicy {
     pub(super) fn new() -> Self {
         Self::default()
+    }
+
+    pub(super) fn import<S: Into<String>>(&mut self, profile: S) {
+        let profile = profile.into();
+        if !self.imports.iter().any(|existing| existing == &profile) {
+            self.imports.push(profile);
+        }
+    }
+
+    pub(super) fn import_system(&mut self) {
+        self.import("system.sb");
     }
 
     pub(super) fn allow(&mut self, operations: &[&'static str]) {
@@ -111,7 +123,12 @@ impl From<SeatbeltPolicy> for String {
         let mut out = String::new();
         out.push_str("(version 1)\n");
         out.push_str("(deny default)\n");
-        out.push_str("(import \"system.sb\")\n");
+
+        for import in policy.imports {
+            out.push_str("(import \"");
+            out.push_str(&escape_sb_text(&import));
+            out.push_str("\")\n");
+        }
 
         for rule in policy.rules {
             out.push_str(&rule.render());
@@ -122,8 +139,9 @@ impl From<SeatbeltPolicy> for String {
 }
 
 fn escape_sb_string(path: &Path) -> String {
-    path.display()
-        .to_string()
-        .replace('\\', "\\\\")
-        .replace('"', "\\\"")
+    escape_sb_text(&path.display().to_string())
+}
+
+fn escape_sb_text(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
 }

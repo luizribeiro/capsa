@@ -13,8 +13,8 @@ pub(super) fn build_policy(
     let paths = PathSets::from_inputs(program, spec, private_tmp);
 
     let mut policy = SeatbeltPolicy::new();
+    policy.import_system();
 
-    policy.allow(&["process*"]);
     policy.allow(&["pseudo-tty"]);
     policy.allow_literal(
         &["file-read*", "file-write*", "file-ioctl"],
