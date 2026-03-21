@@ -5,6 +5,7 @@ use crate::SandboxSpec;
 
 #[derive(Debug, Default)]
 pub(super) struct PathSets {
+    pub(super) executable_paths: Vec<PathBuf>,
     pub(super) read_only_paths: Vec<PathBuf>,
     pub(super) read_write_paths: Vec<PathBuf>,
     pub(super) traversal_paths: Vec<PathBuf>,
@@ -14,6 +15,9 @@ impl PathSets {
     pub(super) fn from_inputs(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Self {
         let mut paths = Self::default();
 
+        for candidate in Self::path_candidates(program) {
+            Self::push_unique(&mut paths.executable_paths, candidate);
+        }
         paths.add_read_only(program);
 
         for path in &spec.read_only_paths {

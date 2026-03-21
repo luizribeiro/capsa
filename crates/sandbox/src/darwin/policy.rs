@@ -29,11 +29,13 @@ pub(super) fn build_policy(
         policy.allow_literal(&["file-read-metadata"], path);
     }
 
+    for path in &paths.executable_paths {
+        policy.allow_literal(&["process-exec"], path);
+    }
+
     for path in &paths.read_only_paths {
         policy.allow_literal(&["file-read*"], path);
         policy.allow_subpath(&["file-read*"], path);
-        policy.allow_literal(&["process-exec"], path);
-        policy.allow_subpath(&["process-exec"], path);
         policy.allow_literal(&["file-map-executable"], path);
         policy.allow_subpath(&["file-map-executable"], path);
     }
@@ -45,8 +47,6 @@ pub(super) fn build_policy(
         policy.allow_subpath(&["file-write*"], path);
         policy.allow_literal(&["file-ioctl"], path);
         policy.allow_subpath(&["file-ioctl"], path);
-        policy.allow_literal(&["process-exec"], path);
-        policy.allow_subpath(&["process-exec"], path);
         policy.allow_literal(&["file-map-executable"], path);
         policy.allow_subpath(&["file-map-executable"], path);
     }
