@@ -8,6 +8,7 @@ use anyhow::{Context, Result};
 
 use crate::{SandboxSpec, SandboxedChild};
 
+mod paths;
 mod policy;
 mod seatbelt;
 
