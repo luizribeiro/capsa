@@ -65,13 +65,7 @@ fn can_read(path: &Path) -> Result<(), String> {
 }
 
 fn can_write(path: &Path) -> Result<(), String> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-
     let mut file = OpenOptions::new()
-        .create(true)
-        .truncate(true)
         .write(true)
         .open(path)
         .map_err(|e| e.to_string())?;
@@ -116,7 +110,15 @@ fn can_write_temp() -> Result<(), String> {
             .unwrap_or_default()
             .as_nanos()
     ));
-    can_write(&path)
+
+    let mut file = OpenOptions::new()
+        .create_new(true)
+        .write(true)
+        .open(&path)
+        .map_err(|e| e.to_string())?;
+    file.write_all(b"capsa-sandbox-probe-temp\n")
+        .map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn usage_and_exit() -> ! {
