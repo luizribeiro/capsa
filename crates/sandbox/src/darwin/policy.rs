@@ -47,8 +47,6 @@ pub(super) fn build_policy(
         policy.allow_subpath(&["file-write*"], path);
         policy.allow_literal(&["file-ioctl"], path);
         policy.allow_subpath(&["file-ioctl"], path);
-        policy.allow_literal(&["file-map-executable"], path);
-        policy.allow_subpath(&["file-map-executable"], path);
     }
 
     if spec.allow_network {
