@@ -62,10 +62,21 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
         "sandbox/fs:on".to_string(),
         "sandbox/ioctl:on".to_string(),
         "sandbox/write,create,truncate,delete:off".to_string(),
+        "default/read:deny".to_string(),
+        "default/stat:deny".to_string(),
+        "default/exec:deny".to_string(),
+        "default/write:deny".to_string(),
+        "default/create:deny".to_string(),
+        "default/truncate:deny".to_string(),
+        "default/delete:deny".to_string(),
+        "default/ioctl:deny".to_string(),
+        "trace/deny_dotdot:on".to_string(),
+        "trace/force_cloexec:on".to_string(),
     ];
 
     if !spec.allow_network {
         rules.push("sandbox/net:on".to_string());
+        rules.push("default/net:deny".to_string());
     }
 
     rules.push("sandbox/lock:on".to_string());
