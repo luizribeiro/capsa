@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use clap::{ArgAction, ArgGroup, Parser};
 
 #[derive(Debug, Parser)]
@@ -35,6 +35,10 @@ struct Cli {
     #[arg(long, default_value_t = 512, value_parser = clap::value_parser!(u32).range(1..))]
     memory_mib: u32,
 
+    /// Enable default network interface.
+    #[arg(long)]
+    net: bool,
+
     /// Increase verbosity (-v: normal logs, -vv: debug logs). Default is quiet.
     #[arg(short, long, action = ArgAction::Count)]
     verbose: u8,
@@ -50,12 +54,56 @@ impl Cli {
             vcpus: self.vcpus,
             memory_mib: self.memory_mib,
             verbosity: self.verbose,
-            interfaces: vec![],
+            interfaces: if self.net {
+                vec![capsa::NetworkInterfaceConfig { mac: None }]
+            } else {
+                vec![]
+            },
         }
     }
 }
 
-fn main() -> Result<()> {
-    let args = Cli::parse();
+fn run(args: Cli) -> Result<()> {
+    if args.net {
+        bail!("networking is not yet implemented");
+    }
+
     args.to_vm_config().start()
+}
+
+fn main() -> Result<()> {
+    run(Cli::parse())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{run, Cli};
+    use clap::Parser;
+
+    #[test]
+    fn net_flag_adds_one_default_interface_to_vm_config() {
+        let args = Cli::parse_from(["capsa", "--root", "/tmp/root", "--net"]);
+        let config = args.to_vm_config();
+
+        assert_eq!(config.interfaces.len(), 1);
+        assert_eq!(config.interfaces[0].mac, None);
+    }
+
+    #[test]
+    fn missing_net_flag_keeps_interfaces_empty() {
+        let args = Cli::parse_from(["capsa", "--root", "/tmp/root"]);
+        let config = args.to_vm_config();
+
+        assert!(config.interfaces.is_empty());
+    }
+
+    #[test]
+    fn net_flag_currently_errors_until_network_runtime_is_wired() {
+        let args = Cli::parse_from(["capsa", "--root", "/tmp/root", "--net"]);
+        let err = run(args).expect_err("--net should be guarded for now");
+
+        assert!(err
+            .to_string()
+            .contains("networking is not yet implemented"));
+    }
 }

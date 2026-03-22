@@ -1,1 +1,1 @@
-pub use capsa_core::VmConfig;
+pub use capsa_core::{NetworkInterfaceConfig, VmConfig};
