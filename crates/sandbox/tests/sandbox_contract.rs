@@ -66,6 +66,5 @@ fn write_allowlist_is_scoped_to_explicit_rw_paths() {
         &["can-write", &denied_file.display().to_string()]
     ));
 
-    // NOTE: When we add macOS CI coverage for sandbox tests, keep this contract
-    // unchanged and only adjust platform-specific assertions if needed.
+    // Cross-platform contract: writes must stay scoped to explicit read_write_paths.
 }

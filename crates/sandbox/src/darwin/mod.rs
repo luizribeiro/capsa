@@ -1,8 +1,8 @@
-use std::fs::{self, OpenOptions};
+use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 
@@ -52,20 +52,12 @@ fn create_private_tmp_dir() -> Result<PathBuf> {
 
     cleanup_stale_private_tmp_dirs(&base);
 
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system clock is before UNIX_EPOCH")?
-        .as_nanos();
+    let dir = tempfile::Builder::new()
+        .prefix("tmp-")
+        .tempdir_in(&base)
+        .with_context(|| format!("failed to create private temp dir in {}", base.display()))?;
 
-    let private_tmp = base.join(format!("tmp-{}-{}", std::process::id(), ts));
-    fs::create_dir_all(&private_tmp).with_context(|| {
-        format!(
-            "failed to create private sandbox temp dir {}",
-            private_tmp.display()
-        )
-    })?;
-
-    Ok(private_tmp)
+    Ok(dir.keep())
 }
 
 fn cleanup_stale_private_tmp_dirs(base: &Path) {
@@ -99,27 +91,19 @@ fn cleanup_stale_private_tmp_dirs(base: &Path) {
 }
 
 fn write_temp_profile(profile: &str) -> Result<PathBuf> {
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system clock is before UNIX_EPOCH")?
-        .as_nanos();
-
-    let mut path = std::env::temp_dir();
-    path.push(format!("capsa-seatbelt-{}-{}.sb", std::process::id(), ts));
-
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&path)
-        .with_context(|| {
-            format!(
-                "failed to create temporary seatbelt profile at {}",
-                path.display()
-            )
-        })?;
+    let mut file = tempfile::Builder::new()
+        .prefix("capsa-seatbelt-")
+        .suffix(".sb")
+        .tempfile_in(std::env::temp_dir())
+        .context("failed to create temporary seatbelt profile")?;
 
     file.write_all(profile.as_bytes())
-        .with_context(|| format!("failed writing seatbelt profile to {}", path.display()))?;
+        .context("failed writing seatbelt profile")?;
+
+    let (_persisted_file, path) = file
+        .keep()
+        .map_err(|err| err.error)
+        .context("failed to persist temporary seatbelt profile")?;
 
     Ok(path)
 }

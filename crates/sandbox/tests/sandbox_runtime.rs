@@ -31,11 +31,10 @@ fn writes_do_not_target_global_tmp_without_explicit_allowlist() {
         &spec,
         &["can-write", &host_tmp_file.display().to_string()]
     ));
+}
 
-    // macOS suggestion:
-    // once this suite is enabled on macOS CI, mirror this contract and assert
-    // writes are denied outside explicit read_write_paths.
-    // Linux follow-up suggestion:
-    // add a probe action to print and validate TMPDIR propagation end-to-end,
-    // then assert private temp writes succeed there.
+#[test]
+fn writes_can_target_private_tmpdir() {
+    let spec = capsa_sandbox::SandboxSpec::new();
+    assert!(run_probe(&spec, &["can-write-temp"]));
 }
