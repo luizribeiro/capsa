@@ -3,6 +3,7 @@ members = [
   "crates/capsa",
   "crates/cli",
   "crates/core",
+  "crates/net",
   "crates/sandbox",
   "crates/vmm",
 ]
