@@ -1,37 +1,25 @@
 use std::path::PathBuf;
 
 pub struct TestDir {
-    path: PathBuf,
+    dir: tempfile::TempDir,
 }
 
 impl TestDir {
     pub fn new(prefix: &str) -> Self {
-        let mut path = std::env::temp_dir();
-        path.push("capsa-sandbox-tests");
-        path.push(format!(
-            "{}-{}-{}",
-            prefix,
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        ));
+        let base = std::env::temp_dir().join("capsa-sandbox-tests");
+        std::fs::create_dir_all(&base)
+            .unwrap_or_else(|e| panic!("failed to create test base dir {}: {e}", base.display()));
 
-        std::fs::create_dir_all(&path)
-            .unwrap_or_else(|e| panic!("failed to create test dir {}: {e}", path.display()));
+        let dir = tempfile::Builder::new()
+            .prefix(&format!("{prefix}-"))
+            .tempdir_in(&base)
+            .unwrap_or_else(|e| panic!("failed to create test dir under {}: {e}", base.display()));
 
-        Self { path }
+        Self { dir }
     }
 
     pub fn join(&self, rel: &str) -> PathBuf {
-        self.path.join(rel)
-    }
-}
-
-impl Drop for TestDir {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.path);
+        self.dir.path().join(rel)
     }
 }
 
