@@ -35,4 +35,27 @@
       vm_exit
     '';
   };
+
+  vm-implicit-devices = vmLib.mkVMCheck {
+    name = "capsa-implicit-devices";
+    timeout = 60;
+    expectProgram = ''
+      vm_run {
+        balloon=0
+        rng=0
+        vsock=0
+        for d in /sys/bus/virtio/devices/*; do
+          case "$(cat "$d/device")" in
+            0x0005) balloon=1 ;;
+            0x0004) rng=1 ;;
+            0x0013) vsock=1 ;;
+          esac
+        done
+        echo DEVICES_OK:''${balloon}''${rng}''${vsock}
+      } {DEVICES_OK:111}
+      vm_exit
+    '';
+  };
 }
+
+
