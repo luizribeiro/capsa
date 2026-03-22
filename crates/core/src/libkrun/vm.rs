@@ -120,6 +120,40 @@ impl KrunVm<Configured> {
         Ok(self)
     }
 
+    #[allow(dead_code)]
+    pub(crate) fn add_network_unixstream(
+        self,
+        fd: i32,
+        mac: &mut [u8; 6],
+        features: u32,
+        flags: u32,
+    ) -> Result<Self> {
+        add_network_unixstream_with(
+            self.ctx.id,
+            fd,
+            mac,
+            features,
+            flags,
+            |ctx_id, fd, mac_ptr, features, flags| {
+                // We create SOCK_DGRAM endpoints in launcher (`UnixDatagram::pair`),
+                // so use the unixgram backend explicitly.
+                // SAFETY: passes primitive scalars and caller-provided valid MAC pointer.
+                unsafe {
+                    ffi::krun_add_net_unixgram(
+                        ctx_id,
+                        std::ptr::null(), // no path, fd-based
+                        fd,
+                        mac_ptr,
+                        features,
+                        flags,
+                    )
+                }
+            },
+        )?;
+
+        Ok(self)
+    }
+
     pub(crate) fn set_kernel(
         self,
         kernel: &Path,
@@ -188,6 +222,22 @@ impl<State> KrunVm<State> {
     }
 }
 
+#[allow(dead_code)]
+fn add_network_unixstream_with<F>(
+    ctx_id: u32,
+    fd: i32,
+    mac: &mut [u8; 6],
+    features: u32,
+    flags: u32,
+    call: F,
+) -> Result<()>
+where
+    F: FnOnce(u32, i32, *mut u8, u32, u32) -> i32,
+{
+    let rc = call(ctx_id, fd, mac.as_mut_ptr(), features, flags);
+    check_rc(rc, "failed to add network device")
+}
+
 fn map_kernel_image_format(format: KernelImageFormat) -> u32 {
     match format {
         KernelImageFormat::Raw => ffi::KRUN_KERNEL_FORMAT_RAW,
@@ -202,10 +252,51 @@ fn path_to_cstring(path: &Path) -> Result<CString> {
     CString::new(path.as_os_str().as_bytes()).map_err(|e| anyhow!(e))
 }
 
-#[cfg(not(unix))]
-fn path_to_cstring(path: &Path) -> Result<CString> {
-    let s = path
-        .to_str()
-        .ok_or_else(|| anyhow!("path is not valid UTF-8 on this platform"))?;
-    CString::new(s).map_err(|e| anyhow!(e))
+#[cfg(test)]
+mod tests {
+    use super::add_network_unixstream_with;
+
+    #[test]
+    fn add_network_unixstream_succeeds_on_non_negative_rc() {
+        let mut mac = [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee];
+        let result = add_network_unixstream_with(7, 9, &mut mac, 1, 2, |_, _, _, _, _| 0);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn add_network_unixstream_forwards_all_arguments() {
+        let mut mac = [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee];
+        let expected_mac_ptr = mac.as_mut_ptr() as usize;
+        let mut observed = None;
+
+        add_network_unixstream_with(
+            7,
+            9,
+            &mut mac,
+            0x1234,
+            0x5678,
+            |ctx_id, fd, mac_ptr, features, flags| {
+                observed = Some((ctx_id, fd, mac_ptr as usize, features, flags));
+                0
+            },
+        )
+        .expect("ffi wrapper should succeed");
+
+        assert_eq!(
+            observed,
+            Some((7, 9, expected_mac_ptr, 0x1234, 0x5678)),
+            "wrapper should forward ctx/fd/mac/features/flags unchanged"
+        );
+    }
+
+    #[test]
+    fn add_network_unixstream_maps_negative_rc_to_contextual_error() {
+        let mut mac = [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee];
+        let err = add_network_unixstream_with(7, 9, &mut mac, 0, 0, |_, _, _, _, _| -22)
+            .expect_err("negative rc should fail");
+
+        let msg = err.to_string();
+        assert!(msg.contains("failed to add network device"));
+        assert!(msg.contains("os error 22"));
+    }
 }

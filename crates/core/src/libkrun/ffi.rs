@@ -13,6 +13,27 @@ pub(super) const KRUN_KERNEL_FORMAT_IMAGE_ZSTD: u32 = 5;
 pub(super) const VIRGLRENDERER_VENUS: u32 = 1 << 6;
 pub(super) const VIRGLRENDERER_NO_VIRGL: u32 = 1 << 7;
 
+#[allow(dead_code)]
+pub(super) const NET_FEATURE_CSUM: u32 = 1 << 0;
+#[allow(dead_code)]
+pub(super) const NET_FEATURE_GUEST_CSUM: u32 = 1 << 1;
+#[allow(dead_code)]
+pub(super) const NET_FEATURE_GUEST_TSO4: u32 = 1 << 7;
+#[allow(dead_code)]
+pub(super) const NET_FEATURE_GUEST_UFO: u32 = 1 << 10;
+#[allow(dead_code)]
+pub(super) const NET_FEATURE_HOST_TSO4: u32 = 1 << 11;
+#[allow(dead_code)]
+pub(super) const NET_FEATURE_HOST_UFO: u32 = 1 << 14;
+
+#[allow(dead_code)]
+pub(super) const COMPAT_NET_FEATURES: u32 = NET_FEATURE_CSUM
+    | NET_FEATURE_GUEST_CSUM
+    | NET_FEATURE_GUEST_TSO4
+    | NET_FEATURE_GUEST_UFO
+    | NET_FEATURE_HOST_TSO4
+    | NET_FEATURE_HOST_UFO;
+
 unsafe extern "C" {
     pub(super) fn krun_create_ctx() -> i32;
     pub(super) fn krun_free_ctx(ctx_id: u32) -> i32;
@@ -35,6 +56,43 @@ unsafe extern "C" {
         output_fd: i32,
         err_fd: i32,
     ) -> i32;
+    #[allow(dead_code)]
+    pub(super) fn krun_add_net_unixstream(
+        ctx_id: u32,
+        c_path: *const c_char,
+        fd: i32,
+        c_mac: *mut u8,
+        features: u32,
+        flags: u32,
+    ) -> i32;
+    #[allow(dead_code)]
+    pub(super) fn krun_add_net_unixgram(
+        ctx_id: u32,
+        c_path: *const c_char,
+        fd: i32,
+        c_mac: *mut u8,
+        features: u32,
+        flags: u32,
+    ) -> i32;
     pub(super) fn krun_get_shutdown_eventfd(ctx_id: u32) -> i32;
     pub(super) fn krun_start_enter(ctx_id: u32) -> i32;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        COMPAT_NET_FEATURES, NET_FEATURE_CSUM, NET_FEATURE_GUEST_CSUM, NET_FEATURE_GUEST_TSO4,
+        NET_FEATURE_GUEST_UFO, NET_FEATURE_HOST_TSO4, NET_FEATURE_HOST_UFO,
+    };
+
+    #[test]
+    fn compat_net_features_is_expected_union() {
+        let expected = NET_FEATURE_CSUM
+            | NET_FEATURE_GUEST_CSUM
+            | NET_FEATURE_GUEST_TSO4
+            | NET_FEATURE_GUEST_UFO
+            | NET_FEATURE_HOST_TSO4
+            | NET_FEATURE_HOST_UFO;
+        assert_eq!(COMPAT_NET_FEATURES, expected);
+    }
 }
