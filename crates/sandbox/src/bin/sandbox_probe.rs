@@ -1,7 +1,8 @@
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::net::TcpStream;
-use std::path::Path;
+use std::os::unix::fs::OpenOptionsExt;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
@@ -101,14 +102,34 @@ fn can_connect(host: &str, port: &str) -> Result<(), String> {
 }
 
 fn can_write_temp() -> Result<(), String> {
-    let mut file = tempfile::Builder::new()
-        .prefix("capsa-sandbox-probe-")
-        .tempfile_in(std::env::temp_dir())
-        .map_err(|e| e.to_string())?;
+    let mut path = effective_temp_dir();
+    path.push(format!(
+        "capsa-sandbox-probe-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+
+    let mut options = OpenOptions::new();
+    options.create_new(true).write(true).mode(0o600);
+
+    let mut file = options.open(&path).map_err(|e| e.to_string())?;
 
     file.write_all(b"capsa-sandbox-probe-temp\n")
         .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+fn effective_temp_dir() -> PathBuf {
+    // Some sandbox/runtime combinations may clear TMPDIR while leaving TMP/TEMP.
+    ["TMPDIR", "TMP", "TEMP"]
+        .iter()
+        .filter_map(|key| std::env::var_os(key))
+        .find(|val| !val.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(std::env::temp_dir)
 }
 
 fn usage_and_exit() -> ! {

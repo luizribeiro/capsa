@@ -232,10 +232,11 @@ fn syd_rules(program: &Path, spec: &SandboxSpec, private_tmp: &Path) -> Vec<Stri
                     "allow/write,create,truncate,delete",
                     &candidate,
                 );
+                add_lock_allow_rule(&mut rules, "allow/lock/write,create", &candidate);
             } else {
                 add_allow_rule(&mut rules, "allow/write,create,truncate,delete", &candidate);
+                add_lock_allow_rule(&mut rules, "allow/lock/write", &candidate);
             }
-            add_lock_allow_rule(&mut rules, "allow/lock/write", &candidate);
         }
     }
 
