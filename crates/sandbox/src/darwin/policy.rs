@@ -86,18 +86,18 @@ mod tests {
 
     #[test]
     fn ioctl_is_only_granted_for_ioctl_paths() {
-        let base =
-            std::env::temp_dir().join(format!("capsa-sandbox-policy-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&base);
-        std::fs::create_dir_all(&base).expect("create test base dir");
+        let base = tempfile::Builder::new()
+            .prefix("capsa-sandbox-policy-test-")
+            .tempdir()
+            .expect("create test base dir");
 
-        let rw_file = base.join("rw.dat");
+        let rw_file = base.path().join("rw.dat");
         std::fs::write(&rw_file, b"data").expect("create rw file");
 
-        let ioctl_file = base.join("ioctl.dev");
+        let ioctl_file = base.path().join("ioctl.dev");
         std::fs::write(&ioctl_file, b"dev").expect("create ioctl file");
 
-        let private_tmp = base.join("tmp");
+        let private_tmp = base.path().join("tmp");
         std::fs::create_dir_all(&private_tmp).expect("create private tmp");
 
         let mut spec = SandboxSpec::new();
@@ -118,7 +118,5 @@ mod tests {
             rendered.contains(&ioctl_rule),
             "ioctl path missing ioctl rule: {ioctl_rule}"
         );
-
-        let _ = std::fs::remove_dir_all(&base);
     }
 }
