@@ -101,21 +101,11 @@ fn can_connect(host: &str, port: &str) -> Result<(), String> {
 }
 
 fn can_write_temp() -> Result<(), String> {
-    let mut path = std::env::temp_dir();
-    path.push(format!(
-        "capsa-sandbox-probe-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    ));
-
-    let mut file = OpenOptions::new()
-        .create_new(true)
-        .write(true)
-        .open(&path)
+    let mut file = tempfile::Builder::new()
+        .prefix("capsa-sandbox-probe-")
+        .tempfile_in(std::env::temp_dir())
         .map_err(|e| e.to_string())?;
+
     file.write_all(b"capsa-sandbox-probe-temp\n")
         .map_err(|e| e.to_string())?;
     Ok(())
