@@ -363,20 +363,12 @@ fn create_private_tmp_dir() -> Result<PathBuf> {
     std::fs::create_dir_all(&base)
         .with_context(|| format!("failed to create sandbox temp base {}", base.display()))?;
 
-    let unique = format!(
-        "linux-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos()
-    );
-    let dir = base.join(unique);
+    let dir = tempfile::Builder::new()
+        .prefix("linux-")
+        .tempdir_in(&base)
+        .with_context(|| format!("failed to create private temp dir in {}", base.display()))?;
 
-    std::fs::create_dir_all(&dir)
-        .with_context(|| format!("failed to create private temp dir {}", dir.display()))?;
-
-    Ok(dir)
+    Ok(dir.keep())
 }
 
 fn find_in_path(binary_name: &str) -> Option<PathBuf> {
