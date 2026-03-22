@@ -96,6 +96,7 @@ name = "capsa-sandbox"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "libc",
  "tempfile",
 ]
 

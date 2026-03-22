@@ -6,7 +6,7 @@ use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 
-use crate::{SandboxSpec, SandboxedChild};
+use crate::{configure_fd_remaps, FdRemap, SandboxSpec, SandboxedChild};
 
 mod paths;
 mod policy;
@@ -18,6 +18,7 @@ pub fn spawn_with_sandbox_exec(
     program: &Path,
     args: &[String],
     spec: &SandboxSpec,
+    fd_remaps: &[FdRemap],
 ) -> Result<SandboxedChild> {
     let private_tmp = create_private_tmp_dir()?;
 
@@ -25,22 +26,25 @@ pub fn spawn_with_sandbox_exec(
     let profile: String = policy.into();
     let profile_path = write_temp_profile(&profile)?;
 
-    let child = Command::new("/usr/bin/sandbox-exec")
+    let mut command = Command::new("/usr/bin/sandbox-exec");
+    command
         .arg("-f")
         .arg(&profile_path)
         .arg(program)
         .args(args)
         .env("TMPDIR", &private_tmp)
         .env("TMP", &private_tmp)
-        .env("TEMP", &private_tmp)
-        .spawn()
-        .with_context(|| {
-            format!(
-                "failed to spawn sandbox-exec for program {} (profile: {})",
-                program.display(),
-                profile_path.display()
-            )
-        })?;
+        .env("TEMP", &private_tmp);
+
+    configure_fd_remaps(&mut command, fd_remaps);
+
+    let child = command.spawn().with_context(|| {
+        format!(
+            "failed to spawn sandbox-exec for program {} (profile: {})",
+            program.display(),
+            profile_path.display()
+        )
+    })?;
 
     Ok(SandboxedChild::new(child, vec![profile_path, private_tmp]))
 }

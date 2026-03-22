@@ -3,7 +3,7 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 
-use crate::{SandboxSpec, SandboxedChild};
+use crate::{configure_fd_remaps, FdRemap, SandboxSpec, SandboxedChild};
 
 /// Linux sandbox backend via `syd`.
 ///
@@ -12,6 +12,7 @@ pub fn spawn_with_syd(
     program: &Path,
     args: &[String],
     spec: &SandboxSpec,
+    fd_remaps: &[FdRemap],
 ) -> Result<SandboxedChild> {
     let syd = find_in_path("syd").ok_or_else(|| {
         anyhow::anyhow!(
@@ -19,7 +20,7 @@ pub fn spawn_with_syd(
         )
     })?;
 
-    spawn_with_syd_binary(&syd, program, args, spec)
+    spawn_with_syd_binary(&syd, program, args, spec, fd_remaps)
 }
 
 fn spawn_with_syd_binary(
@@ -27,6 +28,7 @@ fn spawn_with_syd_binary(
     program: &Path,
     args: &[String],
     spec: &SandboxSpec,
+    fd_remaps: &[FdRemap],
 ) -> Result<SandboxedChild> {
     let private_tmp = create_private_tmp_dir()?;
     let mut command = Command::new(syd);
@@ -42,6 +44,8 @@ fn spawn_with_syd_binary(
         .arg("--")
         .arg(program)
         .args(args);
+
+    configure_fd_remaps(&mut command, fd_remaps);
 
     let child = command.spawn().with_context(|| {
         format!(
