@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 
-use crate::VmConfig;
+use crate::{LaunchEnvelope, VmConfig};
 
 impl VmConfig {
     /// Start the VM in the sandboxed sidecar process.
@@ -12,8 +12,14 @@ impl VmConfig {
         let vmm_exe = resolve_vmm_binary()?;
         let spec = vm_sandbox_spec(self, &vmm_exe);
 
-        let config_json = serde_json::to_string(self).context("failed to serialize VM config")?;
-        let child_args = vec!["--vm-config-json".to_string(), config_json];
+        let envelope = LaunchEnvelope {
+            vm_config: self.clone(),
+            // Interface fd resolution/fd passing is added in a later commit.
+            resolved_interfaces: vec![],
+        };
+        let envelope_json =
+            serde_json::to_string(&envelope).context("failed to serialize launch envelope")?;
+        let child_args = vec!["--launch-envelope-json".to_string(), envelope_json];
 
         let child =
             capsa_sandbox::spawn_sandboxed(&vmm_exe, &child_args, &spec).with_context(|| {
