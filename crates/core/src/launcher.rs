@@ -39,7 +39,7 @@ impl VmConfig {
 }
 
 fn vm_sandbox_spec(config: &VmConfig, vmm_exe: &Path) -> capsa_sandbox::SandboxSpec {
-    let mut spec = capsa_sandbox::SandboxSpec::new().allow_network(true);
+    let mut spec = capsa_sandbox::SandboxSpec::new().allow_network(false);
 
     spec.read_only_paths.push(vmm_exe.to_path_buf());
 
@@ -91,4 +91,40 @@ fn find_in_path(binary_name: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::vm_sandbox_spec;
+    use crate::{NetworkInterfaceConfig, VmConfig};
+
+    fn sample_config() -> VmConfig {
+        VmConfig {
+            root: Some("/tmp/root".into()),
+            kernel: Some("/tmp/kernel".into()),
+            initramfs: Some("/tmp/initramfs".into()),
+            kernel_cmdline: Some("console=ttyS0".to_string()),
+            vcpus: 1,
+            memory_mib: 512,
+            verbosity: 0,
+            interfaces: vec![],
+        }
+    }
+
+    #[test]
+    fn vm_sandbox_spec_disables_network_without_interfaces() {
+        let config = sample_config();
+        let spec = vm_sandbox_spec(&config, std::path::Path::new("/tmp/capsa-vmm"));
+
+        assert!(!spec.allow_network);
+    }
+
+    #[test]
+    fn vm_sandbox_spec_disables_network_with_interfaces() {
+        let mut config = sample_config();
+        config.interfaces.push(NetworkInterfaceConfig { mac: None });
+
+        let spec = vm_sandbox_spec(&config, std::path::Path::new("/tmp/capsa-vmm"));
+        assert!(!spec.allow_network);
+    }
 }
