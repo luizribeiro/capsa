@@ -106,7 +106,7 @@ let
     , modules ? [ ]
     , specialArgs ? { }
     , vm ? { }
-    , timeout ? 60
+    , timeout ? 5
     , expectProgram
     }:
     let

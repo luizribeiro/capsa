@@ -2,7 +2,6 @@
 {
   vm-smoke = vmLib.mkVMCheck {
     name = "capsa";
-    timeout = 60;
     expectProgram = ''
       vm_run "echo TTY_OK" {TTY_OK}
       vm_exit
@@ -11,7 +10,6 @@
 
   vm-shell-basics = vmLib.mkVMCheck {
     name = "capsa-shell-basics";
-    timeout = 60;
     expectProgram = ''
       vm_run {/bin/busybox uname -s} {Linux}
       vm_run {test -c /dev/console; echo CONSOLE_RC:$?} {CONSOLE_RC:0}
@@ -23,7 +21,6 @@
 
   vm-stateful-session = vmLib.mkVMCheck {
     name = "capsa-stateful-session";
-    timeout = 60;
     expectProgram = ''
       vm_run {x=41}
       vm_run {x=$((x+1))}
@@ -38,7 +35,6 @@
 
   vm-implicit-devices = vmLib.mkVMCheck {
     name = "capsa-implicit-devices";
-    timeout = 60;
     expectProgram = ''
       vm_run {
         balloon=0
