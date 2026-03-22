@@ -7,6 +7,8 @@ use crate::VmConfig;
 impl VmConfig {
     /// Start the VM in the sandboxed sidecar process.
     pub fn start(&self) -> Result<()> {
+        self.validate().context("invalid VM configuration")?;
+
         let vmm_exe = resolve_vmm_binary()?;
         let spec = vm_sandbox_spec(self, &vmm_exe);
 

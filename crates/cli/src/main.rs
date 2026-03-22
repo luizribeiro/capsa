@@ -50,6 +50,7 @@ impl Cli {
             vcpus: self.vcpus,
             memory_mib: self.memory_mib,
             verbosity: self.verbose,
+            interfaces: vec![],
         }
     }
 }
