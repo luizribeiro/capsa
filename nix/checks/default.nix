@@ -1,4 +1,7 @@
 { vmLib }:
+let
+  netIsolation = import ../tests/net-isolation.nix { inherit vmLib; };
+in
 {
   vm-smoke = vmLib.mkVMCheck {
     name = "capsa";
@@ -52,6 +55,8 @@
       vm_exit
     '';
   };
+
+  vm-net-isolation = netIsolation;
 }
 
 

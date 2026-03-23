@@ -1,11 +1,16 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context, Result};
-#[cfg(unix)]
+
 use std::os::fd::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::os::unix::net::UnixDatagram;
 
-use crate::{LaunchEnvelope, NetworkInterfaceConfig, ResolvedNetworkInterface, VmConfig};
+use capsa_net::{bridge_to_switch, GatewayStack, GatewayStackConfig, VirtualSwitch};
+
+use tokio::runtime::{Builder, Runtime};
+use tokio::task::JoinHandle;
+
+use crate::{NetworkInterfaceConfig, ResolvedNetworkInterface, VmConfig, VmmLaunchSpec};
 
 const FIRST_GUEST_NET_FD: i32 = 100;
 
@@ -17,48 +22,36 @@ impl VmConfig {
         let vmm_exe = resolve_vmm_binary()?;
         let spec = vm_sandbox_spec(self, &vmm_exe);
 
-        #[cfg(unix)]
-        let mut prepared_network = prepare_network_endpoints(&self.interfaces)
-            .context("failed to prepare network interface endpoints")?;
-
-        let launch_spec = {
-            #[cfg(unix)]
-            {
-                VmmLaunchSpec {
-                    vm_config: self.clone(),
-                    resolved_interfaces: prepared_network.resolved_interfaces.clone(),
-                }
-            }
-
-            #[cfg(not(unix))]
-            {
-                VmmLaunchSpec {
-                    vm_config: self.clone(),
-                    resolved_interfaces: vec![],
-                }
-            }
+        let mut network_runtime = if self.interfaces.is_empty() {
+            None
+        } else {
+            Some(
+                NetworkRuntimeContext::start(&self.interfaces)
+                    .context("failed to start network runtime")?,
+            )
         };
-        let envelope_json =
-            serde_json::to_string(&envelope).context("failed to serialize launch envelope")?;
-        let child_args = vec!["--launch-envelope-json".to_string(), envelope_json];
+
+        let launch_spec = VmmLaunchSpec {
+            vm_config: self.clone(),
+            resolved_interfaces: network_runtime
+                .as_ref()
+                .map(NetworkRuntimeContext::resolved_interfaces)
+                .unwrap_or_default(),
+        };
+
+        let launch_spec_json =
+            serde_json::to_string(&launch_spec).context("failed to serialize VMM launch spec")?;
+        let child_args = vec!["--launch-spec-json".to_string(), launch_spec_json];
 
         let child = {
-            #[cfg(unix)]
-            {
-                if should_spawn_with_fd_remaps(&prepared_network.fd_remaps) {
-                    capsa_sandbox::spawn_sandboxed_with_fds(
-                        &vmm_exe,
-                        &child_args,
-                        &spec,
-                        &prepared_network.fd_remaps,
-                    )
-                } else {
-                    capsa_sandbox::spawn_sandboxed(&vmm_exe, &child_args, &spec)
-                }
-            }
-
-            #[cfg(not(unix))]
-            {
+            if let Some(runtime) = network_runtime.as_ref() {
+                capsa_sandbox::spawn_sandboxed_with_fds(
+                    &vmm_exe,
+                    &child_args,
+                    &spec,
+                    runtime.fd_remaps(),
+                )
+            } else {
                 capsa_sandbox::spawn_sandboxed(&vmm_exe, &child_args, &spec)
             }
         }
@@ -67,19 +60,35 @@ impl VmConfig {
                 "failed to spawn sandboxed VMM process: {}",
                 vmm_exe.display()
             )
-        })?;
+        });
 
-        #[cfg(unix)]
-        {
+        let child = match child {
+            Ok(child) => child,
+            Err(err) => {
+                if let Some(runtime) = network_runtime.take() {
+                    runtime
+                        .shutdown()
+                        .context("failed to shutdown network runtime after spawn failure")?;
+                }
+                return Err(err);
+            }
+        };
+
+        if let Some(runtime) = network_runtime.as_mut() {
             // Once spawn returns, child pre-exec fd remapping has already run.
             // We can drop the launcher-owned guest endpoints immediately.
-            prepared_network.guest_fds.clear();
+            runtime.release_guest_fds_after_spawn();
         }
 
-        // Keep host-side network endpoints alive while the sidecar process runs.
-        #[cfg(unix)]
-        let _host_fds = &prepared_network.host_fds;
-        let status = child.wait().context("failed to wait on sandboxed child")?;
+        let wait_result = child.wait().context("failed to wait on sandboxed child");
+
+        if let Some(runtime) = network_runtime.take() {
+            runtime
+                .shutdown()
+                .context("failed to shutdown network runtime")?;
+        }
+
+        let status = wait_result?;
         if status.success() {
             return Ok(());
         }
@@ -88,54 +97,121 @@ impl VmConfig {
     }
 }
 
-#[cfg(unix)]
 #[derive(Debug)]
-struct PreparedNetworkEndpoints {
-    resolved_interfaces: Vec<ResolvedNetworkInterface>,
-    fd_remaps: Vec<capsa_sandbox::FdRemap>,
-    host_fds: Vec<OwnedFd>,
-    guest_fds: Vec<OwnedFd>,
+struct NetworkRuntimeContext {
+    runtime: Runtime,
+    network: NetworkRuntime,
 }
 
-#[cfg(unix)]
-fn prepare_network_endpoints(
-    interfaces: &[NetworkInterfaceConfig],
-) -> Result<PreparedNetworkEndpoints> {
-    let mut resolved_interfaces = Vec::with_capacity(interfaces.len());
-    let mut fd_remaps = Vec::with_capacity(interfaces.len());
-    let mut host_fds = Vec::with_capacity(interfaces.len());
-    let mut guest_fds = Vec::with_capacity(interfaces.len());
+impl NetworkRuntimeContext {
+    fn start(interfaces: &[NetworkInterfaceConfig]) -> Result<Self> {
+        let runtime = Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .context("failed to build tokio runtime for networking")?;
+        let network = runtime
+            .block_on(NetworkRuntime::start(interfaces))
+            .context("failed to initialize network runtime")?;
 
-    for (index, interface) in interfaces.iter().enumerate() {
-        let (host_fd, guest_fd) = create_unix_dgram_socketpair()
-            .with_context(|| format!("failed to create socketpair for interface {index}"))?;
-
-        let guest_target_fd = FIRST_GUEST_NET_FD + index as i32;
-        let mac = resolve_interface_mac(index, interface)?;
-
-        fd_remaps.push(capsa_sandbox::FdRemap {
-            source_fd: guest_fd.as_raw_fd(),
-            target_fd: guest_target_fd,
-        });
-
-        resolved_interfaces.push(ResolvedNetworkInterface {
-            mac,
-            guest_fd: guest_target_fd,
-        });
-
-        host_fds.push(host_fd);
-        guest_fds.push(guest_fd);
+        Ok(Self { runtime, network })
     }
 
-    Ok(PreparedNetworkEndpoints {
-        resolved_interfaces,
-        fd_remaps,
-        host_fds,
-        guest_fds,
-    })
+    fn resolved_interfaces(&self) -> Vec<ResolvedNetworkInterface> {
+        self.network.resolved_interfaces.clone()
+    }
+
+    fn fd_remaps(&self) -> &[capsa_sandbox::FdRemap] {
+        &self.network.fd_remaps
+    }
+
+    fn release_guest_fds_after_spawn(&mut self) {
+        self.network.guest_fds.clear();
+    }
+
+    fn shutdown(self) -> Result<()> {
+        self.runtime.block_on(self.network.shutdown())
+    }
 }
 
-#[cfg(unix)]
+#[derive(Debug)]
+struct NetworkRuntime {
+    resolved_interfaces: Vec<ResolvedNetworkInterface>,
+    fd_remaps: Vec<capsa_sandbox::FdRemap>,
+    guest_fds: Vec<OwnedFd>,
+    bridge_tasks: Vec<JoinHandle<std::io::Result<()>>>,
+    gateway_tasks: Vec<JoinHandle<std::io::Result<()>>>,
+}
+
+impl NetworkRuntime {
+    async fn start(interfaces: &[NetworkInterfaceConfig]) -> Result<Self> {
+        ensure!(
+            !interfaces.is_empty(),
+            "network runtime requires at least one interface"
+        );
+
+        let mut resolved_interfaces = Vec::with_capacity(interfaces.len());
+        let mut fd_remaps = Vec::with_capacity(interfaces.len());
+        let mut guest_fds = Vec::with_capacity(interfaces.len());
+        let mut bridge_tasks = Vec::with_capacity(interfaces.len());
+        let mut gateway_tasks = Vec::with_capacity(interfaces.len());
+
+        for (index, interface) in interfaces.iter().enumerate() {
+            let switch = VirtualSwitch::new();
+            let vm_port = switch.create_port().await;
+            let gateway_port = switch.create_port().await;
+
+            let (host_fd, guest_fd) = create_unix_dgram_socketpair()
+                .with_context(|| format!("failed to create socketpair for interface {index}"))?;
+
+            let guest_target_fd = FIRST_GUEST_NET_FD + index as i32;
+            let mac = resolve_interface_mac(index, interface)?;
+
+            let bridge_task = tokio::spawn(async move { bridge_to_switch(host_fd, vm_port).await });
+            let gateway = GatewayStack::new(gateway_port, GatewayStackConfig::default()).await;
+            let gateway_task = tokio::spawn(async move { gateway.run().await });
+
+            fd_remaps.push(capsa_sandbox::FdRemap {
+                source_fd: guest_fd.as_raw_fd(),
+                target_fd: guest_target_fd,
+            });
+
+            resolved_interfaces.push(ResolvedNetworkInterface {
+                mac,
+                guest_fd: guest_target_fd,
+            });
+            guest_fds.push(guest_fd);
+            bridge_tasks.push(bridge_task);
+            gateway_tasks.push(gateway_task);
+        }
+
+        Ok(Self {
+            resolved_interfaces,
+            fd_remaps,
+            guest_fds,
+            bridge_tasks,
+            gateway_tasks,
+        })
+    }
+
+    async fn shutdown(self) -> Result<()> {
+        for handle in &self.bridge_tasks {
+            handle.abort();
+        }
+        for handle in &self.gateway_tasks {
+            handle.abort();
+        }
+
+        for handle in self.bridge_tasks {
+            let _ = handle.await;
+        }
+        for handle in self.gateway_tasks {
+            let _ = handle.await;
+        }
+
+        Ok(())
+    }
+}
+
 fn create_unix_dgram_socketpair() -> Result<(OwnedFd, OwnedFd)> {
     let (left, right) =
         UnixDatagram::pair().context("failed to create unix datagram socketpair")?;
@@ -183,11 +259,6 @@ fn generate_mac(index: usize) -> [u8; 6] {
     }
 
     mac
-}
-
-#[cfg(unix)]
-fn should_spawn_with_fd_remaps(fd_remaps: &[capsa_sandbox::FdRemap]) -> bool {
-    !fd_remaps.is_empty()
 }
 
 fn vm_sandbox_spec(config: &VmConfig, vmm_exe: &Path) -> capsa_sandbox::SandboxSpec {
@@ -249,8 +320,6 @@ fn find_in_path(binary_name: &str) -> Option<PathBuf> {
 mod tests {
     use super::vm_sandbox_spec;
     use crate::{NetworkInterfaceConfig, VmConfig};
-    #[cfg(unix)]
-    use std::os::fd::AsRawFd;
 
     fn sample_config() -> VmConfig {
         VmConfig {
@@ -288,87 +357,98 @@ mod tests {
     }
 
     #[test]
-    fn prepare_network_endpoints_creates_socketpair_and_resolved_interface() {
-        let mut config = sample_config();
-        config.interfaces.push(NetworkInterfaceConfig { mac: None });
+    fn network_runtime_starts_and_stops_cleanly() {
+        let interfaces = vec![NetworkInterfaceConfig { mac: None }];
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
 
-        let prepared = super::prepare_network_endpoints(&config.interfaces)
-            .expect("network endpoint preparation should succeed");
+        let mut network = runtime
+            .block_on(super::NetworkRuntime::start(&interfaces))
+            .expect("network runtime should start");
 
-        assert_eq!(prepared.resolved_interfaces.len(), 1);
-        assert_eq!(prepared.fd_remaps.len(), 1);
-        assert_eq!(prepared.host_fds.len(), 1);
-        assert_eq!(prepared.guest_fds.len(), 1);
+        assert_eq!(network.resolved_interfaces.len(), 1);
+        assert_eq!(network.fd_remaps.len(), 1);
+        assert_eq!(network.guest_fds.len(), 1);
 
-        let resolved = &prepared.resolved_interfaces[0];
-        assert_eq!(resolved.guest_fd, super::FIRST_GUEST_NET_FD);
-        assert_ne!(resolved.mac, [0u8; 6]);
-
-        let remap = &prepared.fd_remaps[0];
-        assert_eq!(remap.target_fd, super::FIRST_GUEST_NET_FD);
-        assert_eq!(remap.source_fd, prepared.guest_fds[0].as_raw_fd());
+        network.guest_fds.clear();
+        runtime
+            .block_on(network.shutdown())
+            .expect("network runtime should shut down");
     }
 
     #[test]
-    fn prepare_network_endpoints_preserves_explicit_mac() {
-        let mut config = sample_config();
+    fn network_runtime_preserves_explicit_mac() {
         let mac = [0x02, 0xaa, 0xbb, 0xcc, 0xdd, 0xee];
-        config
-            .interfaces
-            .push(NetworkInterfaceConfig { mac: Some(mac) });
+        let interfaces = vec![NetworkInterfaceConfig { mac: Some(mac) }];
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
 
-        let prepared = super::prepare_network_endpoints(&config.interfaces)
-            .expect("network endpoint preparation should succeed");
+        let mut network = runtime
+            .block_on(super::NetworkRuntime::start(&interfaces))
+            .expect("network runtime should start");
 
-        assert_eq!(prepared.resolved_interfaces[0].mac, mac);
+        assert_eq!(network.resolved_interfaces[0].mac, mac);
+
+        network.guest_fds.clear();
+        runtime
+            .block_on(network.shutdown())
+            .expect("network runtime should shut down");
     }
 
     #[test]
-    fn prepare_network_endpoints_rejects_all_zero_mac() {
-        let mut config = sample_config();
-        config
-            .interfaces
-            .push(NetworkInterfaceConfig { mac: Some([0; 6]) });
+    fn network_runtime_rejects_all_zero_mac() {
+        let interfaces = vec![NetworkInterfaceConfig { mac: Some([0; 6]) }];
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
 
-        let err = super::prepare_network_endpoints(&config.interfaces)
+        let err = runtime
+            .block_on(super::NetworkRuntime::start(&interfaces))
             .expect_err("all-zero MAC should be rejected");
+
         assert!(err.to_string().contains("MAC address is all zeros"));
     }
 
     #[test]
-    fn should_spawn_with_fd_remaps_depends_on_remap_presence() {
-        assert!(!super::should_spawn_with_fd_remaps(&[]));
+    fn network_runtime_starts_bridge_task() {
+        let interfaces = vec![NetworkInterfaceConfig { mac: None }];
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("runtime should build");
 
-        let remaps = [capsa_sandbox::FdRemap {
-            source_fd: 9,
-            target_fd: 100,
-        }];
-        assert!(super::should_spawn_with_fd_remaps(&remaps));
+        let mut network = runtime
+            .block_on(super::NetworkRuntime::start(&interfaces))
+            .expect("network runtime should start");
+
+        runtime.block_on(async {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        });
+
+        assert_eq!(network.bridge_tasks.len(), 1);
+        assert!(!network.bridge_tasks[0].is_finished());
+
+        network.guest_fds.clear();
+        runtime
+            .block_on(network.shutdown())
+            .expect("network runtime should shut down");
     }
 
     #[test]
-    fn host_fd_stays_open_until_prepared_network_is_dropped() {
-        use std::os::fd::AsRawFd;
+    fn release_guest_fds_drops_launcher_copy_after_spawn() {
+        let interfaces = vec![NetworkInterfaceConfig { mac: None }];
+        let mut ctx = super::NetworkRuntimeContext::start(&interfaces)
+            .expect("network runtime context should start");
 
-        let mut config = sample_config();
-        config.interfaces.push(NetworkInterfaceConfig { mac: None });
+        assert_eq!(ctx.network.guest_fds.len(), 1);
+        ctx.release_guest_fds_after_spawn();
+        assert!(ctx.network.guest_fds.is_empty());
 
-        let prepared = super::prepare_network_endpoints(&config.interfaces)
-            .expect("network endpoint preparation should succeed");
-
-        let host_fd = prepared.host_fds[0].as_raw_fd();
-        assert!(fd_is_open(host_fd));
-
-        drop(prepared);
-
-        assert!(!fd_is_open(host_fd));
-    }
-
-    #[cfg(unix)]
-    fn fd_is_open(fd: i32) -> bool {
-        // SAFETY: `fcntl(F_GETFD)` is read-only and used only to check whether
-        // the descriptor currently refers to an open file.
-        let rc = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-        rc != -1
+        ctx.shutdown().expect("network runtime should shut down");
     }
 }

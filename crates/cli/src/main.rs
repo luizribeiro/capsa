@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use clap::{ArgAction, ArgGroup, Parser};
 
 #[derive(Debug, Parser)]
@@ -64,10 +64,6 @@ impl Cli {
 }
 
 fn run(args: Cli) -> Result<()> {
-    if args.net {
-        bail!("networking is not yet implemented");
-    }
-
     args.to_vm_config().start()
 }
 
@@ -77,7 +73,7 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{run, Cli};
+    use super::Cli;
     use clap::Parser;
 
     #[test]
@@ -98,12 +94,10 @@ mod tests {
     }
 
     #[test]
-    fn net_flag_currently_errors_until_network_runtime_is_wired() {
+    fn net_flag_is_not_rejected_during_cli_parsing() {
         let args = Cli::parse_from(["capsa", "--root", "/tmp/root", "--net"]);
-        let err = run(args).expect_err("--net should be guarded for now");
+        let config = args.to_vm_config();
 
-        assert!(err
-            .to_string()
-            .contains("networking is not yet implemented"));
+        assert_eq!(config.interfaces.len(), 1);
     }
 }
