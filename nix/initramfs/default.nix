@@ -41,7 +41,9 @@ in
 
       for cmd in \
         sh mount umount mkdir sleep dmesg switch_root \
-        cat echo ls test readlink poweroff reboot setsid cttyhack; do
+        cat echo ls test readlink poweroff reboot setsid cttyhack \
+        ip ifconfig route udhcpc ping ping6 nslookup \
+        grep awk sed head cut tr wc; do
         ln -s busybox "$root/bin/$cmd"
       done
 
@@ -50,6 +52,12 @@ in
 
       cp ${./init.sh} "$root/init"
       chmod 0755 "$root/init"
+
+      cp ${./net-up.sh} "$root/bin/net-up"
+      chmod 0755 "$root/bin/net-up"
+
+      cp ${./udhcpc.script} "$root/bin/udhcpc.script"
+      chmod 0755 "$root/bin/udhcpc.script"
 
       (
         cd "$root"

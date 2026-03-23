@@ -1,0 +1,35 @@
+#!/bin/sh
+set -eu
+
+iface="${interface:-${1:-eth0}}"
+
+case "${1:-}" in
+  deconfig)
+    ip addr flush dev "$iface" || true
+    ip link set "$iface" up || true
+    ;;
+
+  renew|bound)
+    [ -n "${ip:-}" ] || exit 1
+
+    ip addr flush dev "$iface" || true
+    if [ -n "${subnet:-}" ]; then
+      ip addr add "$ip/$subnet" dev "$iface"
+    else
+      ip addr add "$ip/24" dev "$iface"
+    fi
+    ip link set "$iface" up
+
+    if [ -n "${router:-}" ]; then
+      ip route replace default via "$router" dev "$iface"
+    fi
+
+    mkdir -p /etc
+    : > /etc/resolv.conf
+    for ns in ${dns:-}; do
+      echo "nameserver $ns" >> /etc/resolv.conf
+    done
+    ;;
+esac
+
+exit 0

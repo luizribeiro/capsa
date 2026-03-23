@@ -51,7 +51,7 @@
           };
 
           checks = import ./nix/checks {
-            inherit vmLib;
+            inherit vmLib pkgs;
           };
         in
         {

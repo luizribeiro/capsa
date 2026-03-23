@@ -1,6 +1,7 @@
-{ vmLib }:
+{ vmLib, pkgs }:
 let
   netIsolation = import ../tests/net-isolation.nix { inherit vmLib; };
+  netDhcp = import ../tests/net-dhcp.nix { inherit vmLib pkgs; };
 in
 {
   vm-smoke = vmLib.mkVMCheck {
@@ -57,6 +58,7 @@ in
   };
 
   vm-net-isolation = netIsolation;
+  vm-net-dhcp = netDhcp;
 }
 
 
