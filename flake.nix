@@ -16,7 +16,19 @@
       (hostSystem:
         let
           inherit (nixpkgs) lib;
-          pkgs = import nixpkgs { system = hostSystem; };
+          pkgs = import nixpkgs {
+            system = hostSystem;
+            overlays = [
+              (final: prev:
+                lib.optionalAttrs prev.stdenv.isLinux {
+                  # Nixpkgs builds libkrun with networking disabled by default.
+                  # Enable NET=1 so krun_add_net_unixstream is available.
+                  libkrun = prev.libkrun.override {
+                    withNet = true;
+                  };
+                })
+            ];
+          };
 
           capsaPackage = import ./nix/package.nix {
             inherit lib pkgs;
