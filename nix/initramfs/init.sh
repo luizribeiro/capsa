@@ -18,6 +18,62 @@ modprobe virtio_blk 2>/dev/null || true
 modprobe virtio_net 2>/dev/null || true
 modprobe virtio_console 2>/dev/null || true
 
+# Auto-configure networking on boot when a NIC is present (e.g. `capsa --net`).
+# Keep output quiet by default; only print details on verbose boots.
+is_verbose_boot() {
+  cmdline="$(cat /proc/cmdline 2>/dev/null || true)"
+  case " $cmdline " in
+    *" capsa_init_verbose=1 "*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+has_non_loopback_iface() {
+  for dev in /sys/class/net/*; do
+    [ -e "$dev" ] || continue
+    iface="${dev##*/}"
+    [ "$iface" != "lo" ] && return 0
+  done
+  return 1
+}
+
+wait_for_non_loopback_iface() {
+  # virtio-net may appear shortly after init starts; wait briefly.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    has_non_loopback_iface && return 0
+    sleep 1
+  done
+  return 1
+}
+
+runq() {
+  if is_verbose_boot; then
+    "$@"
+  else
+    "$@" >/dev/null 2>&1
+  fi
+}
+
+auto_setup_network() {
+  command -v /bin/net-up >/dev/null 2>&1 || return 0
+
+  if ! wait_for_non_loopback_iface; then
+    return 0
+  fi
+
+  if is_verbose_boot; then
+    echo "init: detected network interface, running net-up"
+  fi
+
+  if ! runq /bin/net-up; then
+    echo "init: net-up failed (continuing to shell)"
+  fi
+}
+
 # Keep this initramfs minimal and interactive by default.
 # IMPORTANT: PID 1 must not just exit, otherwise Linux panics with
 # "Attempted to kill init". Prefer hvc0 (virtio console), then fall back.
@@ -37,7 +93,10 @@ if [ -n "$TTY_DEV" ]; then
   exec <"$TTY_DEV" >"$TTY_DEV" 2>&1
 fi
 
-set +e
+# Never allow auto network setup failures to kill PID 1 during boot.
+# Run after console setup so logs are actually visible.
+auto_setup_network || true
+
 if command -v cttyhack >/dev/null 2>&1 && command -v setsid >/dev/null 2>&1; then
   setsid cttyhack sh
 else

@@ -39,7 +39,7 @@ struct Cli {
     #[arg(long)]
     net: bool,
 
-    /// Increase verbosity (-v: normal logs, -vv: debug logs). Default is quiet.
+    /// Increase verbosity (-v: info + init verbosity, -vv: debug logs). Default is quiet.
     #[arg(short, long, action = ArgAction::Count)]
     verbose: u8,
 }

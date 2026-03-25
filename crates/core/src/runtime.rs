@@ -90,10 +90,12 @@ fn network_call_params(interfaces: &[ResolvedNetworkInterface]) -> Vec<(i32, [u8
 fn effective_kernel_cmdline(config: &VmConfig) -> Option<String> {
     let mut cmdline = KernelCmdline::new();
 
-    match config.verbosity {
-        0 => cmdline.push_segment("quiet loglevel=0"),
-        1 => {}
-        _ => cmdline.push_segment("ignore_loglevel loglevel=7"),
+    if config.verbosity == 0 {
+        cmdline.push_segment("quiet loglevel=0");
+    }
+
+    if config.verbosity > 0 {
+        cmdline.push_segment("capsa_init_verbose=1");
     }
 
     if let Some(user_cmdline) = config.kernel_cmdline.as_deref() {
@@ -128,7 +130,7 @@ impl KernelCmdline {
 
 #[cfg(test)]
 mod tests {
-    use super::{network_call_params, validate_envelope};
+    use super::{effective_kernel_cmdline, network_call_params, validate_vmm_launch_spec};
     use crate::{NetworkInterfaceConfig, ResolvedNetworkInterface, VmConfig};
 
     fn base_vm_config() -> VmConfig {
@@ -248,5 +250,29 @@ mod tests {
         }];
 
         validate_vmm_launch_spec(&config, &resolved).expect("validation should pass");
+    }
+
+    #[test]
+    fn effective_kernel_cmdline_is_quiet_by_default() {
+        let config = base_vm_config();
+        let cmdline = effective_kernel_cmdline(&config).expect("cmdline should exist");
+        assert!(cmdline.contains("quiet loglevel=0"));
+        assert!(!cmdline.contains("ignore_loglevel"));
+        assert!(!cmdline.contains("capsa_init_verbose=1"));
+    }
+
+    #[test]
+    fn effective_kernel_cmdline_maps_verbosity_levels() {
+        let mut config = base_vm_config();
+
+        config.verbosity = 1;
+        let cmdline = effective_kernel_cmdline(&config).expect("cmdline should exist");
+        assert!(cmdline.contains("capsa_init_verbose=1"));
+        assert!(!cmdline.contains("ignore_loglevel loglevel=7"));
+
+        config.verbosity = 2;
+        let cmdline = effective_kernel_cmdline(&config).expect("cmdline should exist");
+        assert!(cmdline.contains("capsa_init_verbose=1"));
+        assert!(!cmdline.contains("ignore_loglevel loglevel=7"));
     }
 }
