@@ -97,11 +97,15 @@ fi
 # Run after console setup so logs are actually visible.
 auto_setup_network || true
 
+# Interactive shell should not be able to kill PID 1 just because
+# the last command returned non-zero before `exit`/Ctrl+D.
+set +e
 if command -v cttyhack >/dev/null 2>&1 && command -v setsid >/dev/null 2>&1; then
   setsid cttyhack sh
 else
   sh
 fi
+set -e
 
 # Interactive shell has exited (e.g. `exit` or Ctrl+D).
 #
